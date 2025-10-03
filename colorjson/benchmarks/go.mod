@@ -3,8 +3,8 @@ module github.com/therootcompany/golib/colorjson/benchmarks
 go 1.18.0
 
 require (
-	github.com/therootcompany/golib/colorjson v0.0.0-20200706003622-8a50f05110d2
 	github.com/hokaccha/go-prettyjson v0.0.0-20211117102719-0474bc63780f
+	github.com/therootcompany/golib/colorjson v1.0.0
 )
 
 require (
