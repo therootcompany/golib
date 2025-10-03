@@ -39,7 +39,7 @@ str := `{
 }`
 
 // Create an intersting JSON object to marshal in a pretty format
-var obj map[string]interface{}
+var obj map[string]any
 json.Unmarshal([]byte(str), &obj)
 ```
 

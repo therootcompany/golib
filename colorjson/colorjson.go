@@ -67,13 +67,13 @@ func (f *Formatter) writeObjSep(buf *bytes.Buffer) {
 	}
 }
 
-func (f *Formatter) Marshal(jsonObj interface{}) ([]byte, error) {
+func (f *Formatter) Marshal(jsonObj any) ([]byte, error) {
 	buffer := bytes.Buffer{}
 	f.marshalValue(jsonObj, &buffer, initialDepth)
 	return buffer.Bytes(), nil
 }
 
-func (f *Formatter) marshalMap(m map[string]interface{}, buf *bytes.Buffer, depth int) {
+func (f *Formatter) marshalMap(m map[string]any, buf *bytes.Buffer, depth int) {
 	remaining := len(m)
 
 	if remaining == 0 {
@@ -109,7 +109,7 @@ func (f *Formatter) marshalMap(m map[string]interface{}, buf *bytes.Buffer, dept
 	buf.WriteString(endMap)
 }
 
-func (f *Formatter) marshalArray(a []interface{}, buf *bytes.Buffer, depth int) {
+func (f *Formatter) marshalArray(a []any, buf *bytes.Buffer, depth int) {
 	if len(a) == 0 {
 		buf.WriteString(emptyArray)
 		return
@@ -130,11 +130,11 @@ func (f *Formatter) marshalArray(a []interface{}, buf *bytes.Buffer, depth int) 
 	buf.WriteString(endArray)
 }
 
-func (f *Formatter) marshalValue(val interface{}, buf *bytes.Buffer, depth int) {
+func (f *Formatter) marshalValue(val any, buf *bytes.Buffer, depth int) {
 	switch v := val.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		f.marshalMap(v, buf, depth)
-	case []interface{}:
+	case []any:
 		f.marshalArray(v, buf, depth)
 	case string:
 		f.marshalString(v, buf)
@@ -163,6 +163,6 @@ func (f *Formatter) marshalString(str string, buf *bytes.Buffer) {
 }
 
 // Marshal JSON data with default options
-func Marshal(jsonObj interface{}) ([]byte, error) {
+func Marshal(jsonObj any) ([]byte, error) {
 	return NewFormatter().Marshal(jsonObj)
 }

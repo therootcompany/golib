@@ -17,8 +17,8 @@ func main() {
       "obj": { "a": 1, "b": 2 }
     }`
 
-	var obj map[string]interface{}
-	json.Unmarshal([]byte(str), &obj)
+	var obj map[string]any
+	_ = json.Unmarshal([]byte(str), &obj)
 
 	// Make a custom formatter with indent set
 	f := colorjson.NewFormatter()
