@@ -48,13 +48,6 @@ func NewFormatter() *Formatter {
 	}
 }
 
-func (f *Formatter) sprintfColor(c *color.Color, format string, args ...interface{}) string {
-	if f.DisabledColor || c == nil {
-		return fmt.Sprintf(format, args...)
-	}
-	return c.SprintfFunc()(format, args...)
-}
-
 func (f *Formatter) sprintColor(c *color.Color, s string) string {
 	if f.DisabledColor || c == nil {
 		return fmt.Sprint(s)
