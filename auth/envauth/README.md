@@ -58,9 +58,13 @@ func main() {
 Salted and hashed password.
 
 ```sh
-go run ./cmd/pbkdf2-sha256/ 'secret' 'i63wDd7K-60'
+go run ./cmd/salt/ 8
+# url-base64: i63wDd7K-60
+```
 
-derived-key: 553ce8846c2304e93021dab03bacb5ca
+```sh
+go run ./cmd/pbkdf2-sha256/ 'secret' 'i63wDd7K-60'
+# derived-key: 553ce8846c2304e93021dab03bacb5ca
 ```
 
 `.env`:
