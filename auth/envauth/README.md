@@ -12,7 +12,7 @@ creds := envauth.BasicCredentials{
    Password: os.Getenv("BASIC_AUTH_PASSWORD"),
 }
 
-verified := creds.Verify("username", "password")
+err := creds.Verify("username", "password")
 ```
 
 ## Basic Credentials: Username + Password
@@ -44,12 +44,17 @@ func main() {
       Password: password,
    }
 
-   verified := creds.Verify("api", "secret")
-   if verified {
-      println("Authentication successful")
-   } else {
-      println("Authentication failed")
+   if err := creds.Verify("api", "secret"); err != nil {
+      switch err {
+      case envauth.ErrUnauthorized:
+         println("Authentication failed")
+      default:
+         panic(err)
+      }
+      os.Exit(1)
    }
+
+   println("Authentication successful")
 }
 ```
 
@@ -104,11 +109,16 @@ func main() {
       Iterations: iterations,
    }
 
-   verified := creds.Verify("api", "secret")
-   if verified {
-      println("Authentication successful")
-   } else {
-      println("Authentication failed")
+   if err := creds.Verify("api", "secret"); err != nil {
+      switch err {
+      case envauth.ErrUnauthorized:
+         println("Authentication failed")
+      default:
+         panic(err)
+      }
+      os.Exit(1)
    }
+
+   println("Authentication successful")
 }
 ```

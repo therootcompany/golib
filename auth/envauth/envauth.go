@@ -4,10 +4,13 @@ import (
 	"crypto/pbkdf2"
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 )
 
+var ErrUnauthorized = errors.New("unauthorized")
+
 type BasicAuthVerifier interface {
-	Verify(string, string) bool
+	Verify(string, string) error
 }
 
 // BasicCredentials holds user credentials
@@ -18,9 +21,9 @@ type BasicCredentials struct {
 
 // Returns true if username and password match.
 // Uses SHA-256 and constant-time techniques to avoid revealing whether the username or password matches through timing attacks.
-func (c BasicCredentials) Verify(username string, password string) bool {
+func (c BasicCredentials) Verify(username string, password string) error {
 	if len(password) == 0 {
-		return false
+		return ErrUnauthorized
 	}
 
 	equal := 1
@@ -38,7 +41,10 @@ func (c BasicCredentials) Verify(username string, password string) bool {
 	v = subtle.ConstantTimeCompare(knownPasswordHash[:], passwordHash[:]) // 1 if same
 	equal = subtle.ConstantTimeSelect(v, equal, 0)                        // v ? x : y
 
-	return equal == 1
+	if equal == 1 {
+		return nil
+	}
+	return ErrUnauthorized
 }
 
 // PBKDF2Credentials holds user credentials
@@ -51,24 +57,24 @@ type PBKDF2Credentials struct {
 
 // Returns true if username and password match.
 // Uses PBKDF2 and constant-time techniques to avoid revealing whether the username or password matches through timing attacks.
-func (c PBKDF2Credentials) Verify(username string, password string) bool {
+func (c PBKDF2Credentials) Verify(username string, password string) error {
 	keyLen := len(c.DerivedKey)
 	dkKnownUser, err := pbkdf2.Key(sha256.New, c.Username, c.Salt, c.Iterations, keyLen)
 	if err != nil {
-		return false
+		return err
 	}
 
 	if len(password) == 0 {
-		return false
+		return ErrUnauthorized
 	}
 
 	dkUser, err := pbkdf2.Key(sha256.New, username, c.Salt, c.Iterations, keyLen)
 	if err != nil {
-		return false
+		return err
 	}
 	dkPass, err := pbkdf2.Key(sha256.New, password, c.Salt, c.Iterations, keyLen)
 	if err != nil {
-		return false
+		return err
 	}
 
 	equal := 1
@@ -79,7 +85,11 @@ func (c PBKDF2Credentials) Verify(username string, password string) bool {
 	v = subtle.ConstantTimeCompare(dkPass, c.DerivedKey) // 1 if same
 	equal = subtle.ConstantTimeSelect(v, equal, 0)       // v ? x : y
 
-	return equal == 1
+	if equal == 1 {
+		return nil
+	}
+	return ErrUnauthorized
+
 }
 
 func (c PBKDF2Credentials) DeriveKey(username string, password string, keyLen int) ([]byte, error) {
