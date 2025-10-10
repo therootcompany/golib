@@ -4,7 +4,7 @@ go 1.18.0
 
 require (
 	github.com/hokaccha/go-prettyjson v0.0.0-20211117102719-0474bc63780f
-	github.com/therootcompany/golib/3p/colorjson v1.0.0
+	github.com/therootcompany/golib/3p/colorjson v1.0.1
 )
 
 require (
