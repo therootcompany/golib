@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/therootcompany/golib/colorjson"
+	"github.com/therootcompany/golib/3p/colorjson"
 )
 
 func main() {
@@ -20,11 +20,7 @@ func main() {
 	var obj map[string]any
 	_ = json.Unmarshal([]byte(str), &obj)
 
-	// Make a custom formatter with indent set
-	f := colorjson.NewFormatter()
-	f.Indent = 4
-
 	// Marshall the Colorized JSON
-	s, _ := f.Marshal(obj)
+	s, _ := colorjson.Marshal(obj)
 	fmt.Println(string(s))
 }

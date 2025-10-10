@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/hokaccha/go-prettyjson"
-	"github.com/therootcompany/golib/colorjson"
+	"github.com/therootcompany/golib/3p/colorjson"
 )
 
 func BenchmarkMarshall(b *testing.B) {

@@ -19,7 +19,7 @@ ColorJSON was built in order to produce fast beautiful colorized JSON output for
 ## Installation
 
 ```sh
-go get -u github.com/therootcompany/golib/colorjson
+go get -u github.com/therootcompany/golib/3p/colorjson
 ```
 
 ## Usage
@@ -27,7 +27,7 @@ go get -u github.com/therootcompany/golib/colorjson
 Setup
 
 ```go
-import "github.com/therootcompany/golib/colorjson"
+import "github.com/therootcompany/golib/3p/colorjson"
 
 str := `{
   "str": "foo",

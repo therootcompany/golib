@@ -1,4 +1,4 @@
-module github.com/therootcompany/golib/colorjson
+module github.com/therootcompany/golib/3p/colorjson
 
 go 1.18.0
 
