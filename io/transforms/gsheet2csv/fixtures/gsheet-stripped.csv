@@ -1,0 +1,14 @@
+Key,Value,
+Name,55,
+Girlfriend's Age,55,
+,,
+My IQ,55,
+,55,
+"Key,with,Comma",,
+,"Value,with,Comma",
+"Quoted ""Key""",Normal Value,
+Normal Key,"Quoted ""Value""",
+"Quoted ""Key""",,
+,"Quoted ""Value""",
+x,y,z
+"#1",2,#3
