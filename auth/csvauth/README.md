@@ -1,5 +1,7 @@
 # csvauth
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/therootcompany/golib/auth/csvauth.svg)](https://pkg.go.dev/github.com/therootcompany/golib/auth/csvauth)
+
 Simple, non-scalable credentials stored in a tab-separated file. \
 (logical successor to [envauth](https://github.com/therootcompany/golib/tree/main/auth/envauth))
 
