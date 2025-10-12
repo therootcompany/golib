@@ -1,6 +1,6 @@
 # Transform
 
-[![GoDoc](https://img.shields.io/badge/api-reference-blue.svg?style=flat-square)](https://pkg.go.dev/github.com/therootcompany/golib/3p/transform)
+[![Go Reference](https://pkg.go.dev/badge/github.com/therootcompany/golib/3p/transform.svg)](https://pkg.go.dev/github.com/therootcompany/golib/3p/transform)
 
 Transform is a Go package that provides a simple pattern for performing [chainable](#chaining) data transformations on streams of bytes. It conforms to the [io.Reader](https://golang.org/pkg/io/#Reader) interface and is useful for operations such as converting data formats, audio/video resampling, image transforms, log filters, regex line matching, etc.
 
