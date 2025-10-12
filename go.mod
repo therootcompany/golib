@@ -1,3 +1,3 @@
-module git.rootprojects.org/root/golib
+module github.com/therootcompany/golib
 
-go 1.16
+go 1.20
