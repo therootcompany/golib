@@ -1,5 +1,7 @@
 # envauth
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/therootcompany/golib/auth/envauth.svg)](https://pkg.go.dev/github.com/therootcompany/golib/auth/envauth)
+
 Auth utils for single-user environments. \
 (standard library only, constant-time)
 
