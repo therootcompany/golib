@@ -1,5 +1,7 @@
 # http/middleware
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/therootcompany/golib/http/middleware.svg)](https://pkg.go.dev/github.com/therootcompany/golib/http/middleware)
+
 A simple zero-cost middleware handler for Go's native `net/http` `ServeMux`. \
 (only 50 lines long, using only `net/http` and `slices`)
 
