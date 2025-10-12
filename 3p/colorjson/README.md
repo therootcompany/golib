@@ -1,5 +1,7 @@
 # ColorJSON: The Fast Color JSON Marshaller for Go
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/therootcompany/golib/3p/colorjson.svg)](https://pkg.go.dev/github.com/therootcompany/golib/3p/colorjson)
+
 ![ColorJSON Output](https://i.imgur.com/pLtCXhb.png)
 
 ## What is this?
