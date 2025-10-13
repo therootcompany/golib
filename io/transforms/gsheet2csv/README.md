@@ -64,10 +64,12 @@ func main() {
 
 # CLI
 
-There are two convenience utilities:
+There are a few convenience utilities:
 
-- `gsheet2csv`
-- `gsheet2tsv`
+- `gsheet2csv` (also `gsheet2tsv`)
+- `gsheet2env`
+
+## gsheet2csv
 
 They're only slightly different from a direct export of a Google CSV in that they reformat comments and newlines.
 
@@ -120,4 +122,58 @@ gsheet2csv --strip-comments ./gsheet.csv > ./sheet.csv
 ^\  file separator
 \f  form feed (also ^L)
 \v  vertical tab (also ^K)
+```
+
+## gsheet2env
+
+Converts a Google Sheet to an ENV file.
+
+### Installation
+
+```sh
+go get github.com/therootcompany/golib/io/transform/gsheet2env
+```
+
+### Usage
+
+```sh
+gsheet2env --no-shebang --no-header --no-export ./fixtures/gsheet-env-readme.csv
+```
+
+### Example
+
+```csv
+# DO NOT put SECRETS here. Anyone with a link can see this. Use for config ONLY!
+LOCAL_TIMEZONE,America/Denver,"Seatle PT, Denver MT, Arizona MST, Chicago CT, Detroit ET"
+
+# to show that escapes are handled
+FIRST_LETTER,A,
+MONEY_SYMBOL,$,
+SINGLE_QUOTE,',
+DOUBLE_QUOTE,"""",
+
+# to show that newlines are handled
+TRIFORCE,"wisdom
+courage
+power","Zelda
+Link
+Ganon"
+```
+
+```sh
+# DO NOT put SECRETS here. Anyone with a link can see this. Use for config ONLY!
+# Seatle PT, Denver MT, Arizona MST, Chicago CT, Detroit ET
+LOCAL_TIMEZONE='America/Denver'
+# to show that escapes are handled
+FIRST_LETTER='A'
+MONEY_SYMBOL='$'
+SINGLE_QUOTE=''"'"''
+DOUBLE_QUOTE='"'
+# to show that newlines are handled
+# Zelda
+# Link
+# Ganon
+TRIFORCE='wisdom
+courage
+power'
 ```

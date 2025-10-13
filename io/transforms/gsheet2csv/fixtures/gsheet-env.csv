@@ -1,0 +1,14 @@
+# DO NOT put SECRETS here. These are used when the Ai program runs to set certain parameters,,
+ENV,Value,Comment
+LOCAL_TIMEZONE,America/Denver,"Seatle PT, Denver MT, Arizona MST, Chicago CT, Detroit ET"
+LITERAL_VAR,$SHELL,
+,,
+# separated,,
+EMPTY_KEY,,
+MULTI,"a nice
+multi-line
+value block","a nice
+multi-line
+comment block"
+,no key,
+${FOO},,this will break things

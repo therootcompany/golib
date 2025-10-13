@@ -1,0 +1,15 @@
+# DO NOT put SECRETS here. Anyone with a link can see this. Use for config ONLY!
+LOCAL_TIMEZONE,America/Denver,"Seatle PT, Denver MT, Arizona MST, Chicago CT, Detroit ET"
+#
+# to show that escapes are handled
+FIRST_LETTER,A,
+MONEY_SYMBOL,$,
+SINGLE_QUOTE,',
+DOUBLE_QUOTE,"""",
+#
+# to show that newlines are handled
+TRIFORCE,"wisdom
+courage
+power","Zelda
+Link
+Ganon"
