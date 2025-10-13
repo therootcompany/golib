@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/therootcompany/golib/io/transform/gsheet2csv"
+	"github.com/therootcompany/golib/io/transforms/gsheet2csv"
 )
 
 type CSVReader interface {
@@ -165,7 +165,6 @@ func main() {
 		gsr.Comma = inputDelim
 		if *noReadComments {
 			gsr.Comment = comment
-			gsr.QuotedComments = true
 		} else {
 			gsr.Comment = 0
 		}
