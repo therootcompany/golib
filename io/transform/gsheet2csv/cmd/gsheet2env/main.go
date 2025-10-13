@@ -22,11 +22,18 @@ func isValidKey(key string) bool {
 }
 
 func main() {
+	delimString := flag.String("d", ",", "field delimiter to use for output file ('\\t' for tab, '^_' for Unit Separator, etc)")
 	noShebang := flag.Bool("no-shebang", false, "don't begin the file with #!/bin/sh")
 	noHeader := flag.Bool("no-header", false, "treat all non-comment rows as ENVs - don't expect a header")
 	noExport := flag.Bool("no-export", false, "disable export prefix")
 	outputFile := flag.String("o", "-", "path to output env file (default: stdout)")
 	flag.Parse()
+
+	delim, err := gsheet2csv.DecodeDelimiter(*delimString)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding output delimiter: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Require Google Sheet URL as argument
 	if len(flag.Args()) != 1 {
@@ -54,6 +61,7 @@ func main() {
 	gsr := gsheet2csv.NewReaderFrom(gsheetURLOrPath)
 	// preserves comment-looking data (and actual comments)
 	gsr.Comment = 0
+	gsr.Comma = delim
 	gsr.FieldsPerRecord = -1
 
 	if !*noShebang {
