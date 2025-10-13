@@ -22,7 +22,7 @@ Note:
 - Be careful about single-column CSVs \
   (all comment-like lines are comments, same as with `encoding/csv` and empty lines)
 
-## Usage
+# Usage
 
 Same as `encoding/csv` (embedded), but with two extra options:
 
@@ -62,7 +62,7 @@ func main() {
 }
 ```
 
-## CLI
+# CLI
 
 There are two convenience utilities:
 
@@ -73,7 +73,21 @@ They're only slightly different from a direct export of a Google CSV in that the
 
 The alterable behavior is almost exclusively for testing.
 
-### Flags & Options
+### Installation
+
+```sh
+go get github.com/therootcompany/golib/io/transform/gsheet2csv
+```
+
+### Usage
+
+```sh
+gsheet2csv -raw -o ./gsheet.csv 'https://docs.google.com/spreadsheets/...'
+
+gsheet2csv -d '\t' --write-style 'gsheet' ./gsheet.csv > ./gsheet.tsv
+
+gsheet2csv --strip-comments ./gsheet.csv > ./sheet.csv
+```
 
 ```text
 --raw               download without processing
@@ -89,12 +103,6 @@ The alterable behavior is almost exclusively for testing.
                     or 'rfc' (ignore lines starting with comment character)
 --write-style       'gsheet' (quote single-field comments containing quotes or commas)
                     or 'rfc' (only quote values starting with a comment character)
-```
-
-### Installation
-
-```sh
-go get github.com/therootcompany/golib/io/transform/gsheet2csv
 ```
 
 ### ASCII Delimiters
