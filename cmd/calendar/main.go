@@ -286,4 +286,13 @@ func main() {
 	for _, ev := range events {
 		fmt.Printf("%s → %s\n", ev.Time.Format(time.RFC3339), ev.Rule.Event)
 	}
+
+	fmt.Println()
+	for _, ev := range events {
+		sleep := time.Until(ev.Time.Add(-2 * time.Hour))
+		fmt.Printf("waiting %s for %s (%s)\n", sleep, ev.Rule.Event, ev.Time.Format(time.RFC3339))
+		if sleep > 0 {
+			time.Sleep(sleep)
+		}
+	}
 }
