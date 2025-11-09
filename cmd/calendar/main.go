@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -135,44 +136,49 @@ func parseWeekday(s string) (time.Weekday, bool) {
 
 // ---------- 3. Next occurrence ----------
 func (r Rule) NextAfter(after time.Time, cal calendar.MultiYearCalendar) (time.Time, error) {
-	// Start searching from the month *after* the reference date.
-	y, _, _ := after.AddDate(0, 0, 1).Date()
-	startYear := y
-	endYear := startYear + 2 // give us enough room for “last-X” rules
-
-	for year := startYear; year <= endYear; year++ {
-		for month := time.January; month <= time.December; month++ {
-			candidate, ok := r.candidateInMonth(year, month)
-			if !ok {
-				continue
-			}
-			// Convert to the rule’s local zone and attach the time-of-day.
-			_, offset := candidate.In(r.Location).Zone()
-			candidate = time.Date(candidate.Year(), candidate.Month(), candidate.Day(),
-				0, 0, 0, 0, r.Location).Add(time.Duration(offset) * time.Second)
-
-			hour, min, err := parseHourMin(r.TimeOfDay)
-			if err != nil {
-				return time.Time{}, err
-			}
-			candidate = time.Date(candidate.Year(), candidate.Month(), candidate.Day(),
-				hour, min, 0, 0, r.Location)
-
-			if candidate.After(after) && cal.IsBusinessDay(candidate) {
-				return candidate, nil
-			}
-		}
+	candidate, ok := r.Next(after)
+	if !ok {
+		return time.Time{}, fmt.Errorf("no occurrence for rule")
 	}
+
+	// Convert to the rule’s local zone and attach the time-of-day.
+	candidate = time.Date(candidate.Year(), candidate.Month(), candidate.Day(),
+		0, 0, 0, 0, r.Location)
+
+	hour, min, err := parseHourMin(r.TimeOfDay)
+	if err != nil {
+		return time.Time{}, err
+	}
+	candidate = time.Date(candidate.Year(), candidate.Month(), candidate.Day(),
+		hour, min, 0, 0, r.Location)
+
+	if candidate.After(after) {
+		return candidate, nil
+	}
+
 	return time.Time{}, fmt.Errorf("no occurrence found for %s after %s", r.Event, after)
 }
 
-// candidateInMonth returns the *date* (midnight UTC) for the rule in the given year/month.
+// Next returns the *date* (midnight UTC) for the rule in the given year/month.
 // It respects the same semantics as GetNthWeekday.
-func (r Rule) candidateInMonth(year int, month time.Month) (time.Time, bool) {
+func (r Rule) Next(start time.Time) (time.Time, bool) {
 	if r.Nth != 0 {
 		// Floating weekday rule
-		t, ok := calendar.GetNthWeekday(year, month, r.Weekday, r.Nth)
-		return t, ok
+		startYear := start.Year()
+		endYear := startYear + 5 // up through leap year
+		startMonth := start.Month()
+		for year := startYear; year <= endYear; year++ {
+			for month := startMonth; month <= 12; month++ {
+				t, ok := calendar.GetNthWeekday(year, month, r.Weekday, r.Nth)
+				if ok {
+					if t.After(start) {
+						return t, ok
+					}
+				}
+			}
+			startMonth = 1
+		}
+		return time.Time{}, false
 	}
 
 	// Fixed day of month
@@ -183,7 +189,7 @@ func (r Rule) candidateInMonth(year int, month time.Month) (time.Time, bool) {
 	// time.Date will clamp invalid days (e.g. 31st of February → March 3rd)
 	// – we simply reject months that cannot contain the day.
 	// the 0th day of the next month is the last day of the previous month
-	lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+	lastDay := time.Date(start.Year(), start.Month()+1, 0, 0, 0, 0, 0, r.Location).Day()
 	if r.FixedDay > lastDay {
 		return time.Time{}, false
 	}
@@ -199,12 +205,31 @@ func (r Rule) candidateInMonth(year int, month time.Month) (time.Time, bool) {
 		}
 	}
 
-	return time.Date(year, month, fixedDay, 0, 0, 0, 0, time.UTC), true
+	// fmt.Fprintf(os.Stderr, "DEBUG event %s: %d-%d-%d\n", r.Event, start.Year(), start.Month(), fixedDay)
+	var t time.Time
+	startYear := start.Year()
+	endYear := startYear + 5 // up through leap year
+	startMonth := start.Month()
+	for year := startYear; year <= endYear; year++ {
+		for month := startMonth; month <= 12; month++ {
+			t = time.Date(year, month, fixedDay, 0, 0, 0, 0, r.Location)
+			// fmt.Fprintf(os.Stderr, "DEBUG candidate event time %s\n", t.Format(time.RFC3339))
+			if t.After(start) {
+				return t, true
+			}
+		}
+	}
+	return time.Time{}, false
 }
 
 func parseHourMin(s string) (hour, min int, err error) {
 	_, err = fmt.Sscanf(s, "%d:%d", &hour, &min)
 	return
+}
+
+type Event struct {
+	Rule Rule
+	Time time.Time
 }
 
 // ---------- 4. Example usage ----------
@@ -234,12 +259,31 @@ func main() {
 	cal := calendar.NewMultiYearCalendar(2025, 2026, calendar.FixedHolidays, calendar.FloatingHolidays)
 	now := time.Now()
 
+	var events []Event
 	for _, r := range rules {
-		next, err := r.NextAfter(now, cal)
+		t, err := r.NextAfter(now, cal)
 		if err != nil {
 			fmt.Printf("%s: %v\n", r.Event, err)
 			continue
 		}
-		fmt.Printf("%s → %s\n", next.Format(time.RFC3339), r.Event)
+		events = append(events, Event{r, t})
+	}
+	slices.SortFunc(events, func(a, b Event) int {
+		if a.Time.Before(b.Time) {
+			return -1
+		}
+		if a.Time.After(b.Time) {
+			return 1
+		}
+		if a.Rule.Event > b.Rule.Event {
+			return 1
+		} else if a.Rule.Event < b.Rule.Event {
+			return -1
+		}
+		return 0
+	})
+
+	for _, ev := range events {
+		fmt.Printf("%s → %s\n", ev.Time.Format(time.RFC3339), ev.Rule.Event)
 	}
 }
