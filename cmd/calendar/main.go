@@ -24,9 +24,61 @@ type Rule struct {
 	// Reminders are ignored for now – you can add them later.
 }
 
+type DayType int
+
+const (
+	FEDERAL DayType = iota
+	BANK
+	BUSINESS
+)
+
+// format is either "<days> <time>" or <days> or <time> or <duration>
+type Reminder struct {
+	//Parent   string
+	Days     int
+	DayType  DayType
+	Duration time.Duration
+	Time     Time
+}
+
+type Time struct {
+	Hour   int
+	Minute int
+	Second int
+}
+
+type Fields struct {
+	NAME   int
+	NTH    int
+	WKDAY  int
+	DATE   int
+	TIME   int
+	TZ     int
+	LABEL  int
+	DETAIL int
+	R1     int
+	R2     int
+	R3     int
+}
+
+var FIELDS = Fields{
+	NAME:   0,
+	NTH:    1,
+	WKDAY:  2,
+	DATE:   3,
+	TIME:   4,
+	TZ:     5,
+	LABEL:  6,
+	DETAIL: 7,
+	R1:     8,
+	R2:     9,
+	R3:     10,
+}
+
 // ---------- 2. CSV → []Rule ----------
 func LoadRules(rd *csv.Reader) ([]Rule, error) {
 	// first line is the header
+	// TODO create instance and map header names to column ints
 	if _, err := rd.Read(); err != nil {
 		return nil, fmt.Errorf("read header: %w", err)
 	}
@@ -55,12 +107,12 @@ func LoadRules(rd *csv.Reader) ([]Rule, error) {
 }
 
 func parseRule(rec []string) (Rule, error) {
-	event := rec[0]
-	nthStr := rec[1]
-	dayStr := rec[2]
-	dateStr := rec[3]
-	timeStr := rec[4]
-	tz := rec[5]
+	event := rec[FIELDS.NAME]
+	nthStr := rec[FIELDS.NTH]
+	dayStr := rec[FIELDS.WKDAY]
+	dateStr := rec[FIELDS.DATE]
+	timeStr := rec[FIELDS.TIME]
+	tz := rec[FIELDS.TZ]
 
 	var r Rule
 	r.Event = strings.TrimSpace(event)
