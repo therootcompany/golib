@@ -11,7 +11,7 @@ import (
 type API interface {
 	Type() string
 	Model() string
-	Generate(system, prompt string) (string, error)
+	Generate(system, prompt string, ctx json.RawMessage) (string, error)
 }
 
 // ollama show --parameters gpt-oss:20b
@@ -43,7 +43,12 @@ func (a *OllamaAPI) Model() string {
 	return a.ModelName
 }
 
-func (a *OllamaAPI) Generate(system, prompt string, context []uint32) (string, error) {
+func (a *OllamaAPI) Generate(system, prompt string, ctxU32s json.RawMessage) (string, error) {
+	var context []uint32
+	// for type safety while maintaining interface
+	if err := json.Unmarshal(ctxU32s, &context); err != nil {
+		return "", err
+	}
 	reqBody := OllamaGenerate{
 		Model:   a.ModelName,
 		System:  system,
@@ -157,7 +162,7 @@ type OpenAIResponse struct {
 	} `json:"choices"`
 }
 
-func (a *OpenAiAPI) Generate(system, prompt string) (string, error) {
+func (a *OpenAiAPI) Generate(system, prompt string, ctxMessages json.RawMessage) (string, error) {
 	reqBody := OpenAIRequest{
 		Model: a.ModelName, // Default OpenAI model, adjust as needed
 		Messages: []OpenAIMessage{
@@ -196,3 +201,7 @@ func (a *OpenAiAPI) Generate(system, prompt string) (string, error) {
 
 	return openAIResp.Choices[0].Message.Content, nil
 }
+
+// interface guards
+var _ API = (*OllamaAPI)(nil)
+var _ API = (*OpenAiAPI)(nil)
