@@ -21,13 +21,20 @@ type Rule struct {
 	FixedDay  int          // used only when Nth == 0 (e.g. “15” for the 15th)
 	TimeOfDay string       // HH:MM in the event’s local zone (e.g. "19:00")
 	Location  *time.Location
-	// Reminders are ignored for now – you can add them later.
+	Reminders []Reminder
 }
 
 type DayType int
 
+var dayTypes = []string{"Weekdays", "Federal Workdays", "Bank Workdays", "Business Days"}
+
+func (d DayType) String() string {
+	return dayTypes[d]
+}
+
 const (
-	FEDERAL DayType = iota
+	WEEK DayType = iota
+	FEDERAL
 	BANK
 	BUSINESS
 )
@@ -38,54 +45,54 @@ type Reminder struct {
 	Days     int
 	DayType  DayType
 	Duration time.Duration
-	Time     Time
+	Time     *time.Time
 }
 
-type Time struct {
-	Hour   int
-	Minute int
-	Second int
+func (r Reminder) String() string {
+	t := r.Time
+	if t == nil {
+		t = &time.Time{}
+	}
+	return fmt.Sprintf("%d %s %s %s", r.Days, r.DayType.String(), r.Duration.String(), t.Format("15:04"))
 }
 
 type Fields struct {
-	NAME   int
-	NTH    int
-	WKDAY  int
-	DATE   int
-	TIME   int
-	TZ     int
-	LABEL  int
-	DETAIL int
-	R1     int
-	R2     int
-	R3     int
+	NAME    int
+	NTH     int
+	WKDAY   int
+	DATE    int
+	TIME    int
+	TZ      int
+	LABEL   int
+	DETAIL  int
+	R_FIRST int
+	R_LAST  int
 }
 
 var FIELDS = Fields{
-	NAME:   0,
-	NTH:    1,
-	WKDAY:  2,
-	DATE:   3,
-	TIME:   4,
-	TZ:     5,
-	LABEL:  6,
-	DETAIL: 7,
-	R1:     8,
-	R2:     9,
-	R3:     10,
+	NAME:    0,
+	NTH:     1,
+	WKDAY:   2,
+	DATE:    3,
+	TIME:    4,
+	TZ:      5,
+	LABEL:   6,
+	DETAIL:  7,
+	R_FIRST: 8,
+	R_LAST:  10,
 }
 
 // ---------- 2. CSV → []Rule ----------
-func LoadRules(rd *csv.Reader) ([]Rule, error) {
+func LoadRules(csvr *csv.Reader) ([]Rule, error) {
 	// first line is the header
 	// TODO create instance and map header names to column ints
-	if _, err := rd.Read(); err != nil {
+	if _, err := csvr.Read(); err != nil {
 		return nil, fmt.Errorf("read header: %w", err)
 	}
 
 	var rules []Rule
 	for {
-		rec, err := rd.Read()
+		rec, err := csvr.Read()
 		if err == io.EOF {
 			break
 		}
@@ -93,6 +100,7 @@ func LoadRules(rd *csv.Reader) ([]Rule, error) {
 			return nil, fmt.Errorf("read row: %w", err)
 		}
 		if len(rec) < 6 {
+			fmt.Printf("WARN: skip short row %q: %v\n", rec, err)
 			continue // malformed – skip
 		}
 		rule, err := parseRule(rec)
@@ -113,6 +121,7 @@ func parseRule(rec []string) (Rule, error) {
 	dateStr := rec[FIELDS.DATE]
 	timeStr := rec[FIELDS.TIME]
 	tz := rec[FIELDS.TZ]
+	reminderList := rec[FIELDS.R_FIRST:]
 
 	var r Rule
 	r.Event = strings.TrimSpace(event)
@@ -172,6 +181,89 @@ func parseRule(rec []string) (Rule, error) {
 		return r, err
 	}
 	r.Location = loc
+
+	var reminders []Reminder
+	for _, rule := range reminderList {
+		rule = strings.TrimSpace(rule)
+		if len(rule) == 0 {
+			continue
+		}
+
+		r, err := parseReminder(rule)
+		if err != nil {
+			fmt.Printf("WARN: skip reminder %q: %s: %v\n", rec, rule, err)
+			continue
+		}
+
+		reminders = append(reminders, r)
+	}
+	r.Reminders = reminders
+
+	return r, nil
+}
+
+func parseReminder(rule string) (Reminder, error) {
+	var r Reminder
+	var pm string
+	parts := strings.Fields(rule)
+
+	part := parts[len(parts)-1]
+	if part == "PM" || part == "AM" {
+		pm = part
+		parts = parts[:len(parts)-1]
+		part = parts[len(parts)-1]
+	}
+
+	var t time.Time
+	var err error
+	if pm != "" {
+		part += pm
+	}
+	hhmm := strings.ToLower(part)
+	t, err = time.Parse("03:04pm", hhmm)
+	if err != nil {
+		t, err = time.Parse("3:04pm", hhmm)
+		if err != nil {
+			t, err = time.Parse("15:04", hhmm)
+		}
+	}
+	if err == nil {
+		r.Time = &t
+		parts = parts[:len(parts)-1]
+		if len(parts) > 0 {
+			part = parts[len(parts)-1]
+		} else {
+			part = ""
+		}
+	}
+
+	if bPos := strings.Index(part, "b"); bPos > -1 {
+		bdays := part[:bPos]
+		part = part[bPos+1:]
+		r.DayType = BUSINESS
+		r.Days, err = strconv.Atoi(bdays)
+		if err != nil {
+			return r, err
+		}
+	} else if dPos := strings.Index(part, "d"); dPos > -1 {
+		ddays := part[:dPos]
+		part = part[dPos+1:]
+		r.DayType = WEEK
+		r.Days, err = strconv.Atoi(ddays)
+		if err != nil {
+			return r, err
+		}
+	}
+
+	if len(part) != 0 {
+		r.Duration, err = time.ParseDuration(part)
+		if err != nil {
+			return r, err
+		}
+	}
+	if len(parts) != 0 {
+		return r, err
+	}
 
 	return r, nil
 }
@@ -337,6 +429,14 @@ func main() {
 
 	for _, ev := range events {
 		fmt.Printf("%s → %s\n", ev.Time.Format(time.RFC3339), ev.Rule.Event)
+	}
+
+	for _, ev := range events {
+		var rs []string
+		for _, r := range ev.Rule.Reminders {
+			rs = append(rs, r.String())
+		}
+		fmt.Printf("%v\n", strings.Join(rs, " | "))
 	}
 
 	fmt.Println()
