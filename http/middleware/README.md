@@ -15,11 +15,11 @@ mux.HandleFunc("GET /api/data", logRequests(timeRequests(requireAuth(requireAdmi
 Into organizable this:
 
 ```go
-mw := middleware.New(logRequests, timeRequests)
-mux.HandleFunc("GET /api/version", mw.Handle(getVersion))
+mw := middleware.WithMux(mux, logRequests, timeRequests)
+mw.HandleFunc("GET /api/version", getVersion)
 
-authMW := m.Use(requireAuth, requireAdmin)
-mux.HandleFunc("GET /api/data", authMW.Handle(getData))
+authMW := mw.With(requireAuth, requireAdmin)
+authMW.HandleFunc("GET /api/data", getData)
 ```
 
 Using stdlib this:
