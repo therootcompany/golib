@@ -12,6 +12,7 @@ type API interface {
 	Type() string
 	Model() string
 	WithModel(name string) API
+	WithFormat(name string) API
 	Generate(system, prompt string, ctx json.RawMessage) (string, error)
 }
 
@@ -25,10 +26,11 @@ type API interface {
 // var modelName = "gpt-oss:20b"
 // var ollamaBaseURL = "http://localhost:11434"
 type OllamaAPI struct {
-	BaseURL   string
-	APIKey    string
-	BasicAuth BasicAuth
-	ModelName string
+	BaseURL    string
+	APIKey     string
+	BasicAuth  BasicAuth
+	ModelName  string
+	formatName string
 }
 
 type BasicAuth struct {
@@ -42,6 +44,12 @@ func (a *OllamaAPI) Type() string {
 
 func (a *OllamaAPI) Model() string {
 	return a.ModelName
+}
+
+func (a *OllamaAPI) WithFormat(format string) API {
+	a2 := *a
+	a2.formatName = format
+	return &a2
 }
 
 func (a *OllamaAPI) WithModel(model string) API {
@@ -62,6 +70,7 @@ func (a *OllamaAPI) Generate(system, prompt string, ctxU32s json.RawMessage) (st
 		Context: context,
 		Prompt:  prompt,
 		Stream:  false,
+		Format:  a.formatName,
 		// Options: &Options{
 		// 	Temperature: 0.7, // Controls randomness (0.0 to 1.0)
 		// 	TopP:        0.8, // Controls diversity (0.0 to 1.0)
@@ -102,9 +111,10 @@ func (a *OllamaAPI) Generate(system, prompt string, ctxU32s json.RawMessage) (st
 // var gptModel = "gpt-4o"
 // var openAIBaseURL = "https://api.openai.com/v1"
 type OpenAiAPI struct {
-	BaseURL   string
-	APIKey    string
-	ModelName string
+	BaseURL    string
+	APIKey     string
+	ModelName  string
+	formatName string
 }
 
 func (a *OpenAiAPI) Type() string {
@@ -167,6 +177,13 @@ type OpenAIResponse struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
+}
+
+func (a *OpenAiAPI) WithFormat(format string) API {
+	a2 := *a
+	a2.formatName = format
+	// TODO how to set JSON format for OpenAi?
+	return &a2
 }
 
 func (a *OpenAiAPI) WithModel(model string) API {
