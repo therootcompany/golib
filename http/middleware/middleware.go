@@ -12,6 +12,7 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 )
@@ -33,7 +34,7 @@ type MiddlewareChain struct {
 // Handle composes middleware with the final handler
 func (c MiddlewareChain) Handle(handler http.Handler) http.Handler {
 	if handler == nil {
-		panic("mw.New(...).Use(...).Handle(-->this<--) requires a handler")
+		panic(errors.New("mw.New(...).Use(...).Handle(-->this<--) requires a handler"))
 	}
 
 	middlewares := make([]Middleware, len(c.middlewares))
@@ -86,7 +87,7 @@ func (c MiddlewareMux) HandleFunc(path string, handler http.HandlerFunc) {
 // Handle composes middleware with the final handler
 func (c MiddlewareMux) handle(handler http.Handler) http.Handler {
 	if handler == nil {
-		panic("mw.New(...).Use(...).Handle(-->this<--) requires a handler")
+		panic(errors.New("mw.New(...).Use(...).Handle(-->this<--) requires a handler"))
 	}
 
 	middlewares := make([]Middleware, len(c.middlewares))
