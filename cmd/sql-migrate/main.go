@@ -396,9 +396,13 @@ func main() {
 	}
 
 	command := os.Args[1]
-	if command == "help" || command == "--help" || command == "-h" || command == "version" || command == "--version" || command == "-V" {
+	switch command {
+	case "help", "--help",
+		"version", "--version", "-V":
 		fmt.Printf("%s\n", helpText)
 		os.Exit(0)
+	default:
+		// do nothing
 	}
 
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
