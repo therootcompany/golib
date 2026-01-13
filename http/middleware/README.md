@@ -68,6 +68,27 @@ Middleware is any function that wraps and returns the built-in `http.HandlerFunc
 type Middleware func(http.HandlerFunc) http.HandlerFunc
 ```
 
+#### Example: Panic handler
+
+```go
+func RecoverPanics(next http.HandlerFunc) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        defer func() {
+            if _err := recover(); _err != nil {
+                err, ok := _err.(error)
+                if !ok {
+                    err = fmt.Errorf("%v", _err)
+                }
+                api.InternalError(w, r, err)
+                return
+            }
+        }()
+
+        next.ServeHTTP(w, r)
+    }
+}
+```
+
 #### Example: Request logger
 
 ```go
@@ -100,7 +121,10 @@ func basicAuth(next http.HandlerFunc) http.HandlerFunc {
          return
       }
 
-      next.ServeHTTP(w, r)
+      ctx := r.Context()
+      ctx = context.WithValue(ctx, UsernameKey, username)
+      next.ServeHTTP(w, r.WithContext(ctx))
+      // or just next.ServeHTTP(w, r)
    }
 }
 ```
