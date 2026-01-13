@@ -336,7 +336,7 @@ func status(state *State) error {
 }
 
 const helpText = `
-sql-migrate v1.0.0 - a feature-branch-friendly SQL migrator
+sql-migrate v1.0.2 - a feature-branch-friendly SQL migrator
 
 USAGE
    sql-migrate <command> [-d sqldir] [-f logfile] [args]
