@@ -11,7 +11,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync/atomic"
 )
 
 // Either a subnet or single address (subnet with /32 CIDR prefix)
@@ -35,8 +34,7 @@ func (r IPv4Net) Contains(ip uint32) bool {
 }
 
 func New() *Cohort {
-	cohort := &Cohort{}
-	cohort.Store(&innerCohort{ranges: []IPv4Net{}})
+	cohort := &Cohort{ranges: []IPv4Net{}}
 	return cohort
 }
 
@@ -55,8 +53,7 @@ func Parse(prefixList []string) (*Cohort, error) {
 	copy(sizedList, ranges)
 	sortRanges(ranges)
 
-	cohort := &Cohort{}
-	cohort.Store(&innerCohort{ranges: sizedList})
+	cohort := &Cohort{ranges: sizedList}
 	return cohort, nil
 }
 
@@ -143,8 +140,7 @@ func ReadAll(r *csv.Reader, unsorted bool) (*Cohort, error) {
 	sizedList := make([]IPv4Net, len(ranges))
 	copy(sizedList, ranges)
 
-	cohort := &Cohort{}
-	cohort.Store(&innerCohort{ranges: sizedList})
+	cohort := &Cohort{ranges: sizedList}
 	return cohort, nil
 }
 
@@ -159,25 +155,14 @@ func sortRanges(ranges []IPv4Net) {
 }
 
 type Cohort struct {
-	atomic.Pointer[innerCohort]
-}
-
-// for ergonomic - so we can access the slice without dereferencing
-type innerCohort struct {
 	ranges []IPv4Net
 }
 
-func (c *Cohort) Swap(next *Cohort) {
-	c.Store(next.Load())
-}
-
 func (c *Cohort) Size() int {
-	return len(c.Load().ranges)
+	return len(c.ranges)
 }
 
 func (c *Cohort) Contains(ipStr string) bool {
-	cohort := c.Load()
-
 	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
 		return true
@@ -185,7 +170,7 @@ func (c *Cohort) Contains(ipStr string) bool {
 	ip4 := ip.As4()
 	ipU32 := binary.BigEndian.Uint32(ip4[:])
 
-	idx, found := slices.BinarySearchFunc(cohort.ranges, ipU32, func(r IPv4Net, target uint32) int {
+	idx, found := slices.BinarySearchFunc(c.ranges, ipU32, func(r IPv4Net, target uint32) int {
 		if r.networkBE < target {
 			return -1
 		}
@@ -200,7 +185,7 @@ func (c *Cohort) Contains(ipStr string) bool {
 
 	// Check the range immediately before the insertion point
 	if idx > 0 {
-		if cohort.ranges[idx-1].Contains(ipU32) {
+		if c.ranges[idx-1].Contains(ipU32) {
 			return true
 		}
 	}
