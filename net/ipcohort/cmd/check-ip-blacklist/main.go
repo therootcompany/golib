@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/therootcompany/golib/net/gitdataset"
+	"github.com/therootcompany/golib/net/ipcohort"
 )
 
 func main() {
@@ -11,25 +14,35 @@ func main() {
 		os.Exit(1)
 	}
 
-	path := os.Args[1]
+	dataPath := os.Args[1]
 	ipStr := os.Args[2]
 	gitURL := ""
 	if len(os.Args) >= 4 {
 		gitURL = os.Args[3]
 	}
 
-	fmt.Fprintf(os.Stderr, "Loading %q ...\n", path)
+	fmt.Fprintf(os.Stderr, "Loading %q ...\n", dataPath)
 
-	b := NewBlacklist(gitURL, path)
+	var b *ipcohort.Cohort
+	loadFile := func(path string) (*ipcohort.Cohort, error) {
+		return ipcohort.LoadFile(path, false)
+	}
+	blacklist := gitdataset.New(gitURL, dataPath, loadFile)
 	fmt.Fprintf(os.Stderr, "Syncing git repo ...\n")
-	if n, err := b.Init(false); err != nil {
+	if updated, err := blacklist.Init(false); err != nil {
 		fmt.Fprintf(os.Stderr, "error: ip cohort: %v\n", err)
-	} else if n > 0 {
-		fmt.Fprintf(os.Stderr, "ip cohort: loaded %d blacklist entries\n", n)
+	} else {
+		b = blacklist.Load()
+		if updated {
+			n := b.Size()
+			if n > 0 {
+				fmt.Fprintf(os.Stderr, "ip cohort: loaded %d blacklist entries\n", n)
+			}
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "Checking blacklist ...\n")
-	if b.Contains(ipStr) {
+	if blacklist.Load().Contains(ipStr) {
 		fmt.Printf("%s is BLOCKED\n", ipStr)
 		os.Exit(1)
 	}
