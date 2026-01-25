@@ -74,6 +74,7 @@ const (
 	fgRed      = "\033[31m"
 	textErr    = textBold + fgRed
 	textWarn   = textBold + fgYellow
+	textInfo   = fgYellow
 	textPrompt = fgBlue
 )
 
@@ -115,17 +116,17 @@ func main() {
 	{
 		cfg.startTime, err = parseClock(cfg.startClock, now)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%sError%s: could not use --start-time %q: %v\n", textErr, textReset, cfg.startClock, err)
+			fmt.Fprintf(os.Stderr, "\n%sError%s: could not use --start-time %q: %v\n", textErr, textReset, cfg.startClock, err)
 			os.Exit(1)
 		}
 		cfg.endTime, err = parseClock(cfg.endClock, now)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%sError%s: could not use --end-time %q: %v\n", textErr, textReset, cfg.endClock, err)
+			fmt.Fprintf(os.Stderr, "\n%sError%s: could not use --end-time %q: %v\n", textErr, textReset, cfg.endClock, err)
 			os.Exit(1)
 		}
 		if cfg.startTime.After(cfg.endTime) || cfg.startTime.Equal(cfg.endTime) {
 			fmt.Fprintf(os.Stderr,
-				"%sError%s: no time between --start-time %q and --end-time %q\n", textErr, textReset, cfg.startTime, cfg.endTime)
+				"\n%sError%s: no time between --start-time %q and --end-time %q\n", textErr, textReset, cfg.startTime, cfg.endTime)
 			os.Exit(1)
 		}
 	}
@@ -140,7 +141,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Info: opening, reading, and parsing %q\n", cfg.csvPath)
 	file, err := os.Open(cfg.csvPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%sError%s: %v\n", textErr, textReset, err)
+		fmt.Fprintf(os.Stderr, "\n%sError%s: %v\n", textErr, textReset, err)
 		os.Exit(1)
 	}
 	defer func() {
@@ -151,7 +152,7 @@ func main() {
 
 	messages, warns, err := cfg.LaxParseCSV(csvr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		fmt.Fprintf(os.Stderr, "\n%sError%s: %v\n", textErr, textReset, err)
 		os.Exit(1)
 	}
 	if len(warns) > 0 {
@@ -161,14 +162,13 @@ func main() {
 			fmt.Fprintf(os.Stderr, "         (pass --verbose to show warnings)\n")
 		}
 		if cfg.verbose {
-			fmt.Fprintf(os.Stderr, "\n")
 			for _, warn := range warns {
-				fmt.Fprintf(os.Stderr, "Skip: %s\n", warn.Message)
+				fmt.Fprintf(os.Stderr, "   Skip: %s\n", warn.Message)
 			}
 		}
 		fmt.Fprintf(os.Stderr, "\n")
 	}
-	fmt.Fprintf(os.Stderr, "Info: messages to send: %d\n", len(messages))
+	fmt.Fprintf(os.Stderr, "Info: list of %d messages\n", len(messages))
 
 	if now.After(cfg.endTime) || now.Equal(cfg.endTime) {
 		fmt.Fprintf(os.Stderr, "%sWarning%s: Too late now. %sWaiting until tomorrow%s:\n", textWarn, textReset, textWarn, textReset)
@@ -179,7 +179,7 @@ func main() {
 		// check for issues caused by daylight savings
 		if cfg.startTime.After(cfg.endTime) || cfg.startTime.Equal(cfg.endTime) {
 			fmt.Fprintf(os.Stderr,
-				"%sError%s: no time between --start-time %q and --end-time %q\n",
+				"\n%sError%s: no time between --start-time %q and --end-time %q\n",
 				textErr, textReset,
 				cfg.startTime, cfg.endTime,
 			)
@@ -207,12 +207,12 @@ func main() {
 		}
 		var startAgo = now.Sub(cfg.startTime)
 		if startAgo >= 0 {
-			fmt.Fprintf(os.Stderr, "Info: start time was %s (%s ago)\n", cfg.startTime.Format("3:04pm"), startAgo.Round(time.Second))
+			fmt.Fprintf(os.Stderr, "Info: start after %s         (%s ago)\n", cfg.startTime.Format("3:04pm"), startAgo.Round(time.Second))
 		} else {
 			startAgo *= -1
-			fmt.Fprintf(os.Stderr, "Info: start time is %s (%s from now)\n", cfg.startTime.Format("3:04pm"), startAgo.Round(time.Second))
+			fmt.Fprintf(os.Stderr, "Info: start after %s         (%s from now)\n", cfg.startTime.Format("3:04pm"), startAgo.Round(time.Second))
 		}
-		fmt.Fprintf(os.Stderr, "Info: end time is %s (%s from now)\n", cfg.endTime.Format("3:04pm"), cfg.duration.Round(time.Second))
+		fmt.Fprintf(os.Stderr, "Info: end around %s          (%s from now)\n", cfg.endTime.Format("3:04pm"), cfg.duration.Round(time.Second))
 	}
 
 	// delay
@@ -243,20 +243,24 @@ func main() {
 		})
 	}
 
-	fmt.Fprintf(os.Stderr, "Info: average delay between messages: %s\n", cfg.delay.Round(time.Second))
 	quarterDelay := cfg.delay / 4
 	baseDelay := quarterDelay * 3
 	jitter := int64(quarterDelay * 2)
 	fmt.Fprintf(os.Stderr,
-		"      (%s minimum + %s jitter)\n",
-		baseDelay.Round(time.Millisecond), time.Duration(jitter).Round(time.Millisecond),
+		"Info: delay %s between messages  (%s + %s jitter)\n",
+		cfg.delay.Round(time.Second), baseDelay.Round(time.Millisecond), time.Duration(jitter).Round(time.Millisecond),
 	)
 
 	if len(messages) == 0 {
-		fmt.Fprintf(os.Stderr, "\n")
-		fmt.Fprintf(os.Stderr, "%sError%s: no messages to send\n", textErr, textReset)
+		fmt.Fprintf(os.Stderr, "\n%sError%s: no messages to send\n", textErr, textReset)
 		os.Exit(1)
 	}
+
+	fmt.Fprintf(os.Stderr, "\n")
+	fmt.Fprintf(os.Stderr, "Info: This is what a %ssample message%s from list look like:\n", textInfo, textReset)
+	fmt.Fprintf(os.Stderr, "\n")
+	fmt.Fprintf(os.Stderr, "      To: %s (%s)\n", messages[0].Number, messages[0].Name)
+	fmt.Fprintf(os.Stderr, "      %s%s%s\n", textInfo, messages[0].Text, textReset)
 
 	if !cfg.confirmed && !cfg.dryRun {
 		fmt.Fprintf(os.Stderr, "\n")
@@ -283,7 +287,7 @@ func main() {
 			last := len(messages)
 			left := last - cur
 			if left > 0 {
-				fmt.Fprintf(os.Stderr, "%sError%s: Oh, look at the time. Ending now. (%d messages remaining)\n", textErr, textReset, left)
+				fmt.Fprintf(os.Stderr, "\n%sError%s: Oh, look at the time. Ending now. (%d messages remaining)\n", textErr, textReset, left)
 				os.Exit(1)
 				return
 			}
@@ -315,7 +319,7 @@ func main() {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "finished at %s", time.Now())
+	fmt.Fprintf(os.Stderr, "Info: finished at %s\n", time.Now())
 }
 
 func confirmContinue() bool {
@@ -395,7 +399,11 @@ type CSVWarn struct {
 	Record  []string
 }
 
-var reUnmatchedVars = regexp.MustCompile(`\{[^}]+\}`)
+func (w CSVWarn) Error() string {
+	return w.Message
+}
+
+var reUnmatchedVars = regexp.MustCompile(`(\{[^}]+\})`)
 
 func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []SMSMessage, warns []CSVWarn, err error) {
 	header, err := csvr.Read()
@@ -407,7 +415,7 @@ func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []SMSMessage, war
 	FIELD_PHONE := GetFieldIndex(header, "Phone")
 	FIELD_MESSAGE := GetFieldIndex(header, "Message")
 	if FIELD_NAME == -1 || FIELD_PHONE == -1 || FIELD_MESSAGE == -1 {
-		return nil, nil, fmt.Errorf("header is missing one or more of 'Preferred', 'Phone', and/or 'Message'")
+		return nil, nil, fmt.Errorf("header is missing one or more of 'Name', 'Phone', and/or 'Message'")
 	}
 	FIELD_MIN := 1 + slices.Max([]int{FIELD_NAME, FIELD_PHONE, FIELD_MESSAGE})
 
@@ -452,6 +460,7 @@ func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []SMSMessage, war
 			Vars:     vars,
 			Text:     strings.TrimSpace(rec[FIELD_MESSAGE]),
 		}
+		message.Text = replaceVar(message.Template, "Name", message.Name)
 
 		keyIter := maps.Keys(message.Vars)
 		keys := slices.Sorted(keyIter)
@@ -460,14 +469,16 @@ func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []SMSMessage, war
 			message.Text = replaceVar(message.Text, key, val)
 		}
 
-		if reUnmatchedVars.MatchString(message.Text) {
-			warns = append(warns, CSVWarn{
-				Index:   rowIndex,
-				Code:    "UnmatchedVars",
-				Message: fmt.Sprintf("ignoring row %d: leftover template variables (e.g. {VarName})", rowIndex),
-				Record:  rec,
-			})
-			continue
+		if tmpls := reUnmatchedVars.FindAllString(message.Text, -1); len(tmpls) != 0 {
+			return nil, nil, &CSVWarn{
+				Index: rowIndex,
+				Code:  "UnmatchedVars",
+				Message: fmt.Sprintf(
+					"failing due to row %d (%s): leftover template variable(s): %s",
+					rowIndex, message.Name, strings.Join(tmpls, " "),
+				),
+				Record: rec,
+			}
 		}
 
 		message.Number = cleanPhoneNumber(message.Number)
