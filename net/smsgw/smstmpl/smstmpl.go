@@ -8,11 +8,15 @@ import (
 	"strings"
 
 	"github.com/therootcompany/golib/net/smsgw"
+	"github.com/therootcompany/golib/net/smsgw/smscsv"
 )
 
 var reUnmatchedVars = regexp.MustCompile(`(\{[^}]+\})`)
 
-func RenderMessages(messages []smsgw.Message) ([]smsgw.Message, error) {
+func RenderAll(messages []smscsv.Message) ([]smscsv.Message, error) {
+	var err error
+	var warns []smscsv.CSVWarn
+
 	for i, message := range messages {
 		rowIndex := i + 1
 
@@ -24,8 +28,20 @@ func RenderMessages(messages []smsgw.Message) ([]smsgw.Message, error) {
 			message.Text = ReplaceVar(message.Text, key, val)
 		}
 
+		message.Number = smsgw.StripFormatting(message.Number)
+		message.Number, err = smsgw.PrefixUS10Digit(message.Number)
+		if err != nil {
+			warns = append(warns, smscsv.CSVWarn{
+				Index:   rowIndex,
+				Code:    "PhoneInvalid",
+				Message: fmt.Sprintf("ignoring row %d (%s): %s", rowIndex, message.Name, err.Error()),
+				// Record:  rec,
+			})
+			continue
+		}
+
 		if tmpls := reUnmatchedVars.FindAllString(message.Text, -1); len(tmpls) != 0 {
-			return nil, &CSVWarn{
+			return nil, &smscsv.CSVWarn{
 				Index: rowIndex,
 				Code:  "UnmatchedVars",
 				Message: fmt.Sprintf(

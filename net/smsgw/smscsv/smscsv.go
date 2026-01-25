@@ -1,22 +1,15 @@
-package main
+package smscsv
 
 import (
-	"encoding/csv"
 	"fmt"
 	"io"
 	"slices"
 	"strings"
-
-	"github.com/therootcompany/golib/net/smsgw"
 )
 
-func GetFieldIndex(header []string, name string) int {
-	for i, h := range header {
-		if strings.EqualFold(strings.TrimSpace(h), name) {
-			return i
-		}
-	}
-	return -1
+type Reader interface {
+	Read() ([]string, error)
+	// ReadAll() ([][]string, error)
 }
 
 type CSVWarn struct {
@@ -30,7 +23,36 @@ func (w CSVWarn) Error() string {
 	return w.Message
 }
 
-func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []smsgw.Message, warns []CSVWarn, err error) {
+type Message struct {
+	header   []string
+	indices  map[string]int
+	fields   []string
+	Name     string
+	Number   string
+	Template string
+	Vars     map[string]string
+	Text     string
+}
+
+func (m Message) Size() int {
+	return len(m.fields)
+}
+
+func (m Message) Get(key string) string {
+	index, ok := m.indices[key]
+	if !ok {
+		return ""
+	}
+
+	if len(m.fields) >= 1+index {
+		return m.fields[index]
+	}
+
+	return ""
+}
+
+// TODO XXX AJ pass in column name mapping
+func ReadOrIgnoreAll(csvr Reader) (messages []Message, warns []CSVWarn, err error) {
 	header, err := csvr.Read()
 	if err != nil {
 		return nil, nil, fmt.Errorf("header could not be parsed: %w", err)
@@ -55,16 +77,8 @@ func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []smsgw.Message, 
 			return nil, nil, fmt.Errorf("failed to parse row %d (and all following rows): %w", rowIndex, err)
 		}
 
-		if len(rec) < FIELD_MIN {
-			warns = append(warns, CSVWarn{
-				Index:   rowIndex,
-				Code:    "TooFewFields",
-				Message: fmt.Sprintf("ignoring row %d: too few fields (want %d, have %d)", rowIndex, FIELD_MIN, len(rec)),
-				Record:  rec,
-			})
-			continue
-		}
-
+		// TODO XXX AJ create an abstraction around the header []string and the record []string
+		// the idea is to return the same thing for valid and invalid rows
 		vars := make(map[string]string)
 		n := min(len(header), len(rec))
 		for i := range n {
@@ -78,7 +92,17 @@ func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []smsgw.Message, 
 			}
 		}
 
-		message := smsgw.Message{
+		if len(rec) < FIELD_MIN {
+			warns = append(warns, CSVWarn{
+				Index:   rowIndex,
+				Code:    "TooFewFields",
+				Message: fmt.Sprintf("ignoring row %d: too few fields (want %d, have %d)", rowIndex, FIELD_MIN, len(rec)),
+				Record:  rec,
+			})
+			continue
+		}
+
+		message := Message{
 			// Index:    rowIndex,
 			Name:     strings.TrimSpace(rec[FIELD_NAME]),
 			Number:   strings.TrimSpace(rec[FIELD_PHONE]),
@@ -86,20 +110,17 @@ func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []smsgw.Message, 
 			Vars:     vars,
 		}
 
-		message.Number = smsgw.StripFormatting(message.Number)
-		message.Number, err = smsgw.PrefixUS10Digit(message.Number)
-		if err != nil {
-			warns = append(warns, CSVWarn{
-				Index:   rowIndex,
-				Code:    "PhoneInvalid",
-				Message: fmt.Sprintf("ignoring row %d (%s): %s", rowIndex, message.Name, err.Error()),
-				Record:  rec,
-			})
-			continue
-		}
-
 		messages = append(messages, message)
 	}
 
 	return messages, warns, nil
+}
+
+func GetFieldIndex(header []string, name string) int {
+	for i, h := range header {
+		if strings.EqualFold(strings.TrimSpace(h), name) {
+			return i
+		}
+	}
+	return -1
 }

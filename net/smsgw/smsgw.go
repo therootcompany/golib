@@ -5,25 +5,17 @@ import (
 	"strings"
 )
 
-type Gateway interface {
-	CurlString(to, text string) string
-	Send(to, text string) error
-}
-
-type Message struct {
-	Name     string
-	Number   string
-	Template string
-	Vars     map[string]string
-	Text     string
-}
-
 var ErrInvalidClockFormat = fmt.Errorf("invalid clock time, ex: '06:00 PM', '6pm', or '18:00' (space and case insensitive)")
 var ErrInvalidClockTime = fmt.Errorf("invalid hour or minute, for example '27:63 p' would not be valid")
 var ErrPhoneEmpty = fmt.Errorf("no phone number")
 var ErrPhoneInvalid11 = fmt.Errorf("invalid 11-digit number (does not start with 1)")
 var ErrPhoneInvalid12 = fmt.Errorf("invalid 12-digit number (does not start with +1)")
 var ErrPhoneInvalidLength = fmt.Errorf("invalid number length (should be 10 digits or 12 with +1 prefix)")
+
+type Gateway interface {
+	CurlString(to, text string) string
+	Send(to, text string) error
+}
 
 // Strips away symbols, non-printing characters copied from HTML, etc,
 // leaving only a possible leading '+' and digits.

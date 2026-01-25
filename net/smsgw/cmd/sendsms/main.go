@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/therootcompany/golib/net/smsgw"
 	"github.com/therootcompany/golib/net/smsgw/androidsmsgateway"
+	"github.com/therootcompany/golib/net/smsgw/smscsv"
 )
 
 type MainConfig struct {
@@ -122,7 +123,7 @@ func main() {
 	csvr := csv.NewReader(file)
 	csvr.FieldsPerRecord = -1
 
-	messages, warns, err := cfg.LaxParseCSV(csvr)
+	messages, warns, err := smscsv.ReadOrIgnoreAll(csvr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\n%sError%s: %v\n", textErr, textReset, err)
 		os.Exit(1)
