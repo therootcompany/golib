@@ -51,6 +51,7 @@ var ErrPhoneInvalidLength = fmt.Errorf("invalid number length (should be 10 digi
 type MainConfig struct {
 	csvPath     string
 	dryRun      bool
+	printCurl   bool
 	shuffle     bool
 	startClock  string
 	startTime   time.Time
@@ -71,10 +72,12 @@ const (
 	textBold   = "\033[1m"
 	fgYellow   = "\033[33m"
 	fgBlue     = "\033[34m"
+	fgGreen    = "\033[32m"
 	fgRed      = "\033[31m"
 	textErr    = textBold + fgRed
 	textWarn   = textBold + fgYellow
 	textInfo   = fgYellow
+	textTmpl   = fgGreen
 	textPrompt = fgBlue
 )
 
@@ -100,7 +103,8 @@ func main() {
 
 	flag.BoolVar(&cfg.confirmed, "y", false, "Confirm without prompting")
 	flag.BoolVar(&cfg.verbose, "verbose", false, "Show parse warnings and other debug info")
-	flag.BoolVar(&cfg.dryRun, "dry-run", false, "Print curl commands instead of sending messages")
+	flag.BoolVar(&cfg.dryRun, "dry-run", false, "Skip sending messages and sleeping, runs without confirmation")
+	flag.BoolVar(&cfg.printCurl, "print-curl", false, "Show full curl commands instead of messages")
 	flag.StringVar(&cfg.csvPath, "csv", "./messages.csv", "Path to file with newline-delimited phone numbers")
 	flag.BoolVar(&cfg.shuffle, "shuffle", false, "Randomize the list")
 	flag.StringVar(&cfg.startClock, "start-time", "10am", "don't send messages before this time (e.g. 10:00, 10am, 00:00)")
@@ -157,9 +161,9 @@ func main() {
 	}
 	if len(warns) > 0 {
 		fmt.Fprintf(os.Stderr, "\n")
-		fmt.Fprintf(os.Stderr, "%sWarning%s: skipped %d rows with too few fields, invalid numbers, bad templates, etc\n", textWarn, textReset, len(warns))
+		fmt.Fprintf(os.Stderr, "%sWarning%s: skipped %d rows with missing or invalid data\n", textWarn, textReset, len(warns))
 		if !cfg.verbose {
-			fmt.Fprintf(os.Stderr, "         (pass --verbose to show warnings)\n")
+			fmt.Fprintf(os.Stderr, "         (pass --verbose for more detail)\n")
 		}
 		if cfg.verbose {
 			for _, warn := range warns {
@@ -260,10 +264,11 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Info: This is what a %ssample message%s from list look like:\n", textInfo, textReset)
 	fmt.Fprintf(os.Stderr, "\n")
 	fmt.Fprintf(os.Stderr, "      To: %s (%s)\n", messages[0].Number, messages[0].Name)
+	fmt.Fprintf(os.Stderr, "      %s%s%s\n", textTmpl, messages[0].Template, textReset)
 	fmt.Fprintf(os.Stderr, "      %s%s%s\n", textInfo, messages[0].Text, textReset)
+	fmt.Fprintf(os.Stderr, "\n")
 
 	if !cfg.confirmed && !cfg.dryRun {
-		fmt.Fprintf(os.Stderr, "\n")
 		if !confirmContinue() {
 			fmt.Fprintf(os.Stderr, "%scanceled%s\n", textErr, textReset)
 			os.Exit(1)
@@ -299,17 +304,22 @@ func main() {
 			delay = time.Duration(ns)
 		}
 
-		if cfg.dryRun {
-			fmt.Printf("sleep %s\n\n", delay)
-		} else if i > 0 {
-			time.Sleep(delay)
+		if i > 0 {
+			if cfg.dryRun || cfg.printCurl {
+				fmt.Printf("sleep %s\n\n", delay.Round(time.Millisecond))
+			} else {
+				time.Sleep(delay)
+			}
 		}
 
 		fmt.Fprintf(os.Stderr, "# Send to %s (%s) %s-%s\n", message.Number[:2], message.Number[2:5], message.Number[5:8], message.Number[8:])
+		if cfg.printCurl {
+			curl := sender.CurlString(message.Number, message.Text)
+			fmt.Println(curl)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s\n", message.Text)
+		}
 		if cfg.dryRun {
-			fmt.Println(message.Text)
-			// curl := sender.CurlString(message.Number, message.Text)
-			// fmt.Println(curl)
 			continue
 		}
 
@@ -319,7 +329,7 @@ func main() {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Info: finished at %s\n", time.Now())
+	fmt.Fprintf(os.Stderr, "\nInfo: finished at %s\n", time.Now())
 }
 
 func confirmContinue() bool {
