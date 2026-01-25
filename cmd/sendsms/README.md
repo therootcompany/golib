@@ -4,30 +4,32 @@ A little ditty I created for sending mass texts for community and professional e
 
 I bought a $30 Android phone on Facebook marketplace, a $5/month [Tello SIM](https://tello.com/buy/custom_plans), and installed [SMS Gateway for Android™](https://github.com/capcom6/android-sms-gateway) - because Twilio was getting way too expensive with all the plan and compliance fees and such to basically just send a handful of messages now and then.
 
-```sh
-sendsms --csv ./messages.csv --start-time '11:30am' --end-time '1:30pm'
+Prepare a CSV with various message templates like this:
+
+`messages.csv`:
+
+```csv
+Name,Phone,Message
+Jim,(800) 555-1234,"Hey {Name}, Are you coming to the thing?"
+Bob,+18005554321,"Hey {Name}, Are you coming to the thing?"
+Joe,1.800.555.3412,"Hey {Name}, Are you coming to the thing?"
 ```
 
-## Table of Contents
+And send those messages like this:
 
-- Example
-- Usage
-- CSV Data
-- Templates
-- Tips for High Delivery
-- Legal
+```sh
+sendsms --csv ./messages.csv --start-time '10:00am' --end-time '8:30pm'
+```
 
-## Example
-
-You get a summary of what's about to happen:
+It let's you know what and when it's going to do:
 
 ```text
 Warning: skipped 2 rows with missing or invalid data
          (pass --verbose for more detail)
 
 Info: list of 123 messages
-Info: start after 10:00am         (11h30m30s ago)
-Info: end around 11:30pm          (59m30s from now)
+Info: start after 10:00am         (8h30m30s ago)
+Info: end around 8:30pm           (1h59m30s from now)
 Info: delay 20s between messages  (15s + 10s jitter)
 Info: This is what a sample message from list look like:
 
@@ -38,7 +40,7 @@ Info: This is what a sample message from list look like:
 Continue? [y/N]
 ```
 
-And the messages as they send:
+And then does it!
 
 ```text
 # Send to +1 (801) 555-1234
@@ -49,6 +51,22 @@ sleep 21.098s
 Hey Jon, Widget workshop tonight. You coming? - Dude Man
 sleep 34.567s
 ```
+
+With [SMS Gateway for Android™](https://github.com/capcom6/android-sms-gateway), and minimal config:
+
+```sh
+SMSGW_BASEURL=http://192.168.1.200:8080
+SMSGW_USERNAME=smsgw
+SMSGW_PASSWORD=xxxx-xxxx-xxxx-xxxx
+```
+
+## Table of Contents
+
+- Usage
+- CSV Data
+- Templates
+- Tips for High Delivery
+- Legal
 
 ## Usage
 
