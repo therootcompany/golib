@@ -1,5 +1,5 @@
-Preferred,Phone,Message
-Bob,1800.555-1234,"Hello {First}, Welcome to the fold!"
-Suze,8005553456,"Hello {First}, Welcome to the fold!"
-Jon,800.555.5678,"Hello {First}, Be bold!"
-Jane,+1 (800) 555-5678,"Hello {First}, Be bold!"
+Name,Phone,Message,Spice Level,Lucky number
+Bob,1800.555-1234,"Hello {Name}, Welcome to the fold!",Hot,2
+Suze,8005553456,"Hello {Name}, Welcome to the fold!",,11
+Jon,800.555.5678,"Hello {Name}, Be bold! {-Spice Level-}!",Volcano,
+,+1 (800) 555-5678,"Hello {Name}, Be bold! {-Spice Level-}!",,37
