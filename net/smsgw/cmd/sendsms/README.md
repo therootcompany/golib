@@ -1,4 +1,4 @@
-# [sendsms](https://github.com/therootcompany/golib/tree/main/cmd/sendsms)
+# [sendsms](https://github.com/therootcompany/golib/tree/main/net/smsgw/cmd/sendsms)
 
 A little ditty I created for sending mass texts for community and professional events - church, school, meetups, etc.
 

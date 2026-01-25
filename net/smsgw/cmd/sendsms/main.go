@@ -5,48 +5,16 @@ import (
 	"encoding/csv"
 	"flag"
 	"fmt"
-	"io"
-	"maps"
 	"math/rand"
 	"os"
-	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/therootcompany/golib/net/smsgw"
+	"github.com/therootcompany/golib/net/smsgw/androidsmsgateway"
 )
-
-type SMSSender interface {
-	CurlString(to, text string) string
-	Send(to, text string) error
-}
-
-type SMSMessage struct {
-	Name     string
-	Number   string
-	Template string
-	Vars     map[string]string
-	Text     string
-}
-
-type TextMessage struct {
-	Text string `json:"text"`
-}
-
-type Payload struct {
-	TextMessage  TextMessage `json:"textMessage"`
-	PhoneNumbers []string    `json:"phoneNumbers"`
-	Priority     int         `json:"priority,omitempty"`
-}
-
-var ErrInvalidClockFormat = fmt.Errorf("invalid clock time, ex: '06:00 PM', '6pm', or '18:00' (space and case insensitive)")
-var ErrInvalidClockTime = fmt.Errorf("invalid hour or minute, for example '27:63 p' would not be valid")
-var ErrPhoneEmpty = fmt.Errorf("no phone number")
-var ErrPhoneInvalid11 = fmt.Errorf("invalid 11-digit number (does not start with 1)")
-var ErrPhoneInvalid12 = fmt.Errorf("invalid 12-digit number (does not start with +1)")
-var ErrPhoneInvalidLength = fmt.Errorf("invalid number length (should be 10 digits or 12 with +1 prefix)")
 
 type MainConfig struct {
 	csvPath     string
@@ -90,11 +58,11 @@ func main() {
 	_ = godotenv.Load("./.env")
 
 	// note: we could also use twilio, or whatever
-	var sender SMSSender = &SMSGatewayForAndroid{
-		baseURL:  os.Getenv("SMSGW_BASEURL"),
-		username: os.Getenv("SMSGW_USERNAME"),
-		password: os.Getenv("SMSGW_PASSWORD"),
-	}
+	var sender smsgw.Gateway = androidsmsgateway.New(
+		os.Getenv("SMSGW_BASEURL"),
+		os.Getenv("SMSGW_USERNAME"),
+		os.Getenv("SMSGW_PASSWORD"),
+	)
 
 	// TODO add days of week
 	// TODO add start time zone and end time zone for whole country (e.g. 9am ET to 8pm PT)
@@ -360,187 +328,6 @@ func safeSetTomorrow(ref time.Time) time.Time {
 	return time.Date(ref.Year(), ref.Month(), 1+ref.Day(), ref.Hour(), ref.Minute(), 0, 0, ref.Location())
 }
 
-// we're not just skipping symbols,
-// we're also eliminating non-printing characters copied from HTML and such
-func cleanPhoneNumber(raw string) string {
-	var cleaned strings.Builder
-	for i, char := range raw {
-		if (i == 0 && char == '+') || (char >= '0' && char <= '9') {
-			cleaned.WriteRune(char)
-		}
-	}
-	return cleaned.String()
-}
-
-func (cfg *MainConfig) validateAndFormatNumber(number string) (string, error) {
-	switch len(number) {
-	case 0:
-		return "", ErrPhoneEmpty
-	case 10:
-		return "+1" + number, nil
-	case 11:
-		if strings.HasPrefix(number, "1") {
-			return "+" + number, nil
-		}
-		return "", fmt.Errorf("%w: %s", ErrPhoneInvalid11, number)
-	case 12:
-		if strings.HasPrefix(number, "+1") {
-			return number, nil
-		}
-		return "", fmt.Errorf("%w: %s", ErrPhoneInvalid12, number)
-	default:
-		return "", fmt.Errorf("%w: %s", ErrPhoneInvalidLength, number)
-	}
-}
-
-func GetFieldIndex(header []string, name string) int {
-	for i, h := range header {
-		if strings.EqualFold(strings.TrimSpace(h), name) {
-			return i
-		}
-	}
-	return -1
-}
-
-type CSVWarn struct {
-	Index   int
-	Code    string
-	Message string
-	Record  []string
-}
-
-func (w CSVWarn) Error() string {
-	return w.Message
-}
-
-var reUnmatchedVars = regexp.MustCompile(`(\{[^}]+\})`)
-
-func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []SMSMessage, warns []CSVWarn, err error) {
-	header, err := csvr.Read()
-	if err != nil {
-		return nil, nil, fmt.Errorf("header could not be parsed: %w", err)
-	}
-
-	FIELD_NAME := GetFieldIndex(header, "Name")
-	FIELD_PHONE := GetFieldIndex(header, "Phone")
-	FIELD_MESSAGE := GetFieldIndex(header, "Message")
-	if FIELD_NAME == -1 || FIELD_PHONE == -1 || FIELD_MESSAGE == -1 {
-		return nil, nil, fmt.Errorf("header is missing one or more of 'Name', 'Phone', and/or 'Message'")
-	}
-	FIELD_MIN := 1 + slices.Max([]int{FIELD_NAME, FIELD_PHONE, FIELD_MESSAGE})
-
-	rowIndex := 1 // 1-index, start at header
-	for {
-		rowIndex++
-		rec, err := csvr.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse row %d (and all following rows): %w", rowIndex, err)
-		}
-
-		if len(rec) < FIELD_MIN {
-			warns = append(warns, CSVWarn{
-				Index:   rowIndex,
-				Code:    "TooFewFields",
-				Message: fmt.Sprintf("ignoring row %d: too few fields (want %d, have %d)", rowIndex, FIELD_MIN, len(rec)),
-				Record:  rec,
-			})
-			continue
-		}
-
-		vars := make(map[string]string)
-		n := min(len(header), len(rec))
-		for i := range n {
-			switch i {
-			case FIELD_NAME, FIELD_PHONE, FIELD_MESSAGE:
-				continue
-			default:
-				key := header[i]
-				val := rec[i]
-				vars[key] = val
-			}
-		}
-
-		message := SMSMessage{
-			Name:     strings.TrimSpace(rec[FIELD_NAME]),
-			Number:   strings.TrimSpace(rec[FIELD_PHONE]),
-			Template: strings.TrimSpace(rec[FIELD_MESSAGE]),
-			Vars:     vars,
-			Text:     strings.TrimSpace(rec[FIELD_MESSAGE]),
-		}
-		message.Text = replaceVar(message.Template, "Name", message.Name)
-
-		keyIter := maps.Keys(message.Vars)
-		keys := slices.Sorted(keyIter)
-		for _, key := range keys {
-			val := message.Vars[key]
-			message.Text = replaceVar(message.Text, key, val)
-		}
-
-		if tmpls := reUnmatchedVars.FindAllString(message.Text, -1); len(tmpls) != 0 {
-			return nil, nil, &CSVWarn{
-				Index: rowIndex,
-				Code:  "UnmatchedVars",
-				Message: fmt.Sprintf(
-					"failing due to row %d (%s): leftover template variable(s): %s",
-					rowIndex, message.Name, strings.Join(tmpls, " "),
-				),
-				Record: rec,
-			}
-		}
-
-		message.Number = cleanPhoneNumber(message.Number)
-		message.Number, err = cfg.validateAndFormatNumber(message.Number)
-		if err != nil {
-			warns = append(warns, CSVWarn{
-				Index:   rowIndex,
-				Code:    "PhoneInvalid",
-				Message: fmt.Sprintf("ignoring row %d (%s): %s", rowIndex, message.Name, err.Error()),
-				Record:  rec,
-			})
-			continue
-		}
-
-		messages = append(messages, message)
-	}
-
-	return messages, warns, nil
-}
-
-func replaceVar(text, key, val string) string {
-	if val != "" {
-		// No special treatment:
-		// "Hey {+Name}," => "Hey Doe,"
-		// "Bob,{Name}" => "Bob,Doe"
-		// "{Name-},Joe" => "Doe,Joe"
-		// "Hi {-Name-}, Joe" => "Hi Doe, Joe"
-		var reHasVar = regexp.MustCompile(fmt.Sprintf(`\{\+?%s-?\}`, regexp.QuoteMeta(key)))
-		return reHasVar.ReplaceAllString(text, val)
-	}
-
-	var metaKey = regexp.QuoteMeta(key)
-
-	// "Hey {+Name}," => "Hey ,"
-	var reEatNone = regexp.MustCompile(fmt.Sprintf(`\{\+%s\}`, metaKey))
-	text = reEatNone.ReplaceAllString(text, val)
-
-	// "Bob,{Name};" => "Bob;"
-	var reEatOneLeft = regexp.MustCompile(fmt.Sprintf(`.?\{%s\}`, metaKey))
-	text = reEatOneLeft.ReplaceAllString(text, val)
-
-	// ",{Name-};Joe" => ",Joe"
-	var reEatOneRight = regexp.MustCompile(fmt.Sprintf(`\{%s-\}.?`, metaKey))
-	text = reEatOneRight.ReplaceAllString(text, val)
-
-	// "Hi {-Name-}, Joe" => "Hi Joe"
-	var reEatOneBoth = regexp.MustCompile(fmt.Sprintf(`.?\{-%s-\}.?`, metaKey))
-	text = reEatOneBoth.ReplaceAllString(text, val)
-
-	return text
-}
-
 // parseClock parses "10am", "10:00", "22:30", etc. into today's date + that time
 func parseClock(s string, ref time.Time) (t time.Time, err error) {
 	// "10:05 AM" => "10:05am"
@@ -578,7 +365,7 @@ func parseClock(s string, ref time.Time) (t time.Time, err error) {
 		if len(minStr) > 0 {
 			min, err = strconv.Atoi(minStr)
 			if err != nil {
-				return t, ErrInvalidClockFormat
+				return t, smsgw.ErrInvalidClockFormat
 			}
 		}
 		fallthrough
@@ -588,15 +375,15 @@ func parseClock(s string, ref time.Time) (t time.Time, err error) {
 		if len(hourStr) > 0 {
 			hour, err = strconv.Atoi(hourStr)
 			if err != nil {
-				return t, ErrInvalidClockFormat
+				return t, smsgw.ErrInvalidClockFormat
 			}
 		}
 	default:
-		return t, ErrInvalidClockFormat
+		return t, smsgw.ErrInvalidClockFormat
 	}
 
 	if hour < 0 || hour > 23 || min < 0 || min > 59 {
-		return t, ErrInvalidClockTime
+		return t, smsgw.ErrInvalidClockTime
 	}
 
 	switch ampm {
