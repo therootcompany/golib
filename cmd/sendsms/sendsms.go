@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
@@ -42,6 +43,10 @@ type Payload struct {
 
 var ErrInvalidClockFormat = fmt.Errorf("invalid clock time, ex: '06:00 PM', '6pm', or '18:00' (space and case insensitive)")
 var ErrInvalidClockTime = fmt.Errorf("invalid hour or minute, for example '27:63 p' would not be valid")
+var ErrPhoneEmpty = fmt.Errorf("no phone number")
+var ErrPhoneInvalid11 = fmt.Errorf("invalid 11-digit number (does not start with 1)")
+var ErrPhoneInvalid12 = fmt.Errorf("invalid 12-digit number (does not start with +1)")
+var ErrPhoneInvalidLength = fmt.Errorf("invalid number length (should be 10 digits or 12 with +1 prefix)")
 
 type MainConfig struct {
 	csvPath     string
@@ -49,6 +54,7 @@ type MainConfig struct {
 	shuffle     bool
 	startClock  string
 	startTime   time.Time
+	runTime     time.Time
 	endClock    string
 	endTime     time.Time
 	maxDuration time.Duration
@@ -57,7 +63,19 @@ type MainConfig struct {
 	maxDelay    time.Duration
 	delay       time.Duration
 	verbose     bool
+	confirmed   bool
 }
+
+const (
+	textReset  = "\033[0m"
+	textBold   = "\033[1m"
+	fgYellow   = "\033[33m"
+	fgBlue     = "\033[34m"
+	fgRed      = "\033[31m"
+	textErr    = textBold + fgRed
+	textWarn   = textBold + fgYellow
+	textPrompt = fgBlue
+)
 
 func main() {
 	var err error
@@ -77,6 +95,8 @@ func main() {
 	now := time.Now()
 	zoneName, offset := now.Zone()
 
+	flag.BoolVar(&cfg.confirmed, "y", false, "Confirm without prompting")
+	flag.BoolVar(&cfg.verbose, "verbose", false, "Show parse warnings and other debug info")
 	flag.BoolVar(&cfg.dryRun, "dry-run", false, "Print curl commands instead of sending messages")
 	flag.StringVar(&cfg.csvPath, "csv", "./messages.csv", "Path to file with newline-delimited phone numbers")
 	flag.BoolVar(&cfg.shuffle, "shuffle", false, "Randomize the list")
@@ -86,26 +106,24 @@ func main() {
 	flag.DurationVar(&cfg.minDelay, "min-delay", 0, "don't send messages closer together on average than this (e.g. 10s, 2m) (Default: 20s)")
 	flag.Parse()
 
-	fmt.Fprintf(os.Stderr, "Current time zone: %s, Offset: %.2fh\n", zoneName, float64(offset)/3600)
+	fmt.Fprintf(os.Stderr, "Info: Time zone: %s, Offset: %.2fh\n", zoneName, float64(offset)/3600)
 	// os.Exit(1)
 
 	// now, startTime, and endTime checks
 	{
 		cfg.startTime, err = parseClock(cfg.startClock, now)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: could not use --start-time %q: %v\n", cfg.startClock, err)
+			fmt.Fprintf(os.Stderr, "%sError%s: could not use --start-time %q: %v\n", textErr, textReset, cfg.startClock, err)
 			os.Exit(1)
 		}
 		cfg.endTime, err = parseClock(cfg.endClock, now)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: could not use --end-time %q: %v\n", cfg.endClock, err)
+			fmt.Fprintf(os.Stderr, "%sError%s: could not use --end-time %q: %v\n", textErr, textReset, cfg.endClock, err)
 			os.Exit(1)
 		}
 		if cfg.startTime.After(cfg.endTime) || cfg.startTime.Equal(cfg.endTime) {
 			fmt.Fprintf(os.Stderr,
-				"Error: no time between --start-time %q and --end-time %q\n",
-				cfg.startTime, cfg.endTime,
-			)
+				"%sError%s: no time between --start-time %q and --end-time %q\n", textErr, textReset, cfg.startTime, cfg.endTime)
 			os.Exit(1)
 		}
 	}
@@ -117,9 +135,10 @@ func main() {
 		cfg.maxDelay = cfg.minDelay
 	}
 
+	fmt.Fprintf(os.Stderr, "Info: opening, reading, and parsing %q\n", cfg.csvPath)
 	file, err := os.Open(cfg.csvPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %q could not be read\n", cfg.csvPath)
+		fmt.Fprintf(os.Stderr, "%sError%s: %v\n", textErr, textReset, err)
 		os.Exit(1)
 	}
 	defer func() {
@@ -127,15 +146,30 @@ func main() {
 	}()
 	csvr := csv.NewReader(file)
 	csvr.FieldsPerRecord = -1
-	messages, err := cfg.LaxParseCSV(csvr, cfg.csvPath)
+
+	messages, warns, err := cfg.LaxParseCSV(csvr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "\nInfo: parsed %q\n\n", cfg.csvPath)
+	if len(warns) > 0 {
+		fmt.Fprintf(os.Stderr, "\n")
+		fmt.Fprintf(os.Stderr, "%sWarning%s: skipped %d rows with too few fields, invalid or missing numbers, etc\n", textWarn, textReset, len(warns))
+		if !cfg.verbose {
+			fmt.Fprintf(os.Stderr, "         (pass --verbose to show warnings)\n")
+		}
+		if cfg.verbose {
+			fmt.Fprintf(os.Stderr, "\n")
+			for _, warn := range warns {
+				fmt.Fprintf(os.Stderr, "Skip: %s\n", warn.Message)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+	}
+	fmt.Fprintf(os.Stderr, "Info: messages to send: %d\n", len(messages))
 
 	if now.After(cfg.endTime) || now.Equal(cfg.endTime) {
-		fmt.Fprintf(os.Stderr, "Too late now. Waiting until tomorrow:\n")
+		fmt.Fprintf(os.Stderr, "%sWarning%s: Too late now. %sWaiting until tomorrow%s:\n", textWarn, textReset, textWarn, textReset)
 
 		cfg.startTime = safeSetTomorrow(cfg.startTime)
 		cfg.endTime = safeSetTomorrow(cfg.endTime)
@@ -143,45 +177,62 @@ func main() {
 		// check for issues caused by daylight savings
 		if cfg.startTime.After(cfg.endTime) || cfg.startTime.Equal(cfg.endTime) {
 			fmt.Fprintf(os.Stderr,
-				"Error: no time between --start-time %q and --end-time %q\n",
+				"%sError%s: no time between --start-time %q and --end-time %q\n",
+				textErr, textReset,
 				cfg.startTime, cfg.endTime,
 			)
 			os.Exit(1)
 		}
 
-		fmt.Fprintf(os.Stderr, "\t%s\n", cfg.startTime)
-	} else {
-		cfg.startTime = now
+		fmt.Fprintf(os.Stderr, "         %s\n\n", cfg.startTime)
+	}
+	if now.Before(cfg.startTime) {
+		fmt.Fprintf(os.Stderr, "\n%sWarning%s: It's too early now. %sWaiting until %s.%s\n\n", textWarn, textReset, textWarn, cfg.startTime.Format("3:04pm"), textReset)
 	}
 
+	cfg.runTime = now
+	if cfg.startTime.After(now) {
+		cfg.runTime = cfg.startTime
+	}
+
+	// duration
 	{
-		// duration, delay
-		cfg.duration = cfg.endTime.Sub(cfg.startTime)
+		cfg.duration = cfg.endTime.Sub(cfg.runTime)
 		if cfg.maxDuration != 0 {
 			if cfg.maxDuration < cfg.duration {
 				cfg.duration = cfg.maxDuration
 			}
 		}
+		var startAgo = now.Sub(cfg.startTime)
+		if startAgo >= 0 {
+			fmt.Fprintf(os.Stderr, "Info: start time was %s (%s ago)\n", cfg.startTime.Format("3:04pm"), startAgo.Round(time.Second))
+		} else {
+			startAgo *= -1
+			fmt.Fprintf(os.Stderr, "Info: start time is %s (%s from now)\n", cfg.startTime.Format("3:04pm"), startAgo.Round(time.Second))
+		}
+		fmt.Fprintf(os.Stderr, "Info: end time is %s (%s from now)\n", cfg.endTime.Format("3:04pm"), cfg.duration.Round(time.Second))
+	}
+
+	// delay
+	{
 		n := len(messages)
 		// add a small buffer so we complete in the time, even with randomness
 		n += 2
 		cfg.delay = cfg.duration / time.Duration(n)
 		if cfg.delay < cfg.minDelay {
-			fmt.Fprintf(os.Stderr, "Warn: cannot send all %d messages in %s (would require 1 message every %s)\n", len(messages), cfg.duration, cfg.delay)
-			fmt.Fprintf(os.Stderr, "      (we'll just send what we can for now, 1 every %s)\n", cfg.minDelay)
+			fmt.Fprintf(os.Stderr, "\n")
+			fmt.Fprintf(os.Stderr, "%sWarning%s: cannot send all %d messages in %s (would require 1 message every %s)\n", textWarn, textReset, len(messages), cfg.duration.Round(time.Second), cfg.delay.Round(time.Millisecond))
+			fmt.Fprintf(os.Stderr, "         (we'll just %ssend what we can%s for now, 1 every %s)\n", textWarn, textReset, cfg.minDelay)
+			fmt.Fprintf(os.Stderr, "\n")
 			cfg.delay = cfg.minDelay
 		}
 		if cfg.delay > cfg.maxDelay {
 			cfg.delay = cfg.maxDelay
 		}
+
 		// add a small buffer to allow for a final message, with randomness
 		cfg.duration = cfg.duration + cfg.delay + cfg.delay
-		fmt.Fprintf(os.Stderr, "Info: sending for the next %s\n", cfg.duration.Round(time.Second))
 	}
-
-	// if there was a delay
-	diff := cfg.startTime.Sub(now)
-	time.Sleep(diff)
 
 	r := rand.New(rand.NewSource(37))
 	if cfg.shuffle {
@@ -190,17 +241,30 @@ func main() {
 		})
 	}
 
-	fmt.Fprintf(os.Stderr,
-		"Info: sending %d messages, roughly 1 every %s\n",
-		len(messages), cfg.delay.Round(time.Second),
-	)
+	fmt.Fprintf(os.Stderr, "Info: average delay between messages: %s\n", cfg.delay.Round(time.Second))
 	quarterDelay := cfg.delay / 4
 	baseDelay := quarterDelay * 3
 	jitter := int64(quarterDelay * 2)
 	fmt.Fprintf(os.Stderr,
-		"      (%s + %s jitter)\n",
+		"      (%s minimum + %s jitter)\n",
 		baseDelay.Round(time.Millisecond), time.Duration(jitter).Round(time.Millisecond),
 	)
+	if !cfg.confirmed {
+		fmt.Fprintf(os.Stderr, "\n")
+		if !confirmContinue() {
+			fmt.Fprintf(os.Stderr, "%scanceled%s\n", textErr, textReset)
+			os.Exit(1)
+			return
+		}
+	}
+
+	// if there was a delay
+	diff := cfg.startTime.Sub(now)
+	if diff > 0 {
+		fmt.Fprintf(os.Stderr, "\n%sWarning%s: It's too early now. %sWaiting until %s.%s\n", textWarn, textReset, textWarn, cfg.startTime.Format("3:04pm"), textReset)
+		time.Sleep(diff)
+		fmt.Fprintf(os.Stderr, "\n")
+	}
 
 	deadline := now.Add(cfg.duration)
 	if cfg.dryRun {
@@ -213,7 +277,8 @@ func main() {
 			last := len(messages)
 			left := last - cur
 			if left > 0 {
-				fmt.Printf("Oh, look at the time. Ending now. (%d messages remaining)\n", left)
+				fmt.Fprintf(os.Stderr, "%sError%s: Oh, look at the time. Ending now. (%d messages remaining)\n", textErr, textReset, left)
+				os.Exit(1)
 				return
 			}
 		}
@@ -238,6 +303,31 @@ func main() {
 		}
 		sender.sendMessage(message.PhoneNumber, text)
 	}
+
+	fmt.Fprintf(os.Stderr, "finished at %s", time.Now())
+}
+
+func confirmContinue() bool {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Printf(textPrompt + "Continue? [y/N] " + textReset)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return false // EOF or error → treat as no
+		}
+
+		input = strings.TrimSpace(strings.ToLower(input))
+
+		switch input {
+		case "y", "yes":
+			return true
+		case "", "n", "no":
+			return false
+		default:
+			fmt.Fprintf(os.Stderr, "%sError%s: please answer y or n", textErr, textReset)
+			// loop again
+		}
+	}
 }
 
 // set by day rather than time to account for daylight savings
@@ -245,6 +335,8 @@ func safeSetTomorrow(ref time.Time) time.Time {
 	return time.Date(ref.Year(), ref.Month(), 1+ref.Day(), ref.Hour(), ref.Minute(), 0, 0, ref.Location())
 }
 
+// we're not just skipping symbols,
+// we're also eliminating non-printing characters copied from HTML and such
 func cleanPhoneNumber(raw string) string {
 	var cleaned strings.Builder
 	for i, char := range raw {
@@ -255,31 +347,24 @@ func cleanPhoneNumber(raw string) string {
 	return cleaned.String()
 }
 
-func (cfg *MainConfig) validateAndFormatNumber(number string) string {
+func (cfg *MainConfig) validateAndFormatNumber(number string) (string, error) {
 	switch len(number) {
+	case 0:
+		return "", ErrPhoneEmpty
 	case 10:
-		return "+1" + number
+		return "+1" + number, nil
 	case 11:
 		if strings.HasPrefix(number, "1") {
-			return "+" + number
+			return "+" + number, nil
 		}
-		if cfg.verbose {
-			fmt.Fprintf(os.Stderr, "Warn: invalid 11-digit number '%s'\n", number)
-		}
-		return ""
+		return "", fmt.Errorf("%w: %s", ErrPhoneInvalid11, number)
 	case 12:
 		if strings.HasPrefix(number, "+1") {
-			return number
+			return number, nil
 		}
-		if cfg.verbose {
-			fmt.Fprintf(os.Stderr, "Warn: invalid 12-digit number '%s' does not start with +1\n", number)
-		}
-		return ""
+		return "", fmt.Errorf("%w: %s", ErrPhoneInvalid12, number)
 	default:
-		if cfg.verbose {
-			fmt.Fprintf(os.Stderr, "Warn: invalid number length for '%s'\n", number)
-		}
-		return ""
+		return "", fmt.Errorf("%w: %s", ErrPhoneInvalidLength, number)
 	}
 }
 
@@ -327,7 +412,7 @@ func (s *SMSSender) sendMessage(number, message string) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Printf("error: failed to send message to '%s': %v\n", number, err)
+		fmt.Printf("%sError%s: failed to send message to '%s': %v\n", textErr, textReset, number, err)
 		return
 	}
 	defer func() {
@@ -336,7 +421,9 @@ func (s *SMSSender) sendMessage(number, message string) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		fmt.Printf("error: failed to send message to '%s': %d %s\n", number, resp.StatusCode, string(body))
+		fmt.Printf("%sError%s: failed to send message to '%s': %d %s\n",
+			textErr, textReset, number, resp.StatusCode, string(body),
+		)
 	}
 }
 
@@ -349,21 +436,27 @@ func GetFieldIndex(header []string, name string) int {
 	return -1
 }
 
-func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader, csvFile string) ([]SMSMessage, error) {
+type CSVWarn struct {
+	Index   int
+	Code    string
+	Message string
+	Record  []string
+}
+
+func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []SMSMessage, warns []CSVWarn, err error) {
 	header, err := csvr.Read()
 	if err != nil {
-		return nil, fmt.Errorf("error: %q header could not be parsed: %w", csvFile, err)
+		return nil, nil, fmt.Errorf("header could not be parsed: %w", err)
 	}
 
 	FIELD_NICK := GetFieldIndex(header, "Preferred")
 	FIELD_PHONE := GetFieldIndex(header, "Phone")
 	FIELD_MESSAGE := GetFieldIndex(header, "Message")
 	if FIELD_NICK == -1 || FIELD_PHONE == -1 || FIELD_MESSAGE == -1 {
-		return nil, fmt.Errorf("error: %q is missing one or more of 'Preferred', 'Phone', and/or 'Message'", csvFile)
+		return nil, nil, fmt.Errorf("header is missing one or more of 'Preferred', 'Phone', and/or 'Message'")
 	}
 	FIELD_MIN := 1 + slices.Max([]int{FIELD_NICK, FIELD_PHONE, FIELD_MESSAGE})
 
-	var messages []SMSMessage
 	rowIndex := 1 // 1-index, start at header
 	for {
 		rowIndex++
@@ -372,13 +465,16 @@ func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader, csvFile string) ([]SMSMessa
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("error parsing %q row %d: %w", csvFile, rowIndex, err)
+			return nil, nil, fmt.Errorf("failed to parse row %d (and all following rows): %w", rowIndex, err)
 		}
 
 		if len(rec) < FIELD_MIN {
-			if cfg.verbose {
-				fmt.Fprintf(os.Stderr, "Warn: skipping row %d (too few fields): %s\n", rowIndex, strings.Join(rec, ","))
-			}
+			warns = append(warns, CSVWarn{
+				Index:   rowIndex,
+				Code:    "TooFewFields",
+				Message: fmt.Sprintf("ignoring row %d: too few fields (want %d, have %d)", rowIndex, FIELD_MIN, len(rec)),
+				Record:  rec,
+			})
 			continue
 		}
 
@@ -389,18 +485,21 @@ func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader, csvFile string) ([]SMSMessa
 		}
 
 		message.PhoneNumber = cleanPhoneNumber(message.PhoneNumber)
-		message.PhoneNumber = cfg.validateAndFormatNumber(message.PhoneNumber)
-		if message.PhoneNumber == "" {
-			if cfg.verbose {
-				fmt.Fprintf(os.Stderr, "Warn: skipping row %d (no phone number): %s\n", rowIndex, strings.Join(rec, ","))
-			}
+		message.PhoneNumber, err = cfg.validateAndFormatNumber(message.PhoneNumber)
+		if err != nil {
+			warns = append(warns, CSVWarn{
+				Index:   rowIndex,
+				Code:    "PhoneInvalid",
+				Message: fmt.Sprintf("ignoring row %d (%s): %s", rowIndex, message.FirstName, err.Error()),
+				Record:  rec,
+			})
 			continue
 		}
 
 		messages = append(messages, message)
 	}
 
-	return messages, nil
+	return messages, warns, nil
 }
 
 // parseClock parses "10am", "10:00", "22:30", etc. into today's date + that time
