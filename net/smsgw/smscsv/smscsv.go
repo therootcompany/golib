@@ -5,6 +5,8 @@ import (
 	"io"
 	"slices"
 	"strings"
+
+	"github.com/therootcompany/golib/net/smsgw"
 )
 
 type Reader interface {
@@ -27,11 +29,27 @@ type Message struct {
 	header   []string
 	indices  map[string]int
 	fields   []string
-	Name     string
+	name     string
 	Number   string
-	Template string
+	template string
 	Vars     map[string]string
-	Text     string
+	text     string
+}
+
+func (m Message) Name() string {
+	return m.name
+}
+
+func (m Message) Template() string {
+	return m.template
+}
+
+func (m Message) Text() string {
+	return m.text
+}
+
+func (m *Message) SetText(text string) {
+	m.text = text
 }
 
 func (m Message) Size() int {
@@ -104,10 +122,22 @@ func ReadOrIgnoreAll(csvr Reader) (messages []Message, warns []CSVWarn, err erro
 
 		message := Message{
 			// Index:    rowIndex,
-			Name:     strings.TrimSpace(rec[FIELD_NAME]),
+			name:     strings.TrimSpace(rec[FIELD_NAME]),
 			Number:   strings.TrimSpace(rec[FIELD_PHONE]),
-			Template: strings.TrimSpace(rec[FIELD_MESSAGE]),
+			template: strings.TrimSpace(rec[FIELD_MESSAGE]),
 			Vars:     vars,
+		}
+
+		message.Number = smsgw.StripFormatting(message.Number)
+		message.Number, err = smsgw.PrefixUS10Digit(message.Number)
+		if err != nil {
+			warns = append(warns, CSVWarn{
+				Index:   rowIndex,
+				Code:    "PhoneInvalid",
+				Message: fmt.Sprintf("ignoring row %d (%s): %s", rowIndex, message.Name(), err.Error()),
+				// Record:  rec,
+			})
+			continue
 		}
 
 		messages = append(messages, message)
