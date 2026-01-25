@@ -2,15 +2,14 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/csv"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand"
-	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,16 +18,17 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type SMSSender struct {
-	baseURL  string
-	user     string
-	password string
+type SMSSender interface {
+	CurlString(to, text string) string
+	Send(to, text string) error
 }
 
 type SMSMessage struct {
-	FirstName       string
-	PhoneNumber     string
-	MessageTemplate string
+	Name     string
+	Number   string
+	Template string
+	Vars     map[string]string
+	Text     string
 }
 
 type TextMessage struct {
@@ -84,9 +84,11 @@ func main() {
 	}
 
 	_ = godotenv.Load("./.env")
-	sender := &SMSSender{
+
+	// note: we could also use twilio, or whatever
+	var sender SMSSender = &SMSGatewayForAndroid{
 		baseURL:  os.Getenv("SMSGW_BASEURL"),
-		user:     os.Getenv("SMSGW_USER"),
+		username: os.Getenv("SMSGW_USERNAME"),
 		password: os.Getenv("SMSGW_PASSWORD"),
 	}
 
@@ -154,7 +156,7 @@ func main() {
 	}
 	if len(warns) > 0 {
 		fmt.Fprintf(os.Stderr, "\n")
-		fmt.Fprintf(os.Stderr, "%sWarning%s: skipped %d rows with too few fields, invalid or missing numbers, etc\n", textWarn, textReset, len(warns))
+		fmt.Fprintf(os.Stderr, "%sWarning%s: skipped %d rows with too few fields, invalid numbers, bad templates, etc\n", textWarn, textReset, len(warns))
 		if !cfg.verbose {
 			fmt.Fprintf(os.Stderr, "         (pass --verbose to show warnings)\n")
 		}
@@ -249,7 +251,14 @@ func main() {
 		"      (%s minimum + %s jitter)\n",
 		baseDelay.Round(time.Millisecond), time.Duration(jitter).Round(time.Millisecond),
 	)
-	if !cfg.confirmed {
+
+	if len(messages) == 0 {
+		fmt.Fprintf(os.Stderr, "\n")
+		fmt.Fprintf(os.Stderr, "%sError%s: no messages to send\n", textErr, textReset)
+		os.Exit(1)
+	}
+
+	if !cfg.confirmed && !cfg.dryRun {
 		fmt.Fprintf(os.Stderr, "\n")
 		if !confirmContinue() {
 			fmt.Fprintf(os.Stderr, "%scanceled%s\n", textErr, textReset)
@@ -267,9 +276,6 @@ func main() {
 	}
 
 	deadline := now.Add(cfg.duration)
-	if cfg.dryRun {
-		os.Exit(0)
-	}
 	for i, message := range messages {
 		now := time.Now()
 		if now.After(deadline) {
@@ -295,13 +301,18 @@ func main() {
 			time.Sleep(delay)
 		}
 
-		fmt.Fprintf(os.Stderr, "# Send to %s (%s) %s-%s\n", message.PhoneNumber[:2], message.PhoneNumber[2:5], message.PhoneNumber[5:8], message.PhoneNumber[8:])
-		text := strings.ReplaceAll(message.MessageTemplate, "{First}", message.FirstName)
+		fmt.Fprintf(os.Stderr, "# Send to %s (%s) %s-%s\n", message.Number[:2], message.Number[2:5], message.Number[5:8], message.Number[8:])
 		if cfg.dryRun {
-			sender.printDryRun(message.PhoneNumber, text)
+			fmt.Println(message.Text)
+			// curl := sender.CurlString(message.Number, message.Text)
+			// fmt.Println(curl)
 			continue
 		}
-		sender.sendMessage(message.PhoneNumber, text)
+
+		if err := sender.Send(message.Number, message.Text); err != nil {
+			fmt.Fprintf(os.Stderr, "%sError%s: %v\n", textErr, textReset, err)
+			continue
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "finished at %s", time.Now())
@@ -368,65 +379,6 @@ func (cfg *MainConfig) validateAndFormatNumber(number string) (string, error) {
 	}
 }
 
-func (s *SMSSender) printDryRun(number, message string) {
-	url := s.baseURL + "/messages"
-	payload := Payload{
-		TextMessage:  TextMessage{Text: message},
-		PhoneNumbers: []string{number},
-		Priority:     65,
-	}
-	body := bytes.NewBuffer(nil)
-	encoder := json.NewEncoder(body)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(payload)
-
-	escapedBody := strings.ReplaceAll(body.String(), "'", "'\\''")
-
-	fmt.Printf("curl --fail-with-body --user '%s:%s' -X POST '%s' \\\n", s.user, s.password, url)
-	fmt.Printf("   -H 'Content-Type: application/json' \\\n")
-	fmt.Printf("   --data-binary '%s'\n", escapedBody)
-}
-
-func (s *SMSSender) sendMessage(number, message string) {
-	number = cleanPhoneNumber(number)
-	if len(number) == 0 {
-		panic(fmt.Errorf("non-sanitized number '%s'", number))
-	}
-
-	url := s.baseURL + "/messages"
-	payload := Payload{
-		TextMessage:  TextMessage{Text: message},
-		PhoneNumbers: []string{number},
-		Priority:     65,
-	}
-
-	body := bytes.NewBuffer(nil)
-	encoder := json.NewEncoder(body)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(payload)
-
-	req, _ := http.NewRequest("POST", url, body)
-	req.SetBasicAuth(s.user, s.password)
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Printf("%sError%s: failed to send message to '%s': %v\n", textErr, textReset, number, err)
-		return
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Printf("%sError%s: failed to send message to '%s': %d %s\n",
-			textErr, textReset, number, resp.StatusCode, string(body),
-		)
-	}
-}
-
 func GetFieldIndex(header []string, name string) int {
 	for i, h := range header {
 		if strings.EqualFold(strings.TrimSpace(h), name) {
@@ -443,19 +395,21 @@ type CSVWarn struct {
 	Record  []string
 }
 
+var reUnmatchedVars = regexp.MustCompile(`\{[^}]+\}`)
+
 func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []SMSMessage, warns []CSVWarn, err error) {
 	header, err := csvr.Read()
 	if err != nil {
 		return nil, nil, fmt.Errorf("header could not be parsed: %w", err)
 	}
 
-	FIELD_NICK := GetFieldIndex(header, "Preferred")
+	FIELD_NAME := GetFieldIndex(header, "Name")
 	FIELD_PHONE := GetFieldIndex(header, "Phone")
 	FIELD_MESSAGE := GetFieldIndex(header, "Message")
-	if FIELD_NICK == -1 || FIELD_PHONE == -1 || FIELD_MESSAGE == -1 {
+	if FIELD_NAME == -1 || FIELD_PHONE == -1 || FIELD_MESSAGE == -1 {
 		return nil, nil, fmt.Errorf("header is missing one or more of 'Preferred', 'Phone', and/or 'Message'")
 	}
-	FIELD_MIN := 1 + slices.Max([]int{FIELD_NICK, FIELD_PHONE, FIELD_MESSAGE})
+	FIELD_MIN := 1 + slices.Max([]int{FIELD_NAME, FIELD_PHONE, FIELD_MESSAGE})
 
 	rowIndex := 1 // 1-index, start at header
 	for {
@@ -478,19 +432,51 @@ func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []SMSMessage, war
 			continue
 		}
 
-		message := SMSMessage{
-			FirstName:       strings.TrimSpace(rec[FIELD_NICK]),
-			PhoneNumber:     strings.TrimSpace(rec[FIELD_PHONE]),
-			MessageTemplate: strings.TrimSpace(rec[FIELD_MESSAGE]),
+		vars := make(map[string]string)
+		n := min(len(header), len(rec))
+		for i := range n {
+			switch i {
+			case FIELD_NAME, FIELD_PHONE, FIELD_MESSAGE:
+				continue
+			default:
+				key := header[i]
+				val := rec[i]
+				vars[key] = val
+			}
 		}
 
-		message.PhoneNumber = cleanPhoneNumber(message.PhoneNumber)
-		message.PhoneNumber, err = cfg.validateAndFormatNumber(message.PhoneNumber)
+		message := SMSMessage{
+			Name:     strings.TrimSpace(rec[FIELD_NAME]),
+			Number:   strings.TrimSpace(rec[FIELD_PHONE]),
+			Template: strings.TrimSpace(rec[FIELD_MESSAGE]),
+			Vars:     vars,
+			Text:     strings.TrimSpace(rec[FIELD_MESSAGE]),
+		}
+
+		keyIter := maps.Keys(message.Vars)
+		keys := slices.Sorted(keyIter)
+		for _, key := range keys {
+			val := message.Vars[key]
+			message.Text = replaceVar(message.Text, key, val)
+		}
+
+		if reUnmatchedVars.MatchString(message.Text) {
+			warns = append(warns, CSVWarn{
+				Index:   rowIndex,
+				Code:    "UnmatchedVars",
+				Message: fmt.Sprintf("ignoring row %d: leftover template variables (e.g. {VarName})", rowIndex),
+				Record:  rec,
+			})
+			continue
+		}
+
+		message.Number = cleanPhoneNumber(message.Number)
+		message.Number, err = cfg.validateAndFormatNumber(message.Number)
 		if err != nil {
 			warns = append(warns, CSVWarn{
 				Index:   rowIndex,
 				Code:    "PhoneInvalid",
-				Message: fmt.Sprintf("ignoring row %d (%s): %s", rowIndex, message.FirstName, err.Error()),
+				Message: fmt.Sprintf("ignoring row %d (%s): %s", rowIndex, message.Name, err.Error()),
 				Record:  rec,
 			})
 			continue
@@ -500,6 +486,38 @@ func (cfg *MainConfig) LaxParseCSV(csvr *csv.Reader) (messages []SMSMessage, war
 	}
 
 	return messages, warns, nil
+}
+
+func replaceVar(text, key, val string) string {
+	if val != "" {
+		// No special treatment:
+		// "Hey {+Name}," => "Hey Doe,"
+		// "Bob,{Name}" => "Bob,Doe"
+		// "{Name-},Joe" => "Doe,Joe"
+		// "Hi {-Name-}, Joe" => "Hi Doe, Joe"
+		var reHasVar = regexp.MustCompile(fmt.Sprintf(`\{\+?%s-?\}`, regexp.QuoteMeta(key)))
+		return reHasVar.ReplaceAllString(text, val)
+	}
+
+	var metaKey = regexp.QuoteMeta(key)
+
+	// "Hey {+Name}," => "Hey ,"
+	var reEatNone = regexp.MustCompile(fmt.Sprintf(`\{\+%s\}`, metaKey))
+	text = reEatNone.ReplaceAllString(text, val)
+
+	// "Bob,{Name};" => "Bob;"
+	var reEatOneLeft = regexp.MustCompile(fmt.Sprintf(`.?\{%s\}`, metaKey))
+	text = reEatOneLeft.ReplaceAllString(text, val)
+
+	// ",{Name-};Joe" => ",Joe"
+	var reEatOneRight = regexp.MustCompile(fmt.Sprintf(`\{%s-\}.?`, metaKey))
+	text = reEatOneRight.ReplaceAllString(text, val)
+
+	// "Hi {-Name-}, Joe" => "Hi Joe"
+	var reEatOneBoth = regexp.MustCompile(fmt.Sprintf(`.?\{-%s-\}.?`, metaKey))
+	text = reEatOneBoth.ReplaceAllString(text, val)
+
+	return text
 }
 
 // parseClock parses "10am", "10:00", "22:30", etc. into today's date + that time
