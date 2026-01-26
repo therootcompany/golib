@@ -8,8 +8,8 @@ A simple zero-cost middleware handler for Go's native `net/http` `ServeMux`. \
 Turns tedious this:
 
 ```go
-mux.HandleFunc("GET /api/version", logRequests(timeRequests(getVersion)))
-mux.HandleFunc("GET /api/data", logRequests(timeRequests(requireAuth(requireAdmin(getData)))))
+mux.Handle("GET /api/version", logRequests(timeRequests(http.HandlerFunc(getVersion))))
+mux.Handle("GET /api/data", logRequests(timeRequests(requireAuth(requireAdmin(http.HandlerFunc(getData))))))
 ```
 
 Into organizable this:
@@ -25,7 +25,7 @@ authMW.HandleFunc("GET /api/data", getData)
 Using stdlib this:
 
 ```go
-type Middleware func(http.HandlerFunc) http.HandlerFunc
+type Middleware func(http.Handler) http.Handler
 ```
 
 **Zero-cost** because each invocation of `mv.Handle(handler)` composes the function calls _exactly_ the same way as when done manually. \
@@ -49,12 +49,12 @@ import (
 func main() {
    mux := http.NewServeMux()
 
-   mw := middleware.New(logRequests, basicAuth)
-   mux.HandleFunc("GET /api/data", mw.Handle(getData))
-   mux.HandleFunc("POST /api/data", mw.Handle(postData))
+   mw := middleware.WithMux(mux, recoverPanics, logRequests, basicAuth)
+   mux.HandleFunc("GET /api/data", getData)
+   mux.HandleFunc("POST /api/data", postData)
 
    adminMW := mw.Use(requireAdmin)
-   mux.HandleFunc("DELETE /api/data", adminMW.Handle(deleteData))
+   adminMW.HandleFunc("DELETE /api/data", deleteData)
 
    http.ListenAndServe(":8080", mux)
 }
@@ -62,16 +62,37 @@ func main() {
 
 ### Example Middleware
 
-Middleware is any function that wraps and returns the built-in `http.HandlerFunc` handler type.
+Middleware is any function that wraps and returns the built-in `http.Handler` handler type.
 
 ```go
-type Middleware func(http.HandlerFunc) http.HandlerFunc
+type Middleware func(http.Handler) http.Handler
+```
+
+#### Example: Panic handler
+
+```go
+func recoverPanics(next http.Handler) http.Handler {
+    return func(w http.ResponseWriter, r *http.Request) {
+        defer func() {
+            if _err := recover(); _err != nil {
+                err, ok := _err.(error)
+                if !ok {
+                    err = fmt.Errorf("%v", _err)
+                }
+                api.InternalError(w, r, err)
+                return
+            }
+        }()
+
+        next.ServeHTTP(w, r)
+    }
+}
 ```
 
 #### Example: Request logger
 
 ```go
-func logRequests(next http.HandlerFunc) http.HandlerFunc {
+func logRequests(next http.Handler) http.Handler {
    return func(w http.ResponseWriter, r *http.Request) {
 
       start := time.Now()
@@ -91,7 +112,7 @@ var creds = envauth.BasicCredentials{
    Password: os.Getenv("BASIC_AUTH_PASSWORD"),
 }
 
-func basicAuth(next http.HandlerFunc) http.HandlerFunc {
+func basicAuth(next http.Handler) http.Handler {
    return func(w http.ResponseWriter, r *http.Request) {
 
       user, pass, _ := r.BasicAuth()
@@ -108,7 +129,7 @@ func basicAuth(next http.HandlerFunc) http.HandlerFunc {
 #### Example: Admin role checker
 
 ```go
-func requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+func requireAdmin(next http.Handler) http.Handler {
    return func(w http.ResponseWriter, r *http.Request) {
 
       // Assume JWT in context with roles
