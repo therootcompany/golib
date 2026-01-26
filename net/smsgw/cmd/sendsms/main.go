@@ -15,7 +15,7 @@ import (
 	"github.com/therootcompany/golib/net/smsgw"
 	"github.com/therootcompany/golib/net/smsgw/androidsmsgateway"
 	"github.com/therootcompany/golib/net/smsgw/smscsv"
-	"github.com/therootcompany/golib/net/smsgw/smstmpl"
+	"github.com/therootcompany/golib/text/textvars"
 )
 
 type MainConfig struct {
@@ -124,7 +124,7 @@ func main() {
 	csvr := csv.NewReader(file)
 	csvr.FieldsPerRecord = -1
 
-	messages, warns, err := smscsv.ReadOrIgnoreAll(csvr)
+	messages, warns, err := smscsv.ReadOrIgnoreAll(csvr, "Name")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\n%sError%s: %v\n", textErr, textReset, err)
 		os.Exit(1)
@@ -144,10 +144,19 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "Info: list of %d messages\n", len(messages))
 
-	messages, err = smstmpl.RenderAll(messages)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "\n%sError%s: %v\n", textErr, textReset, err)
-		os.Exit(1)
+	for i, message := range messages {
+		rowIndex := i + 1
+		text, err := textvars.ReplaceVars(message.Template, message.Map())
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"\n%sError%s: failing due to row %d (%s): %v",
+				textErr, textReset, rowIndex, message.Get("Name"), err,
+			)
+			os.Exit(1)
+		}
+
+		message.Text = text
+		messages[i] = message
 	}
 
 	if now.After(cfg.endTime) || now.Equal(cfg.endTime) {
@@ -239,9 +248,9 @@ func main() {
 	fmt.Fprintf(os.Stderr, "\n")
 	fmt.Fprintf(os.Stderr, "Info: This is what a %ssample message%s from list look like:\n", textInfo, textReset)
 	fmt.Fprintf(os.Stderr, "\n")
-	fmt.Fprintf(os.Stderr, "      To: %s (%s)\n", messages[0].Number, messages[0].Name())
-	fmt.Fprintf(os.Stderr, "      %s%s%s\n", textTmpl, messages[0].Template(), textReset)
-	fmt.Fprintf(os.Stderr, "      %s%s%s\n", textInfo, messages[0].Text(), textReset)
+	fmt.Fprintf(os.Stderr, "      To: %s (%s)\n", messages[0].Number, messages[0].Get("Name"))
+	fmt.Fprintf(os.Stderr, "      %s%s%s\n", textTmpl, messages[0].Template, textReset)
+	fmt.Fprintf(os.Stderr, "      %s%s%s\n", textInfo, messages[0].Text, textReset)
 	fmt.Fprintf(os.Stderr, "\n")
 
 	if !cfg.confirmed && !cfg.dryRun {
@@ -290,16 +299,16 @@ func main() {
 
 		fmt.Fprintf(os.Stderr, "# Send to %s (%s) %s-%s\n", message.Number[:2], message.Number[2:5], message.Number[5:8], message.Number[8:])
 		if cfg.printCurl {
-			curl := sender.CurlString(message.Number, message.Text())
+			curl := sender.CurlString(message.Number, message.Text)
 			fmt.Println(curl)
 		} else {
-			fmt.Fprintf(os.Stderr, "%s\n", message.Text())
+			fmt.Fprintf(os.Stderr, "%s\n", message.Text)
 		}
 		if cfg.dryRun {
 			continue
 		}
 
-		if err := sender.Send(message.Number, message.Text()); err != nil {
+		if err := sender.Send(message.Number, message.Text); err != nil {
 			fmt.Fprintf(os.Stderr, "%sError%s: %v\n", textErr, textReset, err)
 			continue
 		}

@@ -3,6 +3,7 @@ package smscsv
 import (
 	"fmt"
 	"io"
+	"log"
 	"slices"
 	"strings"
 
@@ -26,121 +27,90 @@ func (w CSVWarn) Error() string {
 }
 
 type Message struct {
-	header   []string
-	indices  map[string]int
-	fields   []string
-	name     string
-	Number   string
-	template string
-	Vars     map[string]string
-	text     string
+	Record   `csv:"*"`
+	Number   string `csv:"Phone"`
+	Template string `csv:"Message"`
+	Text     string `csv:"-"`
 }
 
-func (m Message) Name() string {
-	return m.name
+type Record struct {
+	header []string
+	fields []string
 }
 
-func (m Message) Template() string {
-	return m.template
+func (r Record) Keys() []string {
+	return r.header
 }
 
-func (m Message) Text() string {
-	return m.text
-}
-
-func (m *Message) SetText(text string) {
-	m.text = text
-}
-
-func (m Message) Size() int {
-	return len(m.fields)
-}
-
-func (m Message) Get(key string) string {
-	index, ok := m.indices[key]
-	if !ok {
+func (r Record) Get(key string) string {
+	// typically there are only a few fields, so indexing is faster than mapping
+	i := slices.Index(r.header, key)
+	if i < 0 {
 		return ""
 	}
 
-	if len(m.fields) >= 1+index {
-		return m.fields[index]
-	}
+	return r.fields[i]
+}
 
-	return ""
+func (r Record) Map() map[string]string {
+	m := make(map[string]string, len(r.header))
+	for i, k := range r.header {
+		m[k] = r.fields[i]
+	}
+	return m
 }
 
 // TODO XXX AJ pass in column name mapping
-func ReadOrIgnoreAll(csvr Reader) (messages []Message, warns []CSVWarn, err error) {
-	header, err := csvr.Read()
+func ReadOrIgnoreAll(csvr Reader, labelKey string) (messages []Message, warns []CSVWarn, err error) {
+	dec, err := csvutil.NewDecoder(csvr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("header could not be parsed: %w", err)
+		return nil, nil, err
+		// fmt.Fprintf(os.Stderr, "\n%sError%s: %v\n", textErr, textReset, err)
+		// os.Exit(1)
 	}
 
-	FIELD_NAME := GetFieldIndex(header, "Name")
-	FIELD_PHONE := GetFieldIndex(header, "Phone")
-	FIELD_MESSAGE := GetFieldIndex(header, "Message")
-	if FIELD_NAME == -1 || FIELD_PHONE == -1 || FIELD_MESSAGE == -1 {
+	header := dec.Header()
+	if GetFieldIndex(header, "Phone") == -1 || GetFieldIndex(header, "Message") == -1 {
 		return nil, nil, fmt.Errorf("header is missing one or more of 'Name', 'Phone', and/or 'Message'")
 	}
-	FIELD_MIN := 1 + slices.Max([]int{FIELD_NAME, FIELD_PHONE, FIELD_MESSAGE})
 
+	var unusedHeader []string
 	rowIndex := 1 // 1-index, start at header
 	for {
 		rowIndex++
-		rec, err := csvr.Read()
-		if err == io.EOF {
+
+		m := Record(header)
+		if err := dec.Decode(&m); err == io.EOF {
 			break
-		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse row %d (and all following rows): %w", rowIndex, err)
-		}
-
-		// TODO XXX AJ create an abstraction around the header []string and the record []string
-		// the idea is to return the same thing for valid and invalid rows
-		vars := make(map[string]string)
-		n := min(len(header), len(rec))
-		for i := range n {
-			switch i {
-			case FIELD_NAME, FIELD_PHONE, FIELD_MESSAGE:
-				continue
-			default:
-				key := header[i]
-				val := rec[i]
-				vars[key] = val
-			}
+		} else if err != nil {
+			log.Fatal(err)
 		}
 
-		if len(rec) < FIELD_MIN {
-			warns = append(warns, CSVWarn{
-				Index:   rowIndex,
-				Code:    "TooFewFields",
-				Message: fmt.Sprintf("ignoring row %d: too few fields (want %d, have %d)", rowIndex, FIELD_MIN, len(rec)),
-				Record:  rec,
-			})
-			continue
+		// TODO we can't use this optimization when the fields have different lengths
+		if unusedHeader == nil {
+			ids := dec.Unused()
+			unusedHeader = make([]string, len(ids))
+		}
+		m.Fields = Record{
+			header: unusedHeader,
+			fields: make([]string, len(unusedHeader)),
+		}
+		for _, i := range dec.Unused() {
+			m.Fields.fields[i] = dec.Record()[i]
 		}
 
-		message := Message{
-			// Index:    rowIndex,
-			name:     strings.TrimSpace(rec[FIELD_NAME]),
-			Number:   strings.TrimSpace(rec[FIELD_PHONE]),
-			template: strings.TrimSpace(rec[FIELD_MESSAGE]),
-			Vars:     vars,
-		}
-
-		message.Number = smsgw.StripFormatting(message.Number)
-		message.Number, err = smsgw.PrefixUS10Digit(message.Number)
+		m.Number = smsgw.StripFormatting(m.Number)
+		m.Number, err = smsgw.PrefixUS10Digit(m.Number)
 		if err != nil {
 			warns = append(warns, CSVWarn{
 				Index:   rowIndex,
 				Code:    "PhoneInvalid",
-				Message: fmt.Sprintf("ignoring row %d (%s): %s", rowIndex, message.Name(), err.Error()),
+				Message: fmt.Sprintf("ignoring row %d (%s): %s", rowIndex, m.Fields.Get(labelKey), err.Error()),
 				// Record:  rec,
 			})
 			continue
 		}
-
-		messages = append(messages, message)
+		messages = append(messages, m)
 	}
 
 	return messages, warns, nil
