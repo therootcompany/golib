@@ -3,7 +3,10 @@
 > A feature-branch-friendly SQL migrator
 
 ```sh
-sql-migrate <command> [-d sqldir] [-f logfile] [args]
+# sql-migrate [-d sqldir] <command> [args]
+sql-migrate -d ./sql/migrations/ init --sql-command psql
+sql-migrate -d ./sql/migrations/ up 3
+sql-migrate -d ./sql/migrations/ down 2
 ```
 
 ## Features
@@ -25,9 +28,11 @@ Lexicographically-sortable files in the format `<sequence>_<description>.<up|dow
 
 ```text
 migrations/
-├── 2021-02-03-001000_init.up.sql
-├── 2021-02-03-001000_init.down.sql
-├── 2021-02-03-002000_add-products.up.sql
+├── _migrations.sql
+├── 0001-01-01-001000_init-migrations.sql
+├── 2021-02-03-001000_init-app.up.sql
+├── 2021-02-03-001000_init-app.down.sql
+├── 2021-02-03-001000_add-products.up.sql
 ├── 2021-02-03-002000_add-products.down.sql
 ├── 2021-02-03-003000_add-customers.up.sql
 └── 2021-02-03-003000_add-customers.down.sql
@@ -40,12 +45,9 @@ A simple list of migration names.
 `./sql/migrations.log`:
 
 ```text
-# command: psql "$PG_URL" < %s
-# batch: 1
-2021-02-03-001000_init
+0001-01-01-001000_init-migrations
+2021-02-03-001000_init-app
 2021-02-03-002000_add-products
-
-# batch: 2
 2021-02-03-003000_add-customers
 ```
 
@@ -80,12 +82,12 @@ DROP TABLE IF EXISTS "products";
 ## Usage
 
 ```sh
-sql-migrate init -d ./sql/migrations/ -f ./sql/migrations.log
-sql-migrate create <kebab-case-description>
-sql-migrate status
-sql-migrate up
-sql-migrate down
-sql-migrate list
+sql-migrate -d ./sql/migrations/ init --sql-command <psql|mariadb|mysql> --migrations-log ./sql/migrations.log
+sql-migrate -d ./sql/migrations/ create <kebab-case-description>
+sql-migrate -d ./sql/migrations/ status
+sql-migrate -d ./sql/migrations/ up 99
+sql-migrate -d ./sql/migrations/ down 1
+sql-migrate -d ./sql/migrations/ list
 ```
 
 See `sql-migrate help` for details.
@@ -94,31 +96,36 @@ See `sql-migrate help` for details.
 
 ```text
 COMMANDS
-   init          - inits sql dir and migration file, adding or updating the
-                   default command
+   init          - creates migrations directory, initial migration, log file,
+	                and query for migrations
    create        - creates a new, canonically-named up/down file pair in the
-                   migrations directory
+                   migrations directory, with corresponding insert
    status        - shows the same output as if processing a forward-migration
-                   for the most recent batch
-   up            - processes the first 'up' migration file missing from the
-                   migration state
-   down          - rolls back the latest entry of the latest migration batch
-                   (the whole batch if just one)
+   up [n]        - create a script to run pending migrations (ALL by default)
+   down [n]      - create a script to roll back migrations (ONE by default)
    list          - lists migrations
 
 OPTIONS
    -d <migrations directory>  default: ./sql/migrations/
-   -f <migration state file>  default: ./sql/migrations.log
+   --help                     show command-specific help
 
-   The migration state file contains the client command template (defaults to
-      'psql "$PG_URL" < %s'), followed by a list of batches identified by a batch
-      number comment and a list of migration file basenames and optional user
-      comments, such as:
-      # command: psql "$PG_URL" < %s
-      # batch: 1
-      2020-01-01-1000_init.up.sql # does a lot
-      2020-01-01-1100_add-customer-tables.up.sql
-      # batch: 2
-      # We did id! Finally!
-      2020-01-01-2000_add-ALL-THE-TABLES.up.sql
+NOTES
+   Migrations files are in the following format:
+      <yyyy-mm-dd>-<number>_<name>.<up|down>.sql
+      2020-01-01-1000_init-app.up.sql
+
+	The initial migration file contains configuration variables:
+		-- migrations_log: ./sql/migrations.log
+		-- sql_command: psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --file %s
+
+	The log is generated on each migration file contains a list of all migrations:
+      0001-01-01-001000_migrations.up.sql
+      2020-12-31-001000_init-app.up.sql
+      2020-12-31-001100_add-customer-tables.up.sql
+      2020-12-31-002000_add-ALL-THE-TABLES.up.sql
+
+   The 'create' generates an up/down pair of files using the current date and
+      the number 1000. If either file exists, the number is incremented by 1000 and
+      tried again.
+
 ```
