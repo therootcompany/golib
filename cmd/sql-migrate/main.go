@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	version = "2.0.0"
+	version = "2.0.2"
 )
 
 const (
@@ -53,13 +53,15 @@ CREATE TABLE IF NOT EXISTS _migrations (
    applied_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO _migrations (id, name) VALUES ('00000001', '0001-01-01-01000_init-migrations');
+-- note: to enable text-based tools to grep and sort we put 'name' before 'id'
+--       grep -r 'INSERT INTO _migrations' ./sql/migrations/ | cut -d':' -f2 | sort
+INSERT INTO _migrations (name, id) VALUES ('0001-01-01-01000_init-migrations', '00000001');
 `
 	defaultMigratorDown = `DELETE FROM _migrations WHERE id = '00000001';
 
 DROP TABLE IF EXISTS _migrations;
 `
-	LOG_MIGRATIONS_QUERY = `-- note: --no-align must be passed via CLI to avoid extraneous output
+	LOG_MIGRATIONS_QUERY = `-- note: CLI arguments must be passed to the sql command to keep output clean
 SELECT name FROM _migrations ORDER BY name;
 `
 	shHeader = `#/bin/sh
@@ -369,7 +371,7 @@ func migrationsList(migrationsDir string, entries []os.DirEntry) (ups, downs []s
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
 			if name != LOG_QUERY_NAME {
-				fmt.Fprintf(os.Stderr, "   ignoring '%s'\n", filepathUnclean(filepath.Join(migrationsDir, name)))
+				fmt.Fprintf(os.Stderr, "   ignoring %s\n", filepathJoin(migrationsDir, name))
 			}
 			continue
 		}
@@ -385,7 +387,7 @@ func migrationsList(migrationsDir string, entries []os.DirEntry) (ups, downs []s
 			continue
 		}
 
-		fmt.Fprintf(os.Stderr, "   unknown '%s'\n", filepath.Join(migrationsDir, name))
+		fmt.Fprintf(os.Stderr, "   unknown %s\n", filepathJoin(migrationsDir, name))
 	}
 	for _, down := range downs {
 		// TODO on downs add INSERT to file and to up migration if it doesn't exist
@@ -422,6 +424,10 @@ func filepathUnclean(path string) string {
 		}
 	}
 	return path
+}
+
+func filepathJoin(src, dst string) string {
+	return filepathUnclean(filepath.Join(src, dst))
 }
 
 // initializes all necessary files and directories
@@ -466,7 +472,7 @@ func mustInit(cfg *MainConfig) {
 
 	// write config
 	if slices.Contains(ups, M_MIGRATOR_NAME) {
-		fmt.Fprintf(os.Stderr, "     found '%s'\n", filepath.Join(cfg.migrationsDir, M_MIGRATOR_UP_NAME))
+		fmt.Fprintf(os.Stderr, "     found %s\n", filepath.Join(cfg.migrationsDir, M_MIGRATOR_UP_NAME))
 	} else {
 		if cfg.logPath == "" {
 			migrationsParent := filepath.Dir(cfg.migrationsDir)
@@ -483,7 +489,7 @@ func mustInit(cfg *MainConfig) {
 			fmt.Fprintf(os.Stderr, "Error: init couldn't create initial up migration: %v\n", err)
 			os.Exit(1)
 		} else if created {
-			fmt.Fprintf(os.Stderr, "   created '%s'\n", mMigratorUpPath)
+			fmt.Fprintf(os.Stderr, "   created %s\n", filepathUnclean(mMigratorUpPath))
 		}
 	}
 
@@ -511,14 +517,14 @@ func mustInit(cfg *MainConfig) {
 	}
 
 	if slices.Contains(downs, M_MIGRATOR_NAME) {
-		fmt.Fprintf(os.Stderr, "     found '%s'\n", mMigratorDownPath)
+		fmt.Fprintf(os.Stderr, "     found %s\n", filepathUnclean(mMigratorDownPath))
 	} else {
 		migratorDownQuery := defaultMigratorDown
 		if created, err := initFile(mMigratorDownPath, migratorDownQuery); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: init couldn't create initial up migration: %v\n", err)
 			os.Exit(1)
 		} else if created {
-			fmt.Fprintf(os.Stderr, "   created '%s'\n", mMigratorDownPath)
+			fmt.Fprintf(os.Stderr, "   created %s\n", filepathUnclean(mMigratorDownPath))
 		}
 	}
 
@@ -527,13 +533,13 @@ func mustInit(cfg *MainConfig) {
 		fmt.Fprintf(os.Stderr, "Error: init couldn't create migrations query: %v\n", err)
 		os.Exit(1)
 	} else if created {
-		fmt.Fprintf(os.Stderr, "   created '%s'\n", logQueryPath)
+		fmt.Fprintf(os.Stderr, "   created %s\n", filepathUnclean(logQueryPath))
 	} else {
-		fmt.Fprintf(os.Stderr, "     found '%s'\n", logQueryPath)
+		fmt.Fprintf(os.Stderr, "     found %s\n", filepathUnclean(logQueryPath))
 	}
 
 	if fileExists(state.LogPath) {
-		fmt.Fprintf(os.Stderr, "     found '%s'\n", state.LogPath)
+		fmt.Fprintf(os.Stderr, "     found %s\n", filepathUnclean(state.LogPath))
 		fmt.Fprintf(os.Stderr, "done\n")
 		return
 	}
@@ -727,15 +733,15 @@ func create(state *State, desc string) error {
 	// Little Bobby Drop Tables says:
 	// We trust the person running the migrations to not use malicious names.
 	// (we don't want to embed db-specific logic here, and SQL doesn't define escaping)
-	migrationInsert := fmt.Sprintf("INSERT INTO _migrations (id, name) VALUES ('%s', '%s');", id, basename)
+	migrationInsert := fmt.Sprintf("INSERT INTO _migrations (name, id) VALUES ('%s', '%s');", basename, id)
 	upContent := fmt.Appendf(nil, "-- leave this as the first line\n%s\n\n-- %s (up)\nSELECT 'place your UP migration here';\n", migrationInsert, desc)
 	_ = os.WriteFile(upPath, upContent, 0644)
 	migrationDelete := fmt.Sprintf("DELETE FROM _migrations WHERE id = '%s';", id)
 	downContent := fmt.Appendf(nil, "-- %s (down)\nSELECT 'place your DOWN migration here';\n\n-- leave this as the last line\n%s\n", desc, migrationDelete)
 	_ = os.WriteFile(downPath, downContent, 0644)
 
-	fmt.Fprintf(os.Stderr, "    created pair %s\n", upPath)
-	fmt.Fprintf(os.Stderr, "                 %s\n", downPath)
+	fmt.Fprintf(os.Stderr, "    created pair %s\n", filepathUnclean(upPath))
+	fmt.Fprintf(os.Stderr, "                 %s\n", filepathUnclean(downPath))
 	return nil
 }
 
@@ -786,7 +792,7 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 			return false, false, warn, nil
 		}
 
-		migrationInsertLn := fmt.Sprintf("INSERT INTO _migrations (id, name) VALUES ('%s', '%s');\n\n", id, basename)
+		migrationInsertLn := fmt.Sprintf("INSERT INTO _migrations (name, id) VALUES ('%s', '%s');\n\n", basename, id)
 		upBytes = append([]byte(migrationInsertLn), upBytes...)
 		if err = os.WriteFile(upPath, upBytes, 0644); err != nil {
 			warn = fmt.Errorf("failed to prepend 'INSERT INTO _migrations ...' to %s: %w", upPath, err)
@@ -853,7 +859,7 @@ func up(state *State, ups []string, n int) error {
 		fmt.Fprintf(os.Stderr, "# Already up-to-date\n")
 		fmt.Fprintf(os.Stderr, "#\n")
 		fmt.Fprintf(os.Stderr, "# To reload the migrations log:\n")
-		fmt.Fprintf(os.Stderr, "%s\n", "# "+getMigs+" > "+filepathUnclean(state.LogPath))
+		fmt.Fprintf(os.Stderr, "# %s > %s\n", getMigs, filepathUnclean(state.LogPath))
 		return nil
 	}
 	if n == 0 {
@@ -914,7 +920,7 @@ func down(state *State, n int) error {
 		fmt.Fprintf(os.Stderr, "# No migration history\n")
 		fmt.Fprintf(os.Stderr, "#\n")
 		fmt.Fprintf(os.Stderr, "# To reload the migrations log:\n")
-		fmt.Fprintf(os.Stderr, "%s\n", "# "+getMigs+" > "+filepathUnclean(state.LogPath))
+		fmt.Fprintf(os.Stderr, "# %s > %s\n", getMigs, filepathUnclean(state.LogPath))
 		return nil
 	}
 	if n == 0 {
@@ -947,7 +953,7 @@ func down(state *State, n int) error {
 		cmd := strings.Replace(state.SQLCommand, "%s", downPath, 1)
 		fmt.Printf("\n# -%d %s\n", i+1, migration)
 		if !fileExists(downPath) {
-			fmt.Fprintf(os.Stderr, "# Warn: missing '%s'\n", downPath)
+			fmt.Fprintf(os.Stderr, "# Warn: missing %s\n", filepathUnclean(downPath))
 			fmt.Fprintf(os.Stderr, "#      (the migration will fail to run)\n")
 			fmt.Printf("# ERROR: MISSING FILE\n")
 		} else {
@@ -981,8 +987,8 @@ func status(state *State, ups []string) error {
 	copy(previous, state.Lines)
 	slices.Reverse(previous)
 
-	fmt.Fprintf(os.Stderr, "migrations_dir: %s\n", state.MigrationsDir)
-	fmt.Fprintf(os.Stderr, "migrations_log: %s\n", state.LogPath)
+	fmt.Fprintf(os.Stderr, "migrations_dir: %s\n", filepathUnclean(state.MigrationsDir))
+	fmt.Fprintf(os.Stderr, "migrations_log: %s\n", filepathUnclean(state.LogPath))
 	fmt.Fprintf(os.Stderr, "sql_command: %s\n", state.SQLCommand)
 	fmt.Fprintf(os.Stderr, "\n")
 	fmt.Printf("# previous: %d\n", len(previous))
