@@ -38,6 +38,8 @@ const (
 	sqlCommandPSQL        = `psql "$PG_URL" -v ON_ERROR_STOP=on -A -t --file %s`
 	sqlCommandMariaDB     = `mariadb --defaults-extra-file="$MY_CNF" -s -N --raw < %s`
 	sqlCommandMySQL       = `mysql --defaults-extra-file="$MY_CNF" -s -N --raw < %s`
+	sqlCommandSQLite3     = "sqlite3 \"$SQLITE_DB_FILE\" -bail -noheader -separator \"\t\" < %s"
+	sqlCommandMSSQL       = "sqlcmd -S tcp:\"$MSSQL_HOST\" -U \"$MSSQL_USER\" -P \"$MSSQL_PASS\" -d \"$MSSQL_DBNAME\" -b -h-1 -W -s\"\t\" < %s"
 	LOG_QUERY_NAME        = "_migrations.sql"
 	M_MIGRATOR_NAME       = "0001-01-01-01000_init-migrations"
 	M_MIGRATOR_UP_NAME    = "0001-01-01-01000_init-migrations.up.sql"
@@ -79,7 +81,7 @@ USAGE
    sql-migrate [-d sqldir] <command> [args]
 
 EXAMPLE
-   sql-migrate -d ./sql/migrations/ init --sql-command <psql|mariadb|mysql>
+   sql-migrate -d ./sql/migrations/ init --sql-command <psql|mariadb|mysql|sqlcmd|sqlite3>
    sql-migrate -d ./sql/migrations/ create <kebab-case-description>
    sql-migrate -d ./sql/migrations/ status
    sql-migrate -d ./sql/migrations/ up 99
@@ -201,6 +203,10 @@ func main() {
 		cfg.sqlCommand = sqlCommandMariaDB
 	case "mysql", "my":
 		cfg.sqlCommand = sqlCommandMySQL
+	case "mssql", "sqlcmd":
+		cfg.sqlCommand = sqlCommandMSSQL
+	case "sqlite3", "sqlite":
+		cfg.sqlCommand = sqlCommandSQLite3
 	}
 
 	if !strings.HasSuffix(cfg.migrationsDir, "/") {
