@@ -472,7 +472,7 @@ func mustInit(cfg *MainConfig) {
 
 	// write config
 	if slices.Contains(ups, M_MIGRATOR_NAME) {
-		fmt.Fprintf(os.Stderr, "     found %s\n", filepath.Join(cfg.migrationsDir, M_MIGRATOR_UP_NAME))
+		fmt.Fprintf(os.Stderr, "     found %s\n", filepathJoin(cfg.migrationsDir, M_MIGRATOR_UP_NAME))
 	} else {
 		if cfg.logPath == "" {
 			migrationsParent := filepath.Dir(cfg.migrationsDir)
