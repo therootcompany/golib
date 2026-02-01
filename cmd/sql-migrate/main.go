@@ -197,7 +197,7 @@ func main() {
 	leafArgs := fsSub.Args()
 
 	switch cfg.sqlCommand {
-	case "", "posgres", "posgresql", "pg", "psql", "plpgsql":
+	case "", "postgres", "postgresql", "pg", "psql", "plpgsql":
 		cfg.sqlCommand = sqlCommandPSQL
 	case "mariadb":
 		cfg.sqlCommand = sqlCommandMariaDB
