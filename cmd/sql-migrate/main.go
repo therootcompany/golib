@@ -203,6 +203,8 @@ func main() {
 		cfg.sqlCommand = sqlCommandMariaDB
 	case "mysql", "my":
 		cfg.sqlCommand = sqlCommandMySQL
+	default:
+		// leave as provided by the user
 	}
 
 	if !strings.HasSuffix(cfg.migrationsDir, "/") {
