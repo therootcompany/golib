@@ -1,4 +1,4 @@
-module example.com/sendsms
+module github.com/therootcompany/golib/net/smsgw
 
 go 1.24.4
 
