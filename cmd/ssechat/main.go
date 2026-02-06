@@ -72,7 +72,13 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// SSE format: one data: line with the full JSON
+			// SSE format:
+			// : comment
+			// event: optional_name
+			// data: data
+			// data: more data
+			//
+			// : extra newline to end data
 			if msg.Event != "" {
 				fmt.Fprintf(w, "event: %s\n", msg.Event)
 			}
@@ -83,11 +89,6 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleSend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Bad form", http.StatusBadRequest)
 		return
