@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+   <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>SSE Chat Room</title>
+      <style>
+         body {
+            font-family: system-ui, sans-serif;
+            margin: 0;
+            padding: 1rem;
+            background: #f8f9fa;
+            color: #111;
+         }
+         header {
+            text-align: center;
+            margin-bottom: 1.5rem;
+         }
+         #messages {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 1rem;
+            height: 60vh;
+            overflow-y: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+            margin-bottom: 1rem;
+         }
+         form {
+            display: flex;
+            gap: 0.5rem;
+            max-width: 600px;
+            margin: 0 auto;
+         }
+         input[type="text"] {
+            flex: 1;
+            padding: 0.8rem;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 1rem;
+         }
+         button {
+            padding: 0.8rem 1.5rem;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+         }
+         button:hover {
+            background: #0055aa;
+         }
+         .msg {
+            margin: 0.4rem 0;
+         }
+         .msg.system {
+            color: #666;
+            font-style: italic;
+         }
+         .msg.user {
+            color: #0066cc;
+         }
+      </style>
+   </head>
+   <body>
+      <header>
+         <h1>Simple SSE Chat Room</h1>
+         <p>Everyone sees the same messages in real time</p>
+      </header>
+
+      <div id="messages"></div>
+
+      <form id="chat-form">
+         <input
+            type="text"
+            id="nickname"
+            placeholder="Your name"
+            value="Guest"
+            style="width: 140px"
+         />
+         <input
+            type="text"
+            id="message"
+            placeholder="Type a message..."
+            autocomplete="off"
+            required
+         />
+         <button type="submit">Send</button>
+      </form>
+
+      <script>
+         const messagesDiv = document.getElementById("messages");
+         const form = document.getElementById("chat-form");
+         const msgInput = document.getElementById("message");
+         const nickInput = document.getElementById("nickname");
+
+         // Connect to SSE
+         const evtSource = new EventSource("/api/events");
+
+         evtSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            appendMessage(`${data.time} • ${data.nick}: ${data.text}`);
+         };
+
+         evtSource.addEventListener("system", (event) => {
+            const data = JSON.parse(event.data);
+            appendMessage(`${data.time} • ${data.text}`, "system");
+         });
+
+         evtSource.onerror = () => {
+            appendMessage("[Connection lost — reconnecting...]", "system");
+         };
+
+         function appendMessage(text, kind = "user") {
+            const line = document.createElement("div");
+            line.className = `msg ${kind}`;
+            line.textContent = text;
+            messagesDiv.appendChild(line);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+         }
+
+         // Send message on form submit
+         form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const text = msgInput.value.trim();
+            if (!text) return;
+
+            const nick = nickInput.value.trim() || "Anonymous";
+
+            try {
+               await fetch("/api/send", {
+                  method: "POST",
+                  headers: {
+                     "Content-Type": "application/x-www-form-urlencoded",
+                  },
+                  body: new URLSearchParams({ nick, text }),
+               });
+               msgInput.value = "";
+               msgInput.focus();
+            } catch (err) {
+               appendMessage("[Failed to send message]", "system");
+            }
+         });
+
+         // Initial welcome
+         appendMessage(
+            "Welcome to the chat! Type below to join the conversation.",
+            "system"
+         );
+      </script>
+   </body>
+</html>
