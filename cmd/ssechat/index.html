@@ -99,17 +99,17 @@
          // Connect to SSE
          const evtSource = new EventSource("/api/events");
 
-         evtSource.onmessage = (event) => {
-            const data = JSON.parse(event.data);
+         evtSource.onmessage = function (ev) {
+            const data = JSON.parse(ev.data);
             appendMessage(`${data.time} • ${data.nick}: ${data.text}`);
          };
 
-         evtSource.addEventListener("system", (event) => {
-            const data = JSON.parse(event.data);
+         evtSource.addEventListener("system", function (ev) {
+            const data = JSON.parse(ev.data);
             appendMessage(`${data.time} • ${data.text}`, "system");
          });
 
-         evtSource.onerror = () => {
+         evtSource.onerror = function () {
             appendMessage("[Connection lost — reconnecting...]", "system");
          };
 
@@ -122,8 +122,8 @@
          }
 
          // Send message on form submit
-         form.addEventListener("submit", async (e) => {
-            e.preventDefault();
+         form.addEventListener("submit", async function (ev) {
+            ev.preventDefault();
             const text = msgInput.value.trim();
             if (!text) return;
 
