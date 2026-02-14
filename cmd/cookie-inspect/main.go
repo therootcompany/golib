@@ -84,7 +84,7 @@ func inspectCookie(c *http.Cookie, secret string) {
 	}
 
 	fmt.Println("   looks like express.js signed format (s:payload.signature)")
-	payload64, sig64, err := decodeExpress(cookieVal)
+	payload64, sig64, err := DecodeSignedValue(cookieVal)
 	if err != nil {
 		fmt.Printf("  Decoding express payload failed: %v\n", err)
 		return
@@ -104,7 +104,7 @@ func inspectCookie(c *http.Cookie, secret string) {
 	if secret == "" {
 		fmt.Println("  (Verification skipped — provide --secret to check signature)")
 	} else {
-		if err := verifyExpress(payload64, sig64, secret); err != nil {
+		if err := VerifyHMAC(payload64, sig64, secret); err != nil {
 			fmt.Printf("  Verification failed: %v\n", err)
 			return
 		}
@@ -112,7 +112,38 @@ func inspectCookie(c *http.Cookie, secret string) {
 	}
 }
 
-func decodeExpress(signed string) (string, string, error) {
+func EncodeSignedValue(value, sig string) string {
+	return url.QueryEscape("s:" + value + "." + sig)
+}
+
+// SignCookie creates an Express-style signed cookie value.
+//
+//	"s:" + rawValue + "." + base64url(signature)
+//
+// This is exactly what cookie-signature.sign(value, secret) produces in Node.js.
+// The result can be set directly as cookie.Value (or via http.Cookie).
+func SignValue(value, secret string) string {
+	if secret == "" {
+		panic(fmt.Errorf("secret is empty"))
+	}
+
+	// Compute HMAC-SHA256 of the raw value (not base64!)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(value))
+	signature := mac.Sum(nil)
+
+	// base64url, no padding — exactly as cookie-signature does
+	sigB64 := base64.RawURLEncoding.EncodeToString(signature)
+
+	// Final format: s:value.signature
+	return sigB64
+}
+
+func DecodeSignedValue(signed string) (string, string, error) {
+	signed, err := url.QueryUnescape(signed)
+	if err != nil {
+		return "", "", err
+	}
 	withoutPrefix := signed[2:]
 
 	dotIdx := strings.LastIndex(withoutPrefix, ".")
@@ -126,12 +157,12 @@ func decodeExpress(signed string) (string, string, error) {
 	return payload, sigReceived, nil
 }
 
-func verifyExpress(expressPayload, expressSig, secret string) error {
-	if secret == "" {
+func VerifyHMAC(expressPayload, expressSig, cookieSecret string) error {
+	if cookieSecret == "" {
 		return fmt.Errorf("no secret provided")
 	}
 
-	mac := hmac.New(sha256.New, []byte(secret))
+	mac := hmac.New(sha256.New, []byte(cookieSecret))
 	mac.Write([]byte(expressPayload))
 	expectedSig := mac.Sum(nil)
 
