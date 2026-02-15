@@ -1,3 +1,15 @@
+// cli-example - A demonstrates of common patterns for CLI utilities
+//
+// Authored in 2026 by AJ ONeal <aj@therootcompany.com> w/ Grok (https://grok.com).
+// To the extent possible under law, the author(s) have dedicated all copyright
+// and related and neighboring rights to this software to the public domain
+// worldwide. This software is distributed without any warranty.
+//
+// You should have received a copy of the CC0 Public Domain Dedication along with
+// this software. If not, see <https://creativecommons.org/publicdomain/zero/1.0/>.
+//
+// SPDX-License-Identifier: CC0-1.0
+
 package main
 
 import (
