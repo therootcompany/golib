@@ -33,6 +33,7 @@ func showHelp() {
 	fmt.Fprintf(os.Stderr, `csvauth - create, update, and verify users, passwords, and tokens
 
 EXAMPLES
+   csvauth store --token 'my-new-token'
    csvauth store --ask-password 'my-new-user'
    csvauth verify 'my-new-user'
 
@@ -255,12 +256,13 @@ func handleInit(keyenv, keypath, csvpath string) error {
 
 func handleSet(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) {
 	storeFlags := flag.NewFlagSet("csvauth-store", flag.ContinueOnError)
-	purpose := storeFlags.String("purpose", "login", "'login' for users, or a service account name, such as 'basecamp_api_key'")
+	purpose := storeFlags.String("purpose", "login", "'login' for users, 'token' for tokens, or a service account name, such as 'basecamp_api_key'")
 	roleList := storeFlags.String("roles", "", "a comma- or space-separated list of roles (defined by you), such as 'triage audit'")
 	extra := storeFlags.String("extra", "", "free form data to retrieve with the user (hint: JSON might be nice)")
 	algorithm := storeFlags.String("algorithm", "", "Hash algorithm: aes, plain, pbkdf2[,iters[,size[,hash]]], or bcrypt[,cost]")
-	askPassword := storeFlags.Bool("ask-password", false, "Read password from stdin")
-	passwordFile := storeFlags.String("password-file", "", "Read password from file")
+	askPassword := storeFlags.Bool("ask-password", false, "Read password or token from stdin")
+	useToken := storeFlags.Bool("token", false, "generate token")
+	passwordFile := storeFlags.String("password-file", "", "Read password or token from file")
 	// storeFlags.StringVar(&tsvPath, "tsv", tsvPath, "Credentials file to use")
 	if err := storeFlags.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -276,20 +278,38 @@ func handleSet(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) {
 
 	name := storeFlags.Arg(0)
 	switch name {
-	case "id", "name", "purpose":
-		fmt.Fprintf(os.Stderr, "invalid username %q\n", name)
+	case "", "id", "name", "purpose":
+		if *useToken {
+			fmt.Fprintf(os.Stderr, "invalid token name %q\n", name)
+		} else {
+			fmt.Fprintf(os.Stderr, "invalid username %q\n", name)
+		}
 		os.Exit(1)
 	}
 
+	if *useToken {
+		if *purpose != csvauth.PurposeDefault && *purpose != csvauth.PurposeToken {
+			fmt.Fprintf(os.Stderr, "token purpose must be 'token', not %q\n", *purpose)
+			os.Exit(1)
+		}
+		*purpose = csvauth.PurposeToken
+	}
+
 	if len(*algorithm) == 0 {
-		if *purpose == "login" {
+		switch *purpose {
+		case csvauth.PurposeDefault:
 			*algorithm = "pbkdf2"
-		} else {
+		case csvauth.PurposeToken:
+			fallthrough
 			// *algorithm = "plain"
+		default:
 			*algorithm = "aes-128-gcm"
 		}
 	}
-	if *purpose != "login" {
+	switch *purpose {
+	case csvauth.PurposeDefault, csvauth.PurposeToken:
+		// no change
+	default:
 		*askPassword = true
 	}
 
@@ -339,7 +359,7 @@ func handleSet(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) {
 	_ = csvFile.Close()
 
 	var exists bool
-	if len(*purpose) > 0 && *purpose != "login" {
+	if len(*purpose) > 0 && *purpose != csvauth.PurposeDefault && *purpose != csvauth.PurposeToken {
 		if _, err := auth.LoadServiceAccount(*purpose); err != nil {
 			if !errors.Is(err, csvauth.ErrNotFound) {
 				fmt.Fprintf(os.Stderr, "could not load %s: %v\n", *purpose, err)
@@ -382,9 +402,10 @@ func handleSet(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) {
 
 func handleCheck(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) {
 	checkFlags := flag.NewFlagSet("csvauth-check", flag.ContinueOnError)
-	purpose := checkFlags.String("purpose", "login", "'login' for users, or a service account name, such as 'basecamp_api_key'")
-	_ = checkFlags.Bool("ask-password", true, "Read password from stdin")
-	passwordFile := checkFlags.String("password-file", "", "Read password from file")
+	purpose := checkFlags.String("purpose", "login", "'login' for users, 'token' for tokens, or a service account name, such as 'basecamp_api_key'")
+	_ = checkFlags.Bool("ask-password", true, "Read password or token from stdin")
+	useToken := checkFlags.Bool("token", false, "generate token")
+	passwordFile := checkFlags.String("password-file", "", "Read password or token from file")
 	// storeFlags.StringVar(&tsvPath, "tsv", tsvPath, "Credentials file to use")
 	if err := checkFlags.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -400,9 +421,23 @@ func handleCheck(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) 
 
 	name := checkFlags.Arg(0)
 	switch name {
-	case "id", "name", "purpose":
-		fmt.Fprintf(os.Stderr, "invalid username %q\n", name)
-		os.Exit(1)
+	case "", "id", "name", "purpose":
+		if !*useToken {
+			fmt.Fprintf(os.Stderr, "invalid username %q\n", name)
+			os.Exit(1)
+		}
+		if name != "" {
+			fmt.Fprintf(os.Stderr, "invalid token name %q\n", name)
+			os.Exit(1)
+		}
+	}
+
+	if *useToken {
+		if *purpose != csvauth.PurposeDefault && *purpose != csvauth.PurposeToken {
+			fmt.Fprintf(os.Stderr, "token purpose must be 'token', not %q\n", *purpose)
+			os.Exit(1)
+		}
+		*purpose = csvauth.PurposeToken
 	}
 
 	var pass string
@@ -434,7 +469,7 @@ func handleCheck(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) 
 
 	var v csvauth.BasicAuthVerifier
 	var err error
-	if *purpose != "login" {
+	if *purpose != csvauth.PurposeDefault && *purpose != csvauth.PurposeToken {
 		v, err = auth.LoadServiceAccount(*purpose)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "couldn't load %s: %v", *purpose, err)
@@ -444,7 +479,13 @@ func handleCheck(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) 
 		v = auth
 	}
 
-	if err := v.Verify(name, pass); err != nil {
+	if *purpose == csvauth.PurposeToken {
+		if err := auth.VerifyToken(pass); err != nil {
+			fmt.Fprintf(os.Stderr, "token not verified: %v\n", err)
+			os.Exit(1)
+			return
+		}
+	} else if err := v.Verify(name, pass); err != nil {
 		fmt.Fprintf(os.Stderr, "user '%s' not found or incorrect secret\n", name)
 		os.Exit(1)
 		return

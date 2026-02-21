@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -27,6 +29,7 @@ import (
 var ErrNotFound = errors.New("not found")
 var ErrUnauthorized = errors.New("unauthorized")
 var ErrUnknownAlgorithm = errors.New("unknown algorithm")
+var ErrLockedCredential = errors.New("credential is locked")
 
 const (
 	defaultIters      = 1000 // original 2000 recommendation
@@ -64,6 +67,7 @@ func NewNamedReadCloser(r io.ReadCloser, name string) NamedReadCloser {
 type Auth struct {
 	aes128key       [16]byte
 	credentials     map[Name]Credential
+	tokens          map[string]Credential
 	serviceAccounts map[Purpose]Credential
 	mux             sync.Mutex
 }
@@ -76,6 +80,7 @@ func New(aes128key []byte) *Auth {
 	return &Auth{
 		aes128key:       aes128Arr,
 		credentials:     map[Name]Credential{},
+		tokens:          map[string]Credential{},
 		serviceAccounts: map[Purpose]Credential{},
 	}
 }
@@ -115,12 +120,24 @@ func (a *Auth) LoadCSV(f NamedReadCloser, comma rune) error {
 			return err
 		}
 
-		if len(credential.Purpose) == 0 || credential.Purpose == DefaultPurpose {
-			if _, ok := a.credentials[credential.Name]; ok {
+		switch credential.Purpose {
+		case "", PurposeDefault, PurposeToken:
+			name := credential.Name
+			if credential.Purpose == PurposeToken {
+				name += hashIDSep + credential.hashID
+			}
+
+			if _, ok := a.credentials[name]; ok {
 				fmt.Fprintf(os.Stderr, "overwriting cache of previous value for %s: %s\n", credential.Purpose, credential.Name)
 			}
-			a.credentials[credential.Name] = credential
-		} else {
+			a.credentials[name] = credential
+			if credential.Purpose == PurposeToken {
+				if _, ok := a.tokens[credential.hashID]; ok {
+					fmt.Fprintf(os.Stderr, "overwriting cache of previous value for %s: %s\n", credential.Purpose, credential.Name)
+				}
+				a.tokens[credential.hashID] = credential
+			}
+		default:
 			if _, ok := a.serviceAccounts[credential.Purpose]; ok {
 				fmt.Fprintf(os.Stderr, "overwriting cache of previous value for %s: %s\n", credential.Purpose, credential.Name)
 			}
@@ -142,6 +159,10 @@ func (a *Auth) NewCredential(purpose, name, secret string, params []string, role
 		//Derived: ...
 		Roles: roles,
 		Extra: extra,
+	}
+
+	if purpose == PurposeToken {
+		c.hashID = a.tokenCacheID(secret)
 	}
 
 	switch c.Params[0] {
@@ -304,8 +325,17 @@ func (a *Auth) LoadCredential(name Name) (Credential, error) {
 
 func (a *Auth) CacheCredential(c Credential) error {
 	a.mux.Lock()
-	a.credentials[c.Name] = c
-	a.mux.Unlock()
+	defer a.mux.Unlock()
+
+	name := c.Name
+	if c.Purpose == PurposeToken {
+		name += hashIDSep + c.hashID
+	}
+	a.credentials[name] = c
+
+	if c.Purpose == PurposeToken {
+		a.tokens[c.hashID] = c
+	}
 	return nil
 }
 
@@ -383,12 +413,48 @@ func (a *Auth) Verify(name, secret string) error {
 	return c.Verify(name, secret)
 }
 
+func (a *Auth) VerifyToken(secret string) error {
+	hashID := a.tokenCacheID(secret)
+
+	a.mux.Lock()
+	c, ok := a.tokens[hashID]
+	a.mux.Unlock()
+
+	if !ok {
+		return ErrNotFound
+	}
+
+	if c.plain == "" {
+		var err error
+		if c.plain, err = a.maybeDecryptCredential(c); err != nil {
+			return err
+		}
+	}
+	return c.Verify(hashID, secret)
+}
+
+func (a *Auth) tokenCacheID(secret string) string {
+	key := a.aes128key[:]
+	mac := hmac.New(sha256.New, key)
+	message := []byte(secret)
+	mac.Write(message)
+	nameBytes := mac.Sum(nil)[:6]
+
+	name := base64.RawURLEncoding.EncodeToString(nameBytes)
+	return name
+}
+
 // Verify checks Basic Auth credentials
-func (c Credential) Verify(name, secret string) error {
+// (name is ignored, as it is assumed to have been used for lookup)
+func (c Credential) Verify(_, secret string) error {
 	known := c.Derived
 	var derived []byte
 	switch c.Params[0] {
 	case "aes-128-gcm":
+		// we hash because encrypted comparisons are NOT timing safe
+		if c.plain == "" {
+			return ErrLockedCredential
+		}
 		knownHash := sha256.Sum256([]byte(c.plain))
 		known = knownHash[:]
 
@@ -421,6 +487,7 @@ func (c Credential) Verify(name, secret string) error {
 		return ErrUnknownAlgorithm
 	}
 
+	// all values MUST be hashed before comparing, for timing safety
 	if bytes.Equal(known, derived) {
 		return nil
 	}

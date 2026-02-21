@@ -14,7 +14,13 @@ type BasicAuthVerifier interface {
 	Verify(string, string) error
 }
 
-const DefaultPurpose = "login"
+const (
+	// deprecated, misspelling of PurposeDefault
+	DefaultPurpose = "login"
+	PurposeDefault = "login"
+	PurposeToken   = "token"
+	hashIDSep      = "~"
+)
 
 type Purpose = string
 type Name = string
@@ -43,6 +49,7 @@ type Credential struct {
 	Derived []byte
 	Roles   []string
 	Extra   string
+	hashID  string
 }
 
 func (c Credential) Secret() string {
@@ -64,12 +71,19 @@ func FromRecord(record []string) (Credential, error) {
 
 func FromFields(purpose, name, paramList, saltBase64, derived, roleList, extra string) (Credential, error) {
 	var credential Credential
-	credential.Name = name
-
 	if len(purpose) == 0 {
-		purpose = DefaultPurpose
+		purpose = PurposeDefault
 	}
 	credential.Purpose = purpose
+
+	if credential.Purpose == PurposeToken {
+		name, hashID, _ := splitLast(name, hashIDSep)
+		credential.Name = name
+		// this can only be verified if plain or aes
+		credential.hashID = hashID
+	} else {
+		credential.Name = name
+	}
 
 	var roles []string
 	if len(roleList) > 0 {
@@ -156,6 +170,19 @@ func FromFields(purpose, name, paramList, saltBase64, derived, roleList, extra s
 	return credential, nil
 }
 
+func splitLast(s, sep string) (before, after string, found bool) {
+	if sep == "" {
+		return s, "", false
+	}
+
+	idx := strings.LastIndex(s, sep)
+	if idx == -1 {
+		return s, "", false
+	}
+
+	return s[:idx], s[idx+len(sep):], true
+}
+
 func (c Credential) ToRecord() []string {
 	var paramList, salt, derived string
 
@@ -178,9 +205,13 @@ func (c Credential) ToRecord() []string {
 
 	purpose := c.Purpose
 	if len(purpose) == 0 {
-		purpose = DefaultPurpose
+		purpose = PurposeDefault
 	}
 
-	record := []string{purpose, c.Name, paramList, salt, derived, strings.Join(c.Roles, " "), c.Extra}
+	name := c.Name
+	if c.hashID != "" {
+		name += hashIDSep + c.hashID
+	}
+	record := []string{purpose, name, paramList, salt, derived, strings.Join(c.Roles, " "), c.Extra}
 	return record
 }
