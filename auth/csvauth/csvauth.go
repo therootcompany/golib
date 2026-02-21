@@ -4,19 +4,15 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/hmac"
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/csv"
 	"errors"
 	"fmt"
 	"hash"
 	"io"
-	"iter"
-	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -302,93 +298,6 @@ func gcmEncrypt(aes128key [16]byte, gcmNonce [12]byte, secret string) ([]byte, e
 	return ciphertext, nil
 }
 
-// CredentialKeys returns the names that serve as IDs for each of the login credentials
-func (a *Auth) CredentialKeys() iter.Seq[Name] {
-	a.mux.Lock()
-	defer a.mux.Unlock()
-	return maps.Keys(a.credentials)
-}
-
-func (a *Auth) LoadToken(secret string) (Credential, error) {
-	hashID := a.tokenCacheID(secret)
-
-	a.mux.Lock()
-	c, ok := a.tokens[hashID]
-	a.mux.Unlock()
-
-	if !ok {
-		return Credential{}, ErrNotFound
-	}
-
-	if c.plain == "" {
-		var err error
-		if c.plain, err = a.maybeDecryptCredential(c); err != nil {
-			return Credential{}, err
-		}
-	}
-
-	if err := c.Verify("", secret); err != nil {
-		return Credential{}, err
-	}
-
-	return c, nil
-}
-
-func (a *Auth) LoadCredential(name Name) (Credential, error) {
-	a.mux.Lock()
-	c, ok := a.credentials[name]
-	a.mux.Unlock()
-	if !ok {
-		return c, ErrNotFound
-	}
-
-	var err error
-	if c.plain, err = a.maybeDecryptCredential(c); err != nil {
-		return c, err
-	}
-
-	return c, nil
-}
-
-func (a *Auth) CacheCredential(c Credential) error {
-	a.mux.Lock()
-	defer a.mux.Unlock()
-
-	name := c.Name
-	if c.Purpose == PurposeToken {
-		name += hashIDSep + c.hashID
-	}
-	a.credentials[name] = c
-
-	if c.Purpose == PurposeToken {
-		a.tokens[c.hashID] = c
-	}
-	return nil
-}
-
-// CredentialKeys returns the names that serve as IDs for each of the login credentials
-func (a *Auth) ServiceAccountKeys() iter.Seq[Purpose] {
-	a.mux.Lock()
-	defer a.mux.Unlock()
-	return maps.Keys(a.serviceAccounts)
-}
-
-func (a *Auth) LoadServiceAccount(purpose Purpose) (Credential, error) {
-	a.mux.Lock()
-	c, ok := a.serviceAccounts[purpose]
-	a.mux.Unlock()
-	if !ok {
-		return c, ErrNotFound
-	}
-
-	var err error
-	if c.plain, err = a.maybeDecryptCredential(c); err != nil {
-		return c, err
-	}
-
-	return c, nil
-}
-
 func (a *Auth) maybeDecryptCredential(c Credential) (secretValue, error) {
 	switch c.Params[0] {
 	case "aes-128-gcm":
@@ -422,13 +331,6 @@ func (a *Auth) gcmDecrypt(aes128key [16]byte, gcmNonce [12]byte, derived []byte)
 	return string(plaintext), nil
 }
 
-func (a *Auth) CacheServiceAccount(c Credential) error {
-	a.mux.Lock()
-	defer a.mux.Unlock()
-	a.serviceAccounts[c.Purpose] = c
-	return nil
-}
-
 // Verify checks Basic Auth credentials, i.e. as decoded from Authorization Basic <base64(user:pass)>.
 // It also supports tokens. In short:
 //   - if <user>:<pass> and 'user' is found, then "login" credentials
@@ -457,26 +359,6 @@ func (a *Auth) Verify(name, secret string) error {
 	}
 
 	return ErrNotFound
-}
-
-// VerifyToken uses a short, but timing-safe hash to find the token,
-// and then verifies it with HMAC
-func (a *Auth) VerifyToken(secret string) error {
-	_, err := a.LoadToken(secret)
-	return err
-}
-
-func (a *Auth) tokenCacheID(secret string) string {
-	key := a.aes128key[:]
-	mac := hmac.New(sha256.New, key)
-	message := []byte(secret)
-	mac.Write(message)
-	// attack collisions are possible, but will still fail to pass HMAC
-	// practical collisions are not possible for the CSV use case
-	nameBytes := mac.Sum(nil)[:6]
-
-	name := base64.RawURLEncoding.EncodeToString(nameBytes)
-	return name
 }
 
 // Verify checks Basic Auth credentials
