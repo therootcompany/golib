@@ -320,7 +320,7 @@ func handleSet(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) {
 	var exists bool
 	if len(*purpose) > 0 && *purpose != "login" {
 		if _, err := auth.LoadServiceAccount(*purpose); err != nil {
-			if !errors.Is(csvauth.ErrNotFound, err) {
+			if !errors.Is(err, csvauth.ErrNotFound) {
 				fmt.Fprintf(os.Stderr, "could not load %s: %v\n", *purpose, err)
 			}
 		} else {
@@ -330,7 +330,7 @@ func handleSet(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) {
 		_ = auth.CacheServiceAccount(*c)
 	} else {
 		if _, err := auth.LoadCredential(name); err != nil {
-			if !errors.Is(csvauth.ErrNotFound, err) {
+			if !errors.Is(err, csvauth.ErrNotFound) {
 				fmt.Fprintf(os.Stderr, "could not load %s: %v\n", name, err)
 			}
 		} else {
