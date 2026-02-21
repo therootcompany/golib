@@ -65,11 +65,12 @@ func NewNamedReadCloser(r io.ReadCloser, name string) NamedReadCloser {
 
 // Auth holds user the encryption key and both login and service account credentials
 type Auth struct {
-	aes128key       [16]byte
-	credentials     map[Name]Credential
-	tokens          map[string]Credential
-	serviceAccounts map[Purpose]Credential
-	mux             sync.Mutex
+	aes128key           [16]byte
+	credentials         map[Name]Credential
+	tokens              map[string]Credential
+	serviceAccounts     map[Purpose]Credential
+	mux                 sync.Mutex
+	BasicAuthTokenNames []string
 }
 
 // New initializes an Auth with an encryption key
@@ -78,10 +79,11 @@ func New(aes128key []byte) *Auth {
 	copy(aes128Arr[:], aes128key)
 
 	return &Auth{
-		aes128key:       aes128Arr,
-		credentials:     map[Name]Credential{},
-		tokens:          map[string]Credential{},
-		serviceAccounts: map[Purpose]Credential{},
+		aes128key:           aes128Arr,
+		credentials:         map[Name]Credential{},
+		tokens:              map[string]Credential{},
+		serviceAccounts:     map[Purpose]Credential{},
+		BasicAuthTokenNames: []string{"", "api", "apikey"},
 	}
 }
 
@@ -307,6 +309,31 @@ func (a *Auth) CredentialKeys() iter.Seq[Name] {
 	return maps.Keys(a.credentials)
 }
 
+func (a *Auth) LoadToken(secret string) (Credential, error) {
+	hashID := a.tokenCacheID(secret)
+
+	a.mux.Lock()
+	c, ok := a.tokens[hashID]
+	a.mux.Unlock()
+
+	if !ok {
+		return Credential{}, ErrNotFound
+	}
+
+	if c.plain == "" {
+		var err error
+		if c.plain, err = a.maybeDecryptCredential(c); err != nil {
+			return Credential{}, err
+		}
+	}
+
+	if err := c.Verify("", secret); err != nil {
+		return Credential{}, err
+	}
+
+	return c, nil
+}
+
 func (a *Auth) LoadCredential(name Name) (Credential, error) {
 	a.mux.Lock()
 	c, ok := a.credentials[name]
@@ -402,35 +429,41 @@ func (a *Auth) CacheServiceAccount(c Credential) error {
 	return nil
 }
 
-// Verify checks Basic Auth credentials
+// Verify checks Basic Auth credentials, i.e. as decoded from Authorization Basic <base64(user:pass)>.
+// It also supports tokens. In short:
+//   - if <user>:<pass> and 'user' is found, then "login" credentials
+//   - if <token>:"" or <allowed-token-name>:<token>, then "token" credentials
+//
+// With a little more nuance and clarity:
+//   - if 'user' is found in the "login" credential store, token is NEVER tried
+//   - either 'user' or 'pass' may be used as the token
+//     (because 'pass' is swapped with 'user' when 'pass' is empty)
+//   - the resulting 'user' must match BasicAuthTokenNames ("", "api", and "apikey" are the defaults)
+//   - then the token is (timing-safe) hashed to check if it exists, and then verified by its algorithm
 func (a *Auth) Verify(name, secret string) error {
 	a.mux.Lock()
 	defer a.mux.Unlock()
 	c, ok := a.credentials[name]
-	if !ok {
-		return ErrNotFound
+	if ok {
+		return c.Verify(name, secret)
 	}
-	return c.Verify(name, secret)
+
+	if secret == "" {
+		secret, name = name, secret
+	}
+	if slices.Contains(a.BasicAuthTokenNames, name) {
+		// this still returns ErrNotFound first
+		return a.VerifyToken(secret)
+	}
+
+	return ErrNotFound
 }
 
+// VerifyToken uses a short, but timing-safe hash to find the token,
+// and then verifies it with HMAC
 func (a *Auth) VerifyToken(secret string) error {
-	hashID := a.tokenCacheID(secret)
-
-	a.mux.Lock()
-	c, ok := a.tokens[hashID]
-	a.mux.Unlock()
-
-	if !ok {
-		return ErrNotFound
-	}
-
-	if c.plain == "" {
-		var err error
-		if c.plain, err = a.maybeDecryptCredential(c); err != nil {
-			return err
-		}
-	}
-	return c.Verify(hashID, secret)
+	_, err := a.LoadToken(secret)
+	return err
 }
 
 func (a *Auth) tokenCacheID(secret string) string {
@@ -438,6 +471,8 @@ func (a *Auth) tokenCacheID(secret string) string {
 	mac := hmac.New(sha256.New, key)
 	message := []byte(secret)
 	mac.Write(message)
+	// attack collisions are possible, but will still fail to pass HMAC
+	// practical collisions are not possible for the CSV use case
 	nameBytes := mac.Sum(nil)[:6]
 
 	name := base64.RawURLEncoding.EncodeToString(nameBytes)
