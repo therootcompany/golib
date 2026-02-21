@@ -29,18 +29,44 @@ var (
 	keyRelPath = filepath.Join(".config", "csvauth", "aes-128.key")
 )
 
+func showHelp() {
+	fmt.Fprintf(os.Stderr, `csvauth - create, update, and verify users, passwords, and tokens
+
+EXAMPLES
+   csvauth store --ask-password 'my-new-user'
+   csvauth verify 'my-new-user'
+
+USAGE
+   csvauth help
+   csvauth store [--help] [FLAGS] <username>
+   csvauth verify [--help] [FLAGS] <username>
+
+`)
+
+	handleSet([]string{"--help"}, nil, nil)
+	fmt.Fprintf(os.Stderr, "\n")
+
+	handleCheck([]string{"--help"}, nil, nil)
+	fmt.Fprintf(os.Stderr, "\n")
+}
+
 func main() {
 	var subcmd string
 	if len(os.Args) > 1 {
 		subcmd = os.Args[1]
 	}
-	if len(os.Args) > 2 {
+	switch len(os.Args) {
+	case 0:
+		panic(errors.New("it's impossible to have 0 arguments"))
+	case 1:
+		fallthrough
+	case 2:
+		os.Args = append(os.Args, "--help")
+	default:
 		switch os.Args[2] {
 		case "", "help":
 			os.Args[2] = "--help"
 		}
-	} else {
-		os.Args = append(os.Args, "--help")
 	}
 
 	homedir, err := os.UserHomeDir()
@@ -93,7 +119,8 @@ func main() {
 	case "check":
 		handleCheck(os.Args[2:], aesKey, csvFile)
 	case "--help", "-help", "help", "":
-		fallthrough
+		showHelp()
+		return
 	default:
 		if len(subcmd) > 0 {
 			fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", subcmd)
@@ -101,13 +128,7 @@ func main() {
 			return
 		}
 
-		fmt.Fprintf(os.Stderr, "USAGE\n\tcsvauth [store|check] [--help] [--algorithm <aes|plain|pbkdf2[,iters[,size[,hash]]]|bcrypt[,cost]] [--ask-password] [--password-file <filepath>] [--roles 'role1,role2'] [--extra '{\"foo\": \"bar\"}'] <username>\n\n")
-
-		handleSet([]string{"--help"}, nil, nil)
-		fmt.Fprintf(os.Stderr, "\n")
-
-		handleCheck([]string{"--help"}, nil, nil)
-		fmt.Fprintf(os.Stderr, "\n")
+		showHelp()
 
 		switch subcmd {
 		case "--help", "-help", "help":
@@ -235,7 +256,7 @@ func handleInit(keyenv, keypath, csvpath string) error {
 func handleSet(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) {
 	storeFlags := flag.NewFlagSet("csvauth-store", flag.ContinueOnError)
 	purpose := storeFlags.String("purpose", "login", "'login' for users, or a service account name, such as 'basecamp_api_key'")
-	roleList := storeFlags.String("roles", "", "a space- or comma-separated list of roles (defined by you), such as 'triage audit'")
+	roleList := storeFlags.String("roles", "", "a comma- or space-separated list of roles (defined by you), such as 'triage audit'")
 	extra := storeFlags.String("extra", "", "free form data to retrieve with the user (hint: JSON might be nice)")
 	algorithm := storeFlags.String("algorithm", "", "Hash algorithm: aes, plain, pbkdf2[,iters[,size[,hash]]], or bcrypt[,cost]")
 	askPassword := storeFlags.Bool("ask-password", false, "Read password from stdin")
