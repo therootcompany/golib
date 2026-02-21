@@ -19,11 +19,25 @@ const DefaultPurpose = "login"
 type Purpose = string
 type Name = string
 
+type secretValue string
+
+func (s secretValue) String() string {
+	return "[redacted]"
+}
+
+func (s secretValue) GoString() string {
+	return `"[redacted]"`
+}
+
+func (s secretValue) MarshalText() string {
+	return s.String()
+}
+
 // Credential represents a row in the CSV file
 type Credential struct {
 	Purpose Purpose
 	Name    Name
-	plain   string
+	plain   secretValue
 	Params  []string
 	Salt    []byte
 	Derived []byte
@@ -32,7 +46,7 @@ type Credential struct {
 }
 
 func (c Credential) Secret() string {
-	return c.plain
+	return string(c.plain)
 }
 
 func FromRecord(record []string) (Credential, error) {
@@ -94,7 +108,7 @@ func FromFields(purpose, name, paramList, saltBase64, derived, roleList, extra s
 			return credential, fmt.Errorf("invalid plain parameters %#v", credential.Params)
 		}
 
-		credential.plain = derived
+		credential.plain = secretValue(derived)
 		h := sha256.Sum256([]byte(derived))
 		credential.Derived = h[:]
 	case "pbkdf2":
@@ -152,7 +166,7 @@ func (c Credential) ToRecord() []string {
 		derived = base64.RawURLEncoding.EncodeToString(c.Derived)
 	case "plain":
 		salt = ""
-		derived = c.plain
+		derived = string(c.plain)
 	case "pbkdf2":
 		salt = base64.RawURLEncoding.EncodeToString(c.Salt)
 		derived = base64.RawURLEncoding.EncodeToString(c.Derived)

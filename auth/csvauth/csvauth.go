@@ -150,7 +150,7 @@ func (a *Auth) NewCredential(purpose, name, secret string, params []string, role
 			fmt.Fprintf(os.Stderr, "invalid plain algorithm format: %q\n", strings.Join(params, " "))
 			os.Exit(1)
 		}
-		c.plain = secret
+		c.plain = secretValue(secret)
 
 		c.Params = []string{"plain"}
 		h := sha256.Sum256([]byte(secret))
@@ -171,7 +171,7 @@ func (a *Auth) NewCredential(purpose, name, secret string, params []string, role
 		var err error
 		var salt [12]byte
 		copy(salt[:], c.Salt)
-		c.plain = secret
+		c.plain = secretValue(secret)
 		c.Derived, err = gcmEncrypt(a.aes128key, salt, secret)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "could not aes-128-gcm encrypt secret: %v\n", err)
@@ -332,12 +332,13 @@ func (a *Auth) LoadServiceAccount(purpose Purpose) (Credential, error) {
 	return c, nil
 }
 
-func (a *Auth) maybeDecryptCredential(c Credential) (string, error) {
+func (a *Auth) maybeDecryptCredential(c Credential) (secretValue, error) {
 	switch c.Params[0] {
 	case "aes-128-gcm":
 		var salt [12]byte
 		copy(salt[:], c.Salt)
-		return a.gcmDecrypt(a.aes128key, salt, c.Derived)
+		plain, err := a.gcmDecrypt(a.aes128key, salt, c.Derived)
+		return secretValue(plain), err
 	default:
 		break
 	}
