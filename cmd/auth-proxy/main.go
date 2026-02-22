@@ -237,7 +237,8 @@ func (cli *MainConfig) newAuthProxyHandler(targetURL string) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !cli.authenticate(r) {
-			// w.Header().Set("WWW-Authenticate", `Basic realm="API", Bearer`)
+			// TODO allow --realm for `WWW-Authenticate: Basic realm="My Application"`
+			w.Header().Set("WWW-Authenticate", `Basic`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
