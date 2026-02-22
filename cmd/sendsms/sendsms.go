@@ -95,6 +95,18 @@ func main() {
 		username: os.Getenv("SMSGW_USERNAME"),
 		password: os.Getenv("SMSGW_PASSWORD"),
 	}
+	if os.Getenv("SMSGW_BASEURL") == "" {
+		fmt.Fprintf(os.Stderr, "\n%sError%s: SMSGW_BASEURL is not set\n", textErr, textReset)
+		os.Exit(1)
+	}
+	if os.Getenv("SMSGW_USERNAME") == "" {
+		fmt.Fprintf(os.Stderr, "\n%sError%s: SMSGW_USERNAME is not set\n", textErr, textReset)
+		os.Exit(1)
+	}
+	if os.Getenv("SMSGW_PASSWORD") == "" {
+		fmt.Fprintf(os.Stderr, "\n%sError%s: SMSGW_PASSWORD is not set\n", textErr, textReset)
+		os.Exit(1)
+	}
 
 	// TODO add days of week
 	// TODO add start time zone and end time zone for whole country (e.g. 9am ET to 8pm PT)
@@ -305,7 +317,7 @@ func main() {
 		}
 
 		if i > 0 {
-			if cfg.dryRun || cfg.printCurl {
+			if cfg.dryRun {
 				fmt.Printf("sleep %s\n\n", delay.Round(time.Millisecond))
 			} else {
 				time.Sleep(delay)

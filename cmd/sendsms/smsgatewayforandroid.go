@@ -43,10 +43,6 @@ func (s *SMSGatewayForAndroid) CurlString(number, message string) string {
 }
 
 func (s *SMSGatewayForAndroid) Send(number, message string) error {
-	if true {
-		return fmt.Errorf("didn't send")
-	}
-
 	number = cleanPhoneNumber(number)
 	if len(number) == 0 {
 		panic(fmt.Errorf("non-sanitized number '%s'", number))
