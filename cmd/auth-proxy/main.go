@@ -89,7 +89,10 @@ func main() {
 
 	// Override defaults from env
 	if v := os.Getenv("AUTHPROXY_PORT"); v != "" {
-		fmt.Sscanf(v, "%d", &cli.Port)
+		if _, err := fmt.Sscanf(v, "%d", &cli.Port); err != nil {
+			fmt.Fprintf(os.Stderr, "invalid AUTHPROXY_PORT value: %s\n", v)
+			os.Exit(1)
+		}
 	}
 	if v := os.Getenv("AUTHPROXY_ADDRESS"); v != "" {
 		cli.Address = v
@@ -129,7 +132,7 @@ func main() {
 		}
 		if arg == "help" || arg == "-help" || arg == "--help" {
 			printVersion(os.Stdout)
-			fmt.Fprintln(os.Stdout, "")
+			_, _ = fmt.Fprintln(os.Stdout, "")
 			fs.SetOutput(os.Stdout)
 			fs.Usage()
 			os.Exit(0)
@@ -173,7 +176,7 @@ func run(cli *MainConfig) {
 	if err != nil {
 		log.Fatalf("Failed to open credentials file %q: %v", cli.CredentialsPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	auth = csvauth.New(aesKey)
 	if err := auth.LoadCSV(f, '\t'); err != nil {
@@ -246,7 +249,6 @@ func (cli *MainConfig) authenticate(r *http.Request) bool {
 	// 1. Try Basic Auth first (cleanest path)
 	username, password, ok := r.BasicAuth()
 	if ok {
-		fmt.Println("DEBUG Basic Auth", username, password)
 		if auth.Verify(username, password) != nil {
 			// Authorization: Basic <Auth> exists and is not valid
 			return false
@@ -259,7 +261,6 @@ func (cli *MainConfig) authenticate(r *http.Request) bool {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader != "" {
 			parts := strings.SplitN(authHeader, " ", 2)
-			fmt.Println("DEBUG Authorization", parts)
 			if len(parts) == 2 {
 				if cli.AuthorizationHeaderSchemes[0] == "*" ||
 					slices.Contains(cli.AuthorizationHeaderSchemes, parts[0]) {
@@ -277,7 +278,6 @@ func (cli *MainConfig) authenticate(r *http.Request) bool {
 	// 3. API-Key / X-API-Key headers
 	for _, h := range cli.TokenHeaderNames {
 		if key := r.Header.Get(h); key != "" {
-			fmt.Println("DEBUG Token Header", h, key)
 			if err := auth.VerifyToken(key); err != nil {
 				// <TokenHeader>: <Token> exists and is not valid
 				return false
@@ -291,7 +291,7 @@ func (cli *MainConfig) authenticate(r *http.Request) bool {
 
 // peekOption looks for a flag value without parsing the full set
 func peekOption(args []string, names []string, def string) string {
-	for i := 0; i < len(args); i++ {
+	for i := range len(args) {
 		for _, name := range names {
 			if args[i] == name {
 				if i+1 < len(args) {
