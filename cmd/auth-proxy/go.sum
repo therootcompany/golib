@@ -1,0 +1,12 @@
+github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
+github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
+github.com/therootcompany/golib/auth v1.0.0 h1:17hfwcJO/Efc22/8RcCTKUD49mhCc5tyoHiKonA3Slg=
+github.com/therootcompany/golib/auth v1.0.0/go.mod h1:DSw8llmDkMtvMZWrzrTRtcaLPpPMsT6Sg+qwGf5O2U8=
+github.com/therootcompany/golib/auth/csvauth v1.2.0 h1:EgCT0pft4AhJz1omOntca5axv/B/1686wGIOgAS1++k=
+github.com/therootcompany/golib/auth/csvauth v1.2.0/go.mod h1:e4kjRLWD7DWsuUT8+5MvPSYygXY6Is2UVeA9UpDllWU=
+github.com/therootcompany/golib/auth/csvauth v1.2.1 h1:iy6S69nj/+Us0nx5pXke7SevgH1YaEM1vgbne7bnq70=
+github.com/therootcompany/golib/auth/csvauth v1.2.1/go.mod h1:e4kjRLWD7DWsuUT8+5MvPSYygXY6Is2UVeA9UpDllWU=
+github.com/therootcompany/golib/auth/csvauth v1.2.2 h1:t14Y8fSPhUZS6J+gRj0EFjkfE2JdIq93vOiKYcfItE8=
+github.com/therootcompany/golib/auth/csvauth v1.2.2/go.mod h1://Iy5nbRa/bSndWa8b/NM4jclPVgkFWWhYUH6Ppelz0=
+golang.org/x/crypto v0.42.0 h1:chiH31gIWm57EkTXpwnqf8qeuMUi0yekh6mT2AvFlqI=
+golang.org/x/crypto v0.42.0/go.mod h1:4+rDnOTJhQCx2q7/j6rAN5XDw8kPjeaXEUR2eL94ix8=
