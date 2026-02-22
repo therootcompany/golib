@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+set -u
+
+g_csv="${1:-}"
+g_dir=$(dirname "${g_csv}")
+g_rnd="${g_csv}"
+g_rnd=$(basename "${g_rnd}" ".csv")
+g_rnd="${g_dir}/${g_rnd}.rnd.csv"
+
+fn_help() {
+   echo "USAGE"
+   echo "   # sort -R ./list.csv > ./list.rnd.csv"
+   echo "   ./randomize-csv ./list.csv"
+}
+
+main() {
+   if test -z "${g_csv}" || ! test -s "${g_csv}"; then
+      >&2 fn_help
+      return 1
+   fi
+
+   if test -s "${g_rnd}"; then
+      {
+         echo "${g_rnd} already exists"
+      } >&2
+      return 1
+   fi
+
+   head -n 1 "${g_csv}" > "${g_rnd}"
+   tail -n +2 "${g_csv}" | sort -R >> "${g_rnd}"
+   {
+      echo "wrote ${g_rnd}"
+   } >&2
+}
+
+main
