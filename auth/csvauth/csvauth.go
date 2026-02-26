@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/hex"
 	"errors"
@@ -65,6 +67,7 @@ func NewNamedReadCloser(r io.ReadCloser, name string) NamedReadCloser {
 type Auth struct {
 	aes128key           [16]byte
 	credentials         map[Name]Credential
+	hashedCredentials   map[string]Credential
 	tokens              map[string]Credential
 	serviceAccounts     map[Purpose]Credential
 	mux                 sync.Mutex
@@ -79,6 +82,7 @@ func New(aes128key []byte) *Auth {
 	return &Auth{
 		aes128key:           aes128Arr,
 		credentials:         map[Name]Credential{},
+		hashedCredentials:   map[string]Credential{},
 		tokens:              map[string]Credential{},
 		serviceAccounts:     map[Purpose]Credential{},
 		BasicAuthTokenNames: []string{"", "api", "apikey"},
@@ -140,9 +144,16 @@ func (a *Auth) LoadCSV(f NamedReadCloser, comma rune) error {
 			}
 
 			if _, ok := a.credentials[name]; ok {
-				fmt.Fprintf(os.Stderr, "overwriting cache of previous value for %s: %s\n", credential.Purpose, credential.Name)
+				fmt.Fprintf(os.Stderr, "overwriting plain cache of previous value for %s: %s\n", credential.Purpose, credential.Name)
 			}
 			a.credentials[name] = credential
+
+			nameID := a.nameCacheID(name)
+			if _, ok := a.hashedCredentials[nameID]; ok {
+				fmt.Fprintf(os.Stderr, "overwriting hashed cache of previous value for %s: %s\n", credential.Purpose, credential.Name)
+			}
+			a.hashedCredentials[nameID] = credential
+
 			if credential.Purpose == PurposeToken {
 				if _, ok := a.tokens[credential.hashID]; ok {
 					fmt.Fprintf(os.Stderr, "overwriting cache of previous value for %s: %s\n", credential.Purpose, credential.Name)
@@ -364,7 +375,8 @@ func (a *Auth) Authenticate(name, secret string) (*Credential, error) {
 
 	a.mux.Lock()
 	defer a.mux.Unlock()
-	c, ok := a.credentials[name]
+	nameID := a.nameCacheID(name)
+	c, ok := a.hashedCredentials[nameID]
 	if ok {
 		if err := c.Verify(name, secret); err != nil {
 			return nil, err
@@ -437,4 +449,17 @@ func (c Credential) Verify(_, secret string) error {
 		return nil
 	}
 	return ErrUnauthorized
+}
+
+func (a *Auth) cacheID(s string, n int) string {
+	key := a.aes128key[:]
+	mac := hmac.New(sha256.New, key)
+	message := []byte(s)
+	mac.Write(message)
+	// attack collisions are possible, but will still fail to pass HMAC
+	// practical collisions are not possible for the CSV use case
+	nameBytes := mac.Sum(nil)[:n]
+
+	name := base64.RawURLEncoding.EncodeToString(nameBytes)
+	return name
 }

@@ -33,9 +33,10 @@ func TestCredentialCreationAndVerification(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/%s", tc.purpose, tc.name), func(t *testing.T) {
 			var key [16]byte
 			a := &Auth{
-				aes128key:       key,
-				credentials:     make(map[Name]Credential),
-				serviceAccounts: make(map[Purpose]Credential),
+				aes128key:         key,
+				credentials:       make(map[Name]Credential),
+				hashedCredentials: make(map[string]Credential),
+				serviceAccounts:   make(map[Purpose]Credential),
 			}
 			secret := tc.extra
 			c := a.NewCredential(tc.purpose, tc.name, secret, tc.params, tc.roles, tc.extra)

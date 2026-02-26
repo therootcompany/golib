@@ -5,6 +5,8 @@ import (
 	"maps"
 )
 
+const nameHashLen = 16
+
 // CredentialKeys returns the names that serve as IDs for each of the login credentials
 func (a *Auth) CredentialKeys() iter.Seq[Name] {
 	a.mux.Lock()
@@ -13,8 +15,10 @@ func (a *Auth) CredentialKeys() iter.Seq[Name] {
 }
 
 func (a *Auth) LoadCredential(name Name) (Credential, error) {
+	nameID := a.nameCacheID(name)
+
 	a.mux.Lock()
-	c, ok := a.credentials[name]
+	c, ok := a.hashedCredentials[nameID]
 	a.mux.Unlock()
 	if !ok {
 		return c, ErrNotFound
@@ -29,17 +33,24 @@ func (a *Auth) LoadCredential(name Name) (Credential, error) {
 }
 
 func (a *Auth) CacheCredential(c Credential) error {
-	a.mux.Lock()
-	defer a.mux.Unlock()
-
 	name := c.Name
 	if c.Purpose == PurposeToken {
 		name += hashIDSep + c.hashID
 	}
-	a.credentials[name] = c
+	nameID := a.nameCacheID(name)
 
+	a.mux.Lock()
+	defer a.mux.Unlock()
+	a.credentials[name] = c
 	if c.Purpose == PurposeToken {
 		a.tokens[c.hashID] = c
+	} else {
+		a.hashedCredentials[nameID] = c
 	}
+
 	return nil
+}
+
+func (a *Auth) nameCacheID(name string) string {
+	return a.cacheID(name, nameHashLen)
 }

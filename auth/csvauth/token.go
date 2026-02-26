@@ -1,10 +1,6 @@
 package csvauth
 
-import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-)
+const tokenHashLen = 6
 
 // Provided for consistency. Often better to use Authenticate("", token)
 func (a *Auth) LoadToken(secret string) (Credential, error) {
@@ -49,14 +45,5 @@ func (a *Auth) loadAndVerifyToken(secret string) (*Credential, error) {
 }
 
 func (a *Auth) tokenCacheID(secret string) string {
-	key := a.aes128key[:]
-	mac := hmac.New(sha256.New, key)
-	message := []byte(secret)
-	mac.Write(message)
-	// attack collisions are possible, but will still fail to pass HMAC
-	// practical collisions are not possible for the CSV use case
-	nameBytes := mac.Sum(nil)[:6]
-
-	name := base64.RawURLEncoding.EncodeToString(nameBytes)
-	return name
+	return a.cacheID(secret, tokenHashLen)
 }
