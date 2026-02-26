@@ -9,6 +9,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
@@ -23,6 +24,7 @@ import (
 )
 
 var ErrNotFound = errors.New("not found")
+var ErrKeySize = errors.New("invalid key size")
 var ErrUnauthorized = errors.New("unauthorized")
 var ErrUnknownAlgorithm = errors.New("unknown algorithm")
 var ErrLockedCredential = errors.New("credential is locked")
@@ -81,6 +83,18 @@ func New(aes128key []byte) *Auth {
 		serviceAccounts:     map[Purpose]Credential{},
 		BasicAuthTokenNames: []string{"", "api", "apikey"},
 	}
+}
+
+// MustNewFromHex parses a hex string and uses the first 16 bytes to construct a key
+func MustNewFromHex(aes128key string) *Auth {
+	bytes, err := hex.DecodeString(aes128key)
+	if err != nil {
+		panic(err)
+	}
+	if len(bytes) < 16 {
+		panic(fmt.Errorf("%w: %d < 16", ErrKeySize, len(bytes)))
+	}
+	return New(bytes)
 }
 
 // Load reads a credentials CSV from the given NamedReadCloser (e.g. file, wrapped http request)
@@ -331,10 +345,11 @@ func (a *Auth) gcmDecrypt(aes128key [16]byte, gcmNonce [12]byte, derived []byte)
 	return string(plaintext), nil
 }
 
-// Verify checks Basic Auth credentials, i.e. as decoded from Authorization Basic <base64(user:pass)>.
-// It also supports tokens. In short:
-//   - if <user>:<pass> and 'user' is found, then "login" credentials
-//   - if <token>:"" or <allowed-token-name>:<token>, then "token" credentials
+// Authenticate verifies credentials - either Basic Auth style (user/pass) or Bearer Token style.
+//
+// In short:
+//   - if <user>:<pass> and 'user' is found, then "login" (basic auth) credentials
+//   - if <token>:"" or <allowed-token-name>:<token>, then "token" (bearer) credentials
 //
 // With a little more nuance and clarity:
 //   - if 'user' is found in the "login" credential store, token is NEVER tried
@@ -342,12 +357,15 @@ func (a *Auth) gcmDecrypt(aes128key [16]byte, gcmNonce [12]byte, derived []byte)
 //     (because 'pass' is swapped with 'user' when 'pass' is empty)
 //   - the resulting 'user' must match BasicAuthTokenNames ("", "api", and "apikey" are the defaults)
 //   - then the token is (timing-safe) hashed to check if it exists, and then verified by its algorithm
-func (a *Auth) Verify(name, secret string) error {
+func (a *Auth) Authenticate(name, secret string) (*Credential, error) {
 	a.mux.Lock()
 	defer a.mux.Unlock()
 	c, ok := a.credentials[name]
 	if ok {
-		return c.Verify(name, secret)
+		if err := c.Verify(name, secret); err != nil {
+			return nil, err
+		}
+		return &c, nil
 	}
 
 	if secret == "" {
@@ -355,10 +373,16 @@ func (a *Auth) Verify(name, secret string) error {
 	}
 	if slices.Contains(a.BasicAuthTokenNames, name) {
 		// this still returns ErrNotFound first
-		return a.VerifyToken(secret)
+		return a.loadAndVerifyToken(secret)
 	}
 
-	return ErrNotFound
+	return nil, ErrNotFound
+}
+
+// Same as Login, but without returning the credential
+func (a *Auth) Verify(name, secret string) error {
+	_, err := a.Authenticate(name, secret)
+	return err
 }
 
 // Verify checks Basic Auth credentials
