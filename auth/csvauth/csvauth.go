@@ -368,7 +368,7 @@ func (a *Auth) gcmDecrypt(aes128key [16]byte, gcmNonce [12]byte, derived []byte)
 //     (because 'pass' is swapped with 'user' when 'pass' is empty)
 //   - the resulting 'user' must match BasicAuthTokenNames ("", "api", and "apikey" are the defaults)
 //   - then the token is (timing-safe) hashed to check if it exists, and then verified by its algorithm
-func (a *Auth) Authenticate(name, secret string) (*Credential, error) {
+func (a *Auth) Authenticate(name, secret string) (Principle, error) {
 	if name == "" && secret == "" {
 		return nil, ErrUnauthorized
 	}

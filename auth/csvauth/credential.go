@@ -14,6 +14,11 @@ type BasicAuthVerifier interface {
 	Verify(string, string) error
 }
 
+type Principle interface {
+	ID() string
+	Permissions() []string
+}
+
 const (
 	// deprecated, misspelling of PurposeDefault
 	DefaultPurpose = "login"
@@ -50,6 +55,17 @@ type Credential struct {
 	Roles   []string
 	Extra   string
 	hashID  string
+}
+
+func (c *Credential) ID() string {
+	if c.Purpose == PurposeToken {
+		return c.Name + hashIDSep + c.hashID
+	}
+	return c.Name
+}
+
+func (c *Credential) Permissions() []string {
+	return c.Roles
 }
 
 func (c Credential) Secret() string {
@@ -215,3 +231,6 @@ func (c Credential) ToRecord() []string {
 	record := []string{purpose, name, paramList, salt, derived, strings.Join(c.Roles, " "), c.Extra}
 	return record
 }
+
+var _ BasicAuthVerifier = (*Credential)(nil)
+var _ Principle = (*Credential)(nil)
