@@ -358,6 +358,10 @@ func (a *Auth) gcmDecrypt(aes128key [16]byte, gcmNonce [12]byte, derived []byte)
 //   - the resulting 'user' must match BasicAuthTokenNames ("", "api", and "apikey" are the defaults)
 //   - then the token is (timing-safe) hashed to check if it exists, and then verified by its algorithm
 func (a *Auth) Authenticate(name, secret string) (*Credential, error) {
+	if name == "" && secret == "" {
+		return nil, ErrUnauthorized
+	}
+
 	a.mux.Lock()
 	defer a.mux.Unlock()
 	c, ok := a.credentials[name]
