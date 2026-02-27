@@ -8,15 +8,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/therootcompany/golib/auth"
 )
 
 type BasicAuthVerifier interface {
 	Verify(string, string) error
-}
-
-type Principle interface {
-	ID() string
-	Permissions() []string
 }
 
 const (
@@ -233,4 +230,4 @@ func (c Credential) ToRecord() []string {
 }
 
 var _ BasicAuthVerifier = (*Credential)(nil)
-var _ Principle = (*Credential)(nil)
+var _ auth.BasicPrinciple = (*Credential)(nil)

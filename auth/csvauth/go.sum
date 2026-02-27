@@ -1,2 +1,4 @@
+github.com/therootcompany/golib/auth v1.0.0 h1:17hfwcJO/Efc22/8RcCTKUD49mhCc5tyoHiKonA3Slg=
+github.com/therootcompany/golib/auth v1.0.0/go.mod h1:DSw8llmDkMtvMZWrzrTRtcaLPpPMsT6Sg+qwGf5O2U8=
 golang.org/x/crypto v0.42.0 h1:chiH31gIWm57EkTXpwnqf8qeuMUi0yekh6mT2AvFlqI=
 golang.org/x/crypto v0.42.0/go.mod h1:4+rDnOTJhQCx2q7/j6rAN5XDw8kPjeaXEUR2eL94ix8=

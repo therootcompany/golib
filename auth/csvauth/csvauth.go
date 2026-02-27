@@ -23,6 +23,8 @@ import (
 	"sync"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/therootcompany/golib/auth"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -368,7 +370,7 @@ func (a *Auth) gcmDecrypt(aes128key [16]byte, gcmNonce [12]byte, derived []byte)
 //     (because 'pass' is swapped with 'user' when 'pass' is empty)
 //   - the resulting 'user' must match BasicAuthTokenNames ("", "api", and "apikey" are the defaults)
 //   - then the token is (timing-safe) hashed to check if it exists, and then verified by its algorithm
-func (a *Auth) Authenticate(name, secret string) (Principle, error) {
+func (a *Auth) Authenticate(name, secret string) (auth.BasicPrinciple, error) {
 	if name == "" && secret == "" {
 		return nil, ErrUnauthorized
 	}
@@ -463,3 +465,5 @@ func (a *Auth) cacheID(s string, n int) string {
 	name := base64.RawURLEncoding.EncodeToString(nameBytes)
 	return name
 }
+
+var _ auth.BasicAuthenticator = (*Auth)(nil)
