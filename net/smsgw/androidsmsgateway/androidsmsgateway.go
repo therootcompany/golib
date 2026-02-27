@@ -1,4 +1,4 @@
-package main
+package androidsmsgateway
 
 import (
 	"bytes"
@@ -7,12 +7,24 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/therootcompany/golib/net/smsgw"
 )
 
 type SMSGatewayForAndroid struct {
 	baseURL  string
 	username string
 	password string
+}
+
+type Payload struct {
+	TextMessage  TextMessage `json:"textMessage"`
+	PhoneNumbers []string    `json:"phoneNumbers"`
+	Priority     int         `json:"priority,omitempty"`
+}
+
+type TextMessage struct {
+	Text string `json:"text"`
 }
 
 func New(baseURL, username, password string) *SMSGatewayForAndroid {
@@ -47,7 +59,7 @@ func (s *SMSGatewayForAndroid) Send(number, message string) error {
 		return fmt.Errorf("didn't send")
 	}
 
-	number = cleanPhoneNumber(number)
+	number = smsgw.StripFormatting(number)
 	if len(number) == 0 {
 		panic(fmt.Errorf("non-sanitized number '%s'", number))
 	}
