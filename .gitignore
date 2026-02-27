@@ -1,3 +1,5 @@
+credentials.tsv
+
 .env
 *.env
 env.*
