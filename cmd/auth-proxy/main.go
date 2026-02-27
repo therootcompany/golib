@@ -293,8 +293,8 @@ func run(cli *MainConfig) {
 		}
 		if usableRoles == 0 {
 			fmt.Fprintf(os.Stderr, "Current credentials, tokens, and permissions:\n")
-			fmt.Fprintf(os.Stderr, "    %s\t%s\t%s\n", u.Purpose, u.ID(), strings.Join(u.Roles, " "))
 		}
+		fmt.Fprintf(os.Stderr, "    %s\t%s\t%s\n", u.Purpose, u.ID(), strings.Join(u.Roles, " "))
 		usableRoles += 1
 	}
 
