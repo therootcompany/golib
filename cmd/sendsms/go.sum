@@ -1,2 +1,4 @@
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
+github.com/therootcompany/golib/http/androidsmsgateway v0.0.0-20260223054429-c8f26aca7c6d h1:jKf9QQUiGAHsrjkfpoo4FTQnFJu4UkDkPreZLll7tdE=
+github.com/therootcompany/golib/http/androidsmsgateway v0.0.0-20260223054429-c8f26aca7c6d/go.mod h1:2O9+uXPc1VAJvveK9eqm9X4e4pTJmFWV6vtJa3sI/CA=

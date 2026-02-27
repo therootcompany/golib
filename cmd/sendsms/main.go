@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/therootcompany/golib/http/androidsmsgateway"
 )
 
 type SMSSender interface {
@@ -29,16 +30,6 @@ type SMSMessage struct {
 	Template string
 	Vars     map[string]string
 	Text     string
-}
-
-type TextMessage struct {
-	Text string `json:"text"`
-}
-
-type Payload struct {
-	TextMessage  TextMessage `json:"textMessage"`
-	PhoneNumbers []string    `json:"phoneNumbers"`
-	Priority     int         `json:"priority,omitempty"`
 }
 
 var ErrInvalidClockFormat = fmt.Errorf("invalid clock time, ex: '06:00 PM', '6pm', or '18:00' (space and case insensitive)")
@@ -90,11 +81,11 @@ func main() {
 	_ = godotenv.Load("./.env")
 
 	// note: we could also use twilio, or whatever
-	var sender SMSSender = &SMSGatewayForAndroid{
-		baseURL:  os.Getenv("SMSGW_BASEURL"),
-		username: os.Getenv("SMSGW_USERNAME"),
-		password: os.Getenv("SMSGW_PASSWORD"),
-	}
+	var sender SMSSender = androidsmsgateway.New(
+		os.Getenv("SMSGW_BASEURL"),
+		os.Getenv("SMSGW_USERNAME"),
+		os.Getenv("SMSGW_PASSWORD"),
+	)
 	if os.Getenv("SMSGW_BASEURL") == "" {
 		fmt.Fprintf(os.Stderr, "\n%sError%s: SMSGW_BASEURL is not set\n", textErr, textReset)
 		os.Exit(1)

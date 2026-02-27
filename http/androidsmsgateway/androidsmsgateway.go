@@ -1,4 +1,4 @@
-package main
+package androidsmsgateway
 
 import (
 	"bytes"
@@ -9,24 +9,36 @@ import (
 	"strings"
 )
 
-type SMSGatewayForAndroid struct {
+type AndroidSMSGateway struct {
 	baseURL  string
 	username string
 	password string
 }
 
-func New(baseURL, username, password string) *SMSGatewayForAndroid {
-	return &SMSGatewayForAndroid{
+func New(baseURL, username, password string) *AndroidSMSGateway {
+	return &AndroidSMSGateway{
 		baseURL:  baseURL,
 		username: username,
 		password: password,
 	}
 }
 
-func (s *SMSGatewayForAndroid) CurlString(number, message string) string {
+type MessagePayload struct {
+	TextMessage struct {
+		Text string `json:"text"`
+	} `json:"textMessage"`
+	PhoneNumbers []string `json:"phoneNumbers"`
+	Priority     int      `json:"priority,omitempty"`
+}
+
+func (s *AndroidSMSGateway) CurlString(number, message string) string {
 	url := s.baseURL + "/messages"
-	payload := Payload{
-		TextMessage:  TextMessage{Text: message},
+	payload := MessagePayload{
+		TextMessage: struct {
+			Text string `json:"text"`
+		}{
+			Text: message,
+		},
 		PhoneNumbers: []string{number},
 		Priority:     65,
 	}
@@ -42,15 +54,19 @@ func (s *SMSGatewayForAndroid) CurlString(number, message string) string {
 		"   --data-binary '" + escapedBody + "'"
 }
 
-func (s *SMSGatewayForAndroid) Send(number, message string) error {
+func (s *AndroidSMSGateway) Send(number, message string) error {
 	number = cleanPhoneNumber(number)
 	if len(number) == 0 {
 		panic(fmt.Errorf("non-sanitized number '%s'", number))
 	}
 
 	url := s.baseURL + "/messages"
-	payload := Payload{
-		TextMessage:  TextMessage{Text: message},
+	payload := MessagePayload{
+		TextMessage: struct {
+			Text string `json:"text"`
+		}{
+			Text: message,
+		},
 		PhoneNumbers: []string{number},
 		Priority:     65,
 	}
@@ -75,10 +91,22 @@ func (s *SMSGatewayForAndroid) Send(number, message string) error {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed sending message to '%s': %d %s\n",
+		return fmt.Errorf("failed sending message to '%s': %d %s",
 			number, resp.StatusCode, string(body),
 		)
 	}
 
 	return nil
+}
+
+// we're not just skipping symbols,
+// we're also eliminating non-printing characters copied from HTML and such
+func cleanPhoneNumber(raw string) string {
+	var cleaned strings.Builder
+	for i, char := range raw {
+		if (i == 0 && char == '+') || (char >= '0' && char <= '9') {
+			cleaned.WriteRune(char)
+		}
+	}
+	return cleaned.String()
 }
