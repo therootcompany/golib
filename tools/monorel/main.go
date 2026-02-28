@@ -1,20 +1,21 @@
 // monorel: Monorepo Release Tool
 //
-// Pass any number of paths to Go main packages.  monorel walks up from each
+// Pass any number of paths to Go main packages. monorel walks up from each
 // path to find its go.mod (stopping at .git so it never crosses the repo
-// boundary), groups binaries by their module root, writes a .goreleaser.yaml
-// for each module, and prints a ready-to-review bash release script.
+// boundary), groups binaries by their module root, and performs the requested
+// subcommand.
 //
-// Usage:
+// Subcommands:
 //
-//	# From within a module directory:
-//	monorel .                                  # single binary at root
-//	monorel ./cmd/foo ./cmd/bar ./cmd/baz      # multiple binaries
+//	monorel release <binary-path>...
+//	    Generate .goreleaser.yaml and print a ready-to-review bash release script.
 //
-//	# From any ancestor directory (e.g. the repo root):
-//	monorel io/transform/gsheet2csv/cmd/gsheet2csv \
-//	        io/transform/gsheet2csv/cmd/gsheet2tsv \
-//	        auth/csvauth/cmd/csvauth
+//	monorel bump [-m major|minor|patch] <binary-path>...
+//	    Create a new semver git tag at HEAD for each module (default: patch).
+//
+//	monorel init <binary-path>...
+//	    Write .goreleaser.yaml, commit it, and run bump patch for each module
+//	    (processed in the order their paths appear on the command line).
 //
 // Install:
 //
@@ -22,6 +23,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"go/parser"
 	"go/token"
@@ -51,30 +53,76 @@ type binary struct {
 
 // moduleGroup is all the binaries that share one module root.
 type moduleGroup struct {
-	root string   // absolute path to the directory containing go.mod
+	root string // absolute path to the directory containing go.mod
 	bins []binary
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────
 
 func main() {
-	args := os.Args[1:]
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: monorel <binary-path> [<binary-path>...]")
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+	switch os.Args[1] {
+	case "release":
+		runRelease(os.Args[2:])
+	case "bump":
+		runBump(os.Args[2:])
+	case "init":
+		runInit(os.Args[2:])
+	case "help", "--help", "-h":
+		usage()
+	default:
+		fmt.Fprintf(os.Stderr, "monorel: unknown subcommand %q\n", os.Args[1])
+		fmt.Fprintln(os.Stderr, "Run 'monorel help' for usage.")
+		os.Exit(2)
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "monorel: Monorepo Release Tool")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Usage:")
+	fmt.Fprintln(os.Stderr, "  monorel <subcommand> [options] <binary-path>...")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Subcommands:")
+	fmt.Fprintln(os.Stderr, "  release   Write .goreleaser.yaml and print a bash release script")
+	fmt.Fprintln(os.Stderr, "  bump      Create a new semver tag at HEAD (default: patch)")
+	fmt.Fprintln(os.Stderr, "  init      Write .goreleaser.yaml, commit it, and bump patch")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Each <binary-path> points to a Go main package directory. monorel")
+	fmt.Fprintln(os.Stderr, "walks up from each path to find the module root (go.mod), stopping")
+	fmt.Fprintln(os.Stderr, "at the repository boundary (.git directory).")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Run 'monorel <subcommand> --help' for subcommand-specific usage.")
+}
+
+// ── Subcommand: release ────────────────────────────────────────────────────
+
+func runRelease(args []string) {
+	fs := flag.NewFlagSet("monorel release", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: monorel release <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "Each path points to a Go main package (directory).")
-		fmt.Fprintln(os.Stderr, "The module root (go.mod) is found by walking up from each path,")
-		fmt.Fprintln(os.Stderr, "stopping at .git so it never crosses the repository boundary.")
+		fmt.Fprintln(os.Stderr, "Writes .goreleaser.yaml next to each module's go.mod and prints a")
+		fmt.Fprintln(os.Stderr, "ready-to-review bash release script to stdout.")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Examples:")
-		fmt.Fprintln(os.Stderr, "  monorel .                                  # single binary at module root")
-		fmt.Fprintln(os.Stderr, "  monorel ./cmd/foo ./cmd/bar                # multiple binaries, same module")
-		fmt.Fprintln(os.Stderr, "  monorel io/transform/gsheet2csv/cmd/foo \\  # from the repo root")
-		fmt.Fprintln(os.Stderr, "          auth/csvauth/cmd/bar")
+		fmt.Fprintln(os.Stderr, "  monorel release .                          # single binary at module root")
+		fmt.Fprintln(os.Stderr, "  monorel release ./cmd/foo ./cmd/bar        # multiple binaries, same module")
+		fmt.Fprintln(os.Stderr, "  monorel release auth/csvauth/cmd/csvauth   # from repo root")
+		fmt.Fprintln(os.Stderr, "")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+	binPaths := fs.Args()
+	if len(binPaths) == 0 {
+		fs.Usage()
 		os.Exit(2)
 	}
 
-	groups, err := groupByModule(args)
+	groups, err := groupByModule(binPaths)
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -91,6 +139,195 @@ func main() {
 		relPath = filepath.ToSlash(relPath)
 		processModule(group, relPath)
 	}
+}
+
+// ── Subcommand: bump ───────────────────────────────────────────────────────
+
+func runBump(args []string) {
+	fs := flag.NewFlagSet("monorel bump", flag.ExitOnError)
+	var component string
+	fs.StringVar(&component, "m", "patch", "version component to bump: major, minor, or patch")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: monorel bump [-m major|minor|patch] <binary-path>...")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Creates a new semver git tag at HEAD for the module of each binary path.")
+		fmt.Fprintln(os.Stderr, "The tag is created locally; push it with 'git push --tags'.")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Examples:")
+		fmt.Fprintln(os.Stderr, "  monorel bump ./cmd/csvauth              # bump patch (default)")
+		fmt.Fprintln(os.Stderr, "  monorel bump -m minor ./cmd/csvauth     # bump minor")
+		fmt.Fprintln(os.Stderr, "  monorel bump -m major ./cmd/csvauth     # bump major")
+		fmt.Fprintln(os.Stderr, "")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	switch component {
+	case "major", "minor", "patch":
+		// valid
+	default:
+		fmt.Fprintf(os.Stderr, "monorel bump: -m must be major, minor, or patch (got %q)\n", component)
+		os.Exit(2)
+	}
+
+	binPaths := fs.Args()
+	if len(binPaths) == 0 {
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	groups, err := groupByModule(binPaths)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	for _, group := range groups {
+		newTag := bumpModuleTag(group, component)
+		fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+	}
+}
+
+// ── Subcommand: init ───────────────────────────────────────────────────────
+
+func runInit(args []string) {
+	fs := flag.NewFlagSet("monorel init", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: monorel init <binary-path>...")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "For each module (in command-line order):")
+		fmt.Fprintln(os.Stderr, "  1. Writes .goreleaser.yaml next to go.mod")
+		fmt.Fprintln(os.Stderr, "  2. Commits it (skipped if file is unchanged)")
+		fmt.Fprintln(os.Stderr, "  3. Creates an initial version tag (equivalent to 'bump patch')")
+		fmt.Fprintln(os.Stderr, "")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+	binPaths := fs.Args()
+	if len(binPaths) == 0 {
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	groups, err := groupByModule(binPaths)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	for _, group := range groups {
+		initModuleGroup(group)
+	}
+}
+
+// initModuleGroup writes .goreleaser.yaml, commits it (if changed), and
+// creates an initial version tag (bump patch) for one module group.
+func initModuleGroup(group *moduleGroup) {
+	modRoot := group.root
+	bins := group.bins
+
+	prefix := mustRunIn(modRoot, "git", "rev-parse", "--show-prefix")
+	prefix = strings.TrimSuffix(prefix, "/")
+	if prefix == "" {
+		fatalf("%s appears to be the repo root; the module must be in a subdirectory", modRoot)
+	}
+	prefixParts := strings.Split(prefix, "/")
+	projectName := prefixParts[len(prefixParts)-1]
+
+	// 1. Write .goreleaser.yaml.
+	yamlContent := goreleaserYAML(projectName, bins)
+	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
+	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
+		fatalf("writing %s: %v", yamlPath, err)
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
+
+	// 2. Stage and commit if the file changed.
+	mustRunIn(modRoot, "git", "add", ".goreleaser.yaml")
+	if status := runIn(modRoot, "git", "status", "--porcelain", "--", ".goreleaser.yaml"); status != "" {
+		commitMsg := "chore(release): add .goreleaser.yaml for " + projectName
+		mustRunIn(modRoot, "git", "commit", "-m", commitMsg)
+		fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
+	} else {
+		fmt.Fprintf(os.Stderr, "note: .goreleaser.yaml unchanged, skipping commit\n")
+	}
+
+	// 3. Bump patch.
+	newTag := bumpModuleTag(group, "patch")
+	fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+}
+
+// ── Bump helpers ───────────────────────────────────────────────────────────
+
+// bumpModuleTag finds the latest stable tag for the module, computes the next
+// version by bumping the given component (major, minor, or patch), creates the
+// git tag at HEAD, and returns the new tag name.
+func bumpModuleTag(group *moduleGroup, component string) string {
+	modRoot := group.root
+
+	prefix := mustRunIn(modRoot, "git", "rev-parse", "--show-prefix")
+	prefix = strings.TrimSuffix(prefix, "/")
+	if prefix == "" {
+		fatalf("%s appears to be the repo root; the module must be in a subdirectory", modRoot)
+	}
+
+	// Collect stable tags only (no pre-release suffix) for this module.
+	rawTags := runIn(modRoot, "git", "tag", "--list", prefix+"/v*")
+	var stableTags []string
+	for _, t := range strings.Split(rawTags, "\n") {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		ver := strings.TrimPrefix(t, prefix+"/")
+		if !strings.Contains(ver, "-") { // pre-releases have a "-" in the version
+			stableTags = append(stableTags, t)
+		}
+	}
+	sort.Slice(stableTags, func(i, j int) bool {
+		vi := strings.TrimPrefix(stableTags[i], prefix+"/")
+		vj := strings.TrimPrefix(stableTags[j], prefix+"/")
+		return semverLess(vi, vj)
+	})
+
+	var latestStable string
+	if n := len(stableTags); n > 0 {
+		latestStable = stableTags[n-1]
+	}
+
+	newTag := computeBumpTag(prefix, latestStable, component)
+	mustRunIn(modRoot, "git", "tag", newTag)
+	return newTag
+}
+
+// computeBumpTag returns the new full tag string for the given bump component,
+// starting from latestStableTag (empty string = no prior stable tags).
+func computeBumpTag(prefix, latestStableTag, component string) string {
+	if latestStableTag == "" {
+		switch component {
+		case "major":
+			return prefix + "/v1.0.0"
+		default: // minor, patch
+			return prefix + "/v0.1.0"
+		}
+	}
+
+	semver := strings.TrimPrefix(latestStableTag, prefix+"/v")
+	dp := strings.SplitN(semver, ".", 3)
+	for len(dp) < 3 {
+		dp = append(dp, "0")
+	}
+	major, _ := strconv.Atoi(dp[0])
+	minor, _ := strconv.Atoi(dp[1])
+	patch, _ := strconv.Atoi(dp[2])
+
+	switch component {
+	case "major":
+		major++
+		minor, patch = 0, 0
+	case "minor":
+		minor++
+		patch = 0
+	default: // patch
+		patch++
+	}
+	return fmt.Sprintf("%s/v%d.%d.%d", prefix, major, minor, patch)
 }
 
 // ── Module discovery ───────────────────────────────────────────────────────
@@ -191,8 +428,8 @@ func groupByModule(args []string) ([]*moduleGroup, error) {
 			name = filepath.Base(modRoot) // e.g. "tcpfwd" or "gsheet2csv"
 			mainPath = "."
 		} else {
-			name = filepath.Base(rel)   // last component
-			mainPath = "./" + rel       // e.g. "./cmd/gsheet2csv"
+			name = filepath.Base(rel) // last component
+			mainPath = "./" + rel     // e.g. "./cmd/gsheet2csv"
 		}
 
 		if _, ok := groupMap[modRoot]; !ok {
