@@ -301,19 +301,68 @@ func initModuleGroup(group *moduleGroup, dryRun bool) {
 		}
 	}
 
-	// 3. Bump patch.
-	newTag := bumpModuleTag(group, "patch", false, dryRun)
-	switch {
-	case newTag == "":
-		// skipped
-	case dryRun:
-		fmt.Fprintf(os.Stderr, "[dry-run] would create tag: %s\n", newTag)
-	default:
-		fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+	// 3. Bump patch — but only when the goreleaser.yaml commit is the sole new
+	// commit since the last stable tag (the common "first setup" scenario).
+	// If other commits are already waiting to be tagged the user should choose
+	// the right semver component with an explicit 'monorel bump'.
+	shouldBump := true
+	if !dryRun {
+		latestStable := findLatestStableTag(modRoot, prefix)
+		if latestStable != "" {
+			logOut := strings.TrimSpace(runIn(modRoot, "git", "log", "--oneline", latestStable+"..HEAD", "--", "."))
+			count := 0
+			if logOut != "" {
+				count = len(strings.Split(logOut, "\n"))
+			}
+			if count > 1 {
+				fmt.Fprintf(os.Stderr,
+					"note: %d commits since %s; skipping auto-bump — run 'monorel bump' when ready\n",
+					count, latestStable)
+				shouldBump = false
+			}
+		}
+	}
+
+	if shouldBump {
+		newTag := bumpModuleTag(group, "patch", false, dryRun)
+		switch {
+		case newTag == "":
+			// same-commit guard fired
+		case dryRun:
+			fmt.Fprintf(os.Stderr, "[dry-run] would create tag: %s\n", newTag)
+		default:
+			fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+		}
 	}
 }
 
 // ── Bump helpers ───────────────────────────────────────────────────────────
+
+// findLatestStableTag returns the latest stable (no pre-release) tag for the
+// given module prefix, or "" if none exists.
+func findLatestStableTag(modRoot, prefix string) string {
+	rawTags := runIn(modRoot, "git", "tag", "--list", prefix+"/v*")
+	var stableTags []string
+	for _, t := range strings.Split(rawTags, "\n") {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		ver := strings.TrimPrefix(t, prefix+"/")
+		if !strings.Contains(ver, "-") { // pre-releases have a "-" suffix
+			stableTags = append(stableTags, t)
+		}
+	}
+	sort.Slice(stableTags, func(i, j int) bool {
+		vi := strings.TrimPrefix(stableTags[i], prefix+"/")
+		vj := strings.TrimPrefix(stableTags[j], prefix+"/")
+		return semverLess(vi, vj)
+	})
+	if n := len(stableTags); n > 0 {
+		return stableTags[n-1]
+	}
+	return ""
+}
 
 // bumpModuleTag finds the latest stable tag for the module, computes the next
 // version by bumping the given component (major, minor, or patch), creates the
@@ -333,29 +382,7 @@ func bumpModuleTag(group *moduleGroup, component string, force, dryRun bool) str
 		fatalf("%s appears to be the repo root; the module must be in a subdirectory", modRoot)
 	}
 
-	// Collect stable tags only (no pre-release suffix) for this module.
-	rawTags := runIn(modRoot, "git", "tag", "--list", prefix+"/v*")
-	var stableTags []string
-	for _, t := range strings.Split(rawTags, "\n") {
-		t = strings.TrimSpace(t)
-		if t == "" {
-			continue
-		}
-		ver := strings.TrimPrefix(t, prefix+"/")
-		if !strings.Contains(ver, "-") { // pre-releases have a "-" in the version
-			stableTags = append(stableTags, t)
-		}
-	}
-	sort.Slice(stableTags, func(i, j int) bool {
-		vi := strings.TrimPrefix(stableTags[i], prefix+"/")
-		vj := strings.TrimPrefix(stableTags[j], prefix+"/")
-		return semverLess(vi, vj)
-	})
-
-	var latestStable string
-	if n := len(stableTags); n > 0 {
-		latestStable = stableTags[n-1]
-	}
+	latestStable := findLatestStableTag(modRoot, prefix)
 
 	newTag := computeBumpTag(prefix, latestStable, component)
 	newVersion := strings.TrimPrefix(newTag, prefix+"/")
