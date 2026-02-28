@@ -10,7 +10,7 @@
 //	monorel release <binary-path>...
 //	    Generate .goreleaser.yaml and print a ready-to-review bash release script.
 //
-//	monorel bump [-m major|minor|patch] <binary-path>...
+//	monorel bump [-r major|minor|patch] <binary-path>...
 //	    Create a new semver git tag at HEAD for each module (default: patch).
 //
 //	monorel init <binary-path>...
@@ -146,17 +146,17 @@ func runRelease(args []string) {
 func runBump(args []string) {
 	fs := flag.NewFlagSet("monorel bump", flag.ExitOnError)
 	var component string
-	fs.StringVar(&component, "m", "patch", "version component to bump: major, minor, or patch")
+	fs.StringVar(&component, "r", "patch", "version component to bump: major, minor, or patch")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: monorel bump [-m major|minor|patch] <binary-path>...")
+		fmt.Fprintln(os.Stderr, "usage: monorel bump [-r major|minor|patch] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Creates a new semver git tag at HEAD for the module of each binary path.")
 		fmt.Fprintln(os.Stderr, "The tag is created locally; push it with 'git push --tags'.")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Examples:")
 		fmt.Fprintln(os.Stderr, "  monorel bump ./cmd/csvauth              # bump patch (default)")
-		fmt.Fprintln(os.Stderr, "  monorel bump -m minor ./cmd/csvauth     # bump minor")
-		fmt.Fprintln(os.Stderr, "  monorel bump -m major ./cmd/csvauth     # bump major")
+		fmt.Fprintln(os.Stderr, "  monorel bump -r minor ./cmd/csvauth     # bump minor")
+		fmt.Fprintln(os.Stderr, "  monorel bump -r major ./cmd/csvauth     # bump major")
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
@@ -166,7 +166,7 @@ func runBump(args []string) {
 	case "major", "minor", "patch":
 		// valid
 	default:
-		fmt.Fprintf(os.Stderr, "monorel bump: -m must be major, minor, or patch (got %q)\n", component)
+		fmt.Fprintf(os.Stderr, "monorel bump: -r must be major, minor, or patch (got %q)\n", component)
 		os.Exit(2)
 	}
 
