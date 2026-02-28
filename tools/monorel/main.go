@@ -57,6 +57,35 @@ func main() {
 	// 1. Parse binary descriptors from positional args.
 	bins := parseBinaries(args)
 
+	// Guard: binary paths must be strictly inside the module directory, and no
+	// directory along the path (between the module root and the binary itself,
+	// inclusive) may contain its own go.mod.
+	//
+	// Examples that must be rejected:
+	//   ../other          (escapes the module root)
+	//   ./cmd/go.mod      (intermediate dir is its own module)
+	//   ./cmd/foo/go.mod  (binary dir is its own module)
+	for _, bin := range bins {
+		if bin.mainPath == "." {
+			continue // the module root itself — already checked above
+		}
+		if strings.HasPrefix(bin.mainPath, "../") {
+			fatalf("%s is outside the module directory", bin.mainPath)
+		}
+		// Walk every directory segment from the first child of the module root
+		// down to the binary directory.
+		rel := strings.TrimPrefix(bin.mainPath, "./")
+		parts := strings.Split(rel, "/")
+		for i := range parts {
+			dir := "./" + strings.Join(parts[:i+1], "/")
+			if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+				fatalf("%s has its own go.mod — it is a separate module.\n"+
+					"       Run monorel from that directory instead:\n"+
+					"         cd %s && monorel .", dir, dir)
+			}
+		}
+	}
+
 	// 2. Module prefix relative to the .git root (e.g., "io/transform/gsheet2csv").
 	//    This is also the tag prefix, e.g. "io/transform/gsheet2csv/v1.2.3".
 	prefix := mustRun("git", "rev-parse", "--show-prefix")
