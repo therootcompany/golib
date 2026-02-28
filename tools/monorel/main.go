@@ -498,15 +498,24 @@ func expandPaths(paths []string, recursive, all bool) ([]string, error) {
 // any directory listed in stopMarkers (e.g. .git directories), preventing
 // the walk from crossing into a parent repository.
 //
-// By default directories whose names begin with '.' or '_' are skipped (they
-// are conventionally hidden or disabled).  Pass all=true (the -A flag) to
-// include them; in that mode ReadDir failures are downgraded to warnings so
+// Only directories that contain at least one git-tracked file are visited;
+// untracked directories (dist/, vendor/, node_modules/, build artifacts, etc.)
+// are skipped automatically.
+//
+// By default directories whose names begin with '.' or '_' are also skipped
+// (they are conventionally hidden or disabled).  Pass all=true (the -A flag)
+// to include them; in that mode ReadDir failures are downgraded to warnings so
 // that a single unreadable directory doesn't abort the whole walk.
 func findMainPackages(root string, all bool) ([]string, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s: %w", root, err)
 	}
+	// Build the set of directories that contain at least one tracked file.
+	// Nil means git is unavailable; in that case we fall back to walking
+	// everything (pre-existing behaviour).
+	trackedDirs := buildTrackedDirs(abs)
+
 	var paths []string
 	var walk func(dir string) error
 	walk = func(dir string) error {
@@ -544,13 +553,47 @@ func findMainPackages(root string, all bool) ([]string, error) {
 			if !all && len(name) > 0 && (name[0] == '.' || name[0] == '_') {
 				continue
 			}
-			if err := walk(filepath.Join(dir, name)); err != nil {
+			child := filepath.Join(dir, name)
+			// Skip directories that contain no git-tracked files.
+			if trackedDirs != nil && !trackedDirs[child] {
+				continue
+			}
+			if err := walk(child); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 	return paths, walk(abs)
+}
+
+// buildTrackedDirs runs "git ls-files" from dir and returns the set of all
+// directories (absolute paths) that contain at least one tracked file.
+// Returns nil if dir is not inside a git repository or git is unavailable,
+// in which case the caller proceeds without git-tracking filtering.
+func buildTrackedDirs(dir string) map[string]bool {
+	cmd := exec.Command("git", "ls-files")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	dirs := make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		abs := filepath.Join(dir, filepath.FromSlash(line))
+		// Mark every ancestor directory up to (but not including) dir.
+		for d := filepath.Dir(abs); d != dir; d = filepath.Dir(d) {
+			if dirs[d] {
+				break // already added this path and all its ancestors
+			}
+			dirs[d] = true
+		}
+	}
+	return dirs
 }
 
 // findModuleRoot walks upward from absDir looking for a directory that
