@@ -80,7 +80,6 @@ func main() {
 	}
 
 	cwd, _ := os.Getwd()
-	multiModule := len(groups) > 1
 
 	// Emit the bash header exactly once.
 	fmt.Println("#!/usr/bin/env bash")
@@ -90,10 +89,7 @@ func main() {
 	for _, group := range groups {
 		relPath, _ := filepath.Rel(cwd, group.root)
 		relPath = filepath.ToSlash(relPath)
-		// Wrap in a subshell when the script has to cd somewhere, so multiple
-		// module sections don't interfere with each other.
-		wrap := multiModule || relPath != "."
-		processModule(group, relPath, wrap)
+		processModule(group, relPath)
 	}
 }
 
@@ -217,9 +213,9 @@ func groupByModule(args []string) ([]*moduleGroup, error) {
 
 // processModule writes .goreleaser.yaml and emits the release-script section
 // for one module group.  relPath is the path from the caller's CWD to the
-// module root (used for the cd step in the script).  wrap=true wraps the
-// output in a bash subshell.
-func processModule(group *moduleGroup, relPath string, wrap bool) {
+// module root; it is used in the script for all paths so that the script can
+// be run from the directory where monorel was invoked.
+func processModule(group *moduleGroup, relPath string) {
 	modRoot := group.root
 	bins := group.bins
 
@@ -279,15 +275,27 @@ func processModule(group *moduleGroup, relPath string, wrap bool) {
 	}
 
 	// Write .goreleaser.yaml next to go.mod.
+	// Warn if an existing file uses {{ .ProjectName }} (stock goreleaser config)
+	// and the module is a monorepo subdirectory (go.mod not adjacent to .git/).
 	yamlContent := goreleaserYAML(projectName, bins)
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
+	if existing, err := os.ReadFile(yamlPath); err == nil {
+		hasProjectName := strings.Contains(string(existing), "{{ .ProjectName }}") ||
+			strings.Contains(string(existing), "{{.ProjectName}}")
+		gitInfo, gitErr := os.Stat(filepath.Join(modRoot, ".git"))
+		atGitRoot := gitErr == nil && gitInfo.IsDir()
+		if hasProjectName && !atGitRoot {
+			fmt.Fprintf(os.Stderr, "warning: %s: contains {{ .ProjectName }} but module is a monorepo subdirectory;\n", yamlPath)
+			fmt.Fprintf(os.Stderr, "  replacing stock goreleaser config with monorel-generated config.\n")
+		}
+	}
 	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
 		fatalf("writing %s: %v", yamlPath, err)
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
 
 	headSHA := mustRunIn(modRoot, "git", "rev-parse", "HEAD")
-	printModuleScript(relPath, wrap, projectName, bins,
+	printModuleScript(relPath, projectName, bins,
 		version, currentTag, prevTag, repoPath, headSHA,
 		isPreRelease, needsNewTag, isDirty)
 }
@@ -463,10 +471,17 @@ func goreleaserYAML(projectName string, bins []binary) string {
 // ── Release script generation ──────────────────────────────────────────────
 
 // printModuleScript emits one module's release steps to stdout.
-// If wrap=true the output is enclosed in a bash subshell ( ... ) with a cd
-// at the top, so multiple modules in one script don't interfere.
+//
+// All paths in the generated script are relative to relPath so that the
+// script can be run from the directory where monorel was invoked:
+//   - git commands use relPath/ as the pathspec (instead of ./)
+//   - goreleaser is wrapped in ( cd "relPath" && goreleaser ... ) when needed
+//   - artifact globs use relPath/dist/ instead of ./dist/
+//
+// When relPath is "." (monorel was run from the module root), ./ paths are
+// used and no cd is required for any command.
 func printModuleScript(
-	relPath string, wrap bool,
+	relPath string,
 	projectName string, bins []binary,
 	version, currentTag, prevTag, repoPath, headSHA string,
 	isPreRelease, needsNewTag, isDirty bool,
@@ -479,15 +494,29 @@ func printModuleScript(
 		fmt.Println(strings.Repeat("─", max(0, 52-len(title))))
 	}
 
-	if wrap {
-		blank()
-		rule := strings.Repeat("═", 54)
-		fmt.Printf("# %s\n", rule)
-		fmt.Printf("# Module: %s\n", relPath)
-		fmt.Printf("# %s\n", rule)
-		fmt.Println("(")
-		fmt.Printf("cd %q\n", relPath)
+	// Paths used in the generated script, all relative to the invoking CWD.
+	var gitPathSpec, distDir string
+	if relPath == "." {
+		gitPathSpec = "./"
+		distDir = "./dist"
+	} else {
+		gitPathSpec = relPath + "/"
+		distDir = relPath + "/dist"
 	}
+
+	// Safe bash variable name for the release-notes capture (no export needed).
+	notesVar := strings.ReplaceAll(projectName, "-", "_") + "_release_notes"
+
+	// Module header.
+	blank()
+	rule := strings.Repeat("═", 54)
+	fmt.Printf("# %s\n", rule)
+	modLabel := relPath
+	if modLabel == "." {
+		modLabel = projectName + " (current directory)"
+	}
+	fmt.Printf("# Module: %s\n", modLabel)
+	fmt.Printf("# %s\n", rule)
 
 	if isDirty {
 		blank()
@@ -527,15 +556,19 @@ func printModuleScript(
 
 	section("Step 3: Build with goreleaser")
 	line("# release.disable=true in .goreleaser.yaml; goreleaser only builds.")
-	line("goreleaser release --clean --skip=validate,announce")
+	if relPath == "." {
+		line("goreleaser release --clean --skip=validate,announce")
+	} else {
+		line("( cd %q && goreleaser release --clean --skip=validate,announce )", relPath)
+	}
 
 	section("Step 4: Generate release notes")
 	if prevTag != "" {
-		line("RELEASE_NOTES=$(git --no-pager log %q..HEAD \\", prevTag)
-		line("  --pretty=format:'- %%h %%s' -- ./)")
+		line("%s=$(git --no-pager log %q..HEAD \\", notesVar, prevTag)
+		line("  --pretty=format:'- %%h %%s' -- %s)", gitPathSpec)
 	} else {
-		line("RELEASE_NOTES=$(git --no-pager log \\")
-		line("  --pretty=format:'- %%h %%s' -- ./)")
+		line("%s=$(git --no-pager log \\", notesVar)
+		line("  --pretty=format:'- %%h %%s' -- %s)", gitPathSpec)
 	}
 
 	section("Step 5: Create draft GitHub release")
@@ -543,7 +576,7 @@ func printModuleScript(
 	title := projectName + " " + tagVersion
 	line("gh release create %q \\", currentTag)
 	line("  --title %q \\", title)
-	line("  --notes \"${RELEASE_NOTES}\" \\")
+	line("  --notes \"${%s}\" \\", notesVar)
 	if isPreRelease {
 		line("  --prerelease \\")
 	}
@@ -553,19 +586,15 @@ func printModuleScript(
 	section("Step 6: Upload artifacts")
 	line("gh release upload %q \\", currentTag)
 	for _, bin := range bins {
-		line("  ./dist/%s_*.tar.gz \\", bin.name)
-		line("  ./dist/%s_*.zip \\", bin.name)
+		line("  %s/%s_*.tar.gz \\", distDir, bin.name)
+		line("  %s/%s_*.zip \\", distDir, bin.name)
 	}
-	line("  \"./dist/%s_%s_checksums.txt\" \\", projectName, version)
+	line("  \"%s/%s_%s_checksums.txt\" \\", distDir, projectName, version)
 	line("  --clobber")
 
 	section("Step 7: Publish release (remove draft)")
 	line("gh release edit %q --draft=false", currentTag)
 
-	if wrap {
-		blank()
-		fmt.Println(")")
-	}
 	blank()
 }
 
