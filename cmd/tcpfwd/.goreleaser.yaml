@@ -18,6 +18,9 @@ before:
 builds:
   - env:
       - CGO_ENABLED=0
+    binary: tcpfwd
+    ldflags:
+      - -s -w -X main.version={{.Env.VERSION}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser
     goos:
       - linux
       - windows
@@ -27,7 +30,7 @@ archives:
   - formats: [tar.gz]
     # this name template makes the OS and Arch compatible with the results of `uname`.
     name_template: >-
-      {{ .ProjectName }}_
+      tcpfwd_{{ .Env.VERSION }}_
       {{- title .Os }}_
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "386" }}i386
@@ -45,9 +48,11 @@ changelog:
       - "^docs:"
       - "^test:"
 
+checksum:
+  name_template: "tcpfwd_{{ .Env.VERSION }}_checksums.txt"
+  disable: false
+
+# Release is disabled: goreleaser Pro is required to publish with a
+# prefixed monorepo tag. We use 'gh release' instead (see release script).
 release:
-  footer: >-
-
-    ---
-
-    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
+  disable: true
