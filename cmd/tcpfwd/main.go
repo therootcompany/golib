@@ -18,6 +18,7 @@ import (
 
 const (
 	name         = "tcpfwd"
+	description  = "TCP port forwarder - bridge local ports to remote hosts"
 	licenseYear  = "2025"
 	licenseOwner = "AJ ONeal <aj@therootcompany.com> (https://therootcompany.com)"
 	licenseType  = "CC0-1.0"
@@ -30,9 +31,10 @@ var (
 	date    = "0001-01-01"
 )
 
-// printVersion displays the version, commit, and build date.
+// printVersion displays the version, commit, build date, and description.
 func printVersion(w io.Writer) {
 	_, _ = fmt.Fprintf(w, "%s v%s %s (%s)\n", name, version, commit[:7], date)
+	_, _ = fmt.Fprintf(w, "%s\n", description)
 	_, _ = fmt.Fprintf(w, "Copyright (C) %s %s\n", licenseYear, licenseOwner)
 	_, _ = fmt.Fprintf(w, "Licensed under %s\n", licenseType)
 }
