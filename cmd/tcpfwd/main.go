@@ -293,19 +293,25 @@ func main() {
 	}
 
 	// Wait for remaining active connections to drain, up to shutdownTimeout
-	drained := make(chan struct{})
-	go func() {
-		reg.wg.Wait()
-		close(drained)
-	}()
-
-	select {
-	case <-drained:
+	if waitWithTimeout(&reg.wg, shutdownTimeout) {
 		log.Printf("All connections closed cleanly")
-	case <-time.After(shutdownTimeout):
+	} else {
 		log.Printf("Shutdown timeout (%s) exceeded, force-closing remaining connections", shutdownTimeout)
 		reg.closeAll()
 		reg.wg.Wait()
+	}
+}
+
+// waitWithTimeout waits for wg to reach zero, returning true if it drained
+// before the timeout and false if the timeout was exceeded.
+func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
 }
 
