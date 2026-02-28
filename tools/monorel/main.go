@@ -292,7 +292,13 @@ func bumpModuleTag(group *moduleGroup, component string) string {
 	}
 
 	newTag := computeBumpTag(prefix, latestStable, component)
-	mustRunIn(modRoot, "git", "tag", newTag)
+	// Tag the most recent commit that touched this module's directory, which
+	// may be behind HEAD if other modules have been updated more recently.
+	commitSHA := mustRunIn(modRoot, "git", "log", "--format=%H", "-1", "--", ".")
+	if commitSHA == "" {
+		fatalf("no commits found in %s", modRoot)
+	}
+	mustRunIn(modRoot, "git", "tag", newTag, commitSHA)
 	return newTag
 }
 
