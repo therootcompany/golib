@@ -23,6 +23,8 @@ package main
 
 import (
 	"fmt"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,6 +127,35 @@ func findModuleRoot(absDir string) (string, error) {
 	}
 }
 
+// checkPackageMain returns an error if dir does not contain a Go main package.
+// It only parses the package clause of each file (PackageClauseOnly mode is
+// fast: it reads just the first few tokens of every .go file).
+func checkPackageMain(dir string) error {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, dir, nil, parser.PackageClauseOnly)
+	if err != nil {
+		return fmt.Errorf("parsing Go files in %s: %w", dir, err)
+	}
+	if len(pkgs) == 0 {
+		return fmt.Errorf("no Go source files in %s", dir)
+	}
+	if _, ok := pkgs["main"]; ok {
+		return nil
+	}
+	// Collect non-test package names for the error message.
+	var names []string
+	for name := range pkgs {
+		if !strings.HasSuffix(name, "_test") {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return fmt.Errorf("no non-test Go source files in %s", dir)
+	}
+	return fmt.Errorf("%s is package %q, not a main package", dir, strings.Join(names, ", "))
+}
+
 // groupByModule resolves each binary path to an absolute directory, finds its
 // module root via findModuleRoot, and groups binaries by that root.  Groups
 // are returned in first-occurrence order (preserving the order of args).
@@ -141,6 +172,10 @@ func groupByModule(args []string) ([]*moduleGroup, error) {
 		absDir := abs
 		if info, err := os.Stat(abs); err == nil && !info.IsDir() {
 			absDir = filepath.Dir(abs)
+		}
+
+		if err := checkPackageMain(absDir); err != nil {
+			return nil, err
 		}
 
 		modRoot, err := findModuleRoot(absDir)
