@@ -1,13 +1,17 @@
 // monorel: Monorepo Release Tool
 //
-// Run from a module subdirectory inside a git repo to:
-//   - Generate (or update) .goreleaser.yaml for the module
-//   - Print a ready-to-review bash release script to stdout
+// Run from a module directory and pass the paths to each binary's main
+// package.  Supports both single-binary and multi-binary modules.
 //
 // Usage:
 //
+//	# Single binary (path to the main package, or "." for module root)
 //	cd cmd/tcpfwd
-//	go run github.com/therootcompany/golib/tools/monorel
+//	monorel .
+//
+//	# Multiple binaries under one module
+//	cd io/transform/gsheet2csv
+//	monorel ./cmd/gsheet2csv ./cmd/gsheet2tsv ./cmd/gsheet2env
 //
 // Install:
 //
@@ -18,28 +22,58 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 )
 
+// binary describes one Go main package to build and release.
+type binary struct {
+	name     string // last path component, e.g. "gsheet2csv"
+	mainPath string // path relative to module dir, e.g. "./cmd/gsheet2csv" or "."
+}
+
 func main() {
-	// 1. Module prefix relative to .git root (e.g., "cmd/tcpfwd")
+	args := os.Args[1:]
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: monorel <binary-path> [<binary-path>...]")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Run from the module directory (where go.mod lives).")
+		fmt.Fprintln(os.Stderr, "Use '.' when the module root is itself the main package.")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Examples:")
+		fmt.Fprintln(os.Stderr, "  monorel .                                  # single binary at root")
+		fmt.Fprintln(os.Stderr, "  monorel ./cmd/foo ./cmd/bar ./cmd/baz      # multiple binaries")
+		os.Exit(2)
+	}
+
+	// Must run from the module directory so goreleaser can find go.mod and
+	// so that .goreleaser.yaml is written next to it.
+	if _, err := os.Stat("go.mod"); err != nil {
+		fatalf("no go.mod in current directory; run monorel from the module root")
+	}
+
+	// 1. Parse binary descriptors from positional args.
+	bins := parseBinaries(args)
+
+	// 2. Module prefix relative to the .git root (e.g., "io/transform/gsheet2csv").
+	//    This is also the tag prefix, e.g. "io/transform/gsheet2csv/v1.2.3".
 	prefix := mustRun("git", "rev-parse", "--show-prefix")
 	prefix = strings.TrimSuffix(prefix, "/")
 	if prefix == "" {
 		fatalf("run monorel from a module subdirectory, not the repo root")
 	}
 
-	// 2. Binary name = last path component of prefix
+	// Project name = last path component (used in checksum filename and release title).
 	prefixParts := strings.Split(prefix, "/")
-	binName := prefixParts[len(prefixParts)-1]
+	projectName := prefixParts[len(prefixParts)-1]
 
-	// 3. Normalised GitHub repo path (e.g., "github.com/therootcompany/golib")
+	// 3. Normalised GitHub repo path (e.g., "github.com/therootcompany/golib").
 	rawURL := mustRun("git", "remote", "get-url", "origin")
 	repoPath := normalizeGitURL(rawURL)
 
-	// 4. Collect tags matching "<prefix>/v*" and sort by semver
+	// 4. Collect and semver-sort tags matching "<prefix>/v*".
 	rawTags := run("git", "tag", "--list", prefix+"/v*")
 	var tags []string
 	for _, t := range strings.Split(rawTags, "\n") {
@@ -61,10 +95,10 @@ func main() {
 		}
 	}
 
-	// 5. Detect dirty working tree (uncommitted / untracked files in this dir)
+	// 5. Detect dirty working tree (uncommitted / untracked files under CWD).
 	isDirty := run("git", "status", "--porcelain", "--", ".") != ""
 
-	// 6. Count commits since latestTag that touch this directory
+	// 6. Count commits since latestTag that touch the module directory.
 	var commitCount int
 	if latestTag != "" {
 		logOut := run("git", "log", "--oneline", latestTag+"..HEAD", "--", ".")
@@ -73,38 +107,71 @@ func main() {
 		}
 	}
 
-	// 7. Derive version string, full tag, and release flags
+	// 7. Derive version string, full tag, and release flags.
 	version, currentTag, isPreRelease, needsNewTag := computeVersion(
 		prefix, latestTag, commitCount, isDirty,
 	)
 
-	// For release notes: prevTag is the last tag that's not the one we're releasing.
-	// When pre-releasing, the last stable tag is latestTag (not prevStableTag).
+	// For release notes prevTag is the last stable tag before the one we're
+	// releasing.  For a pre-release the "stable baseline" is latestTag.
 	prevTag := prevStableTag
 	if isPreRelease {
 		prevTag = latestTag
 	}
 
-	// 8. Write .goreleaser.yaml
-	yamlContent := goreleaserYAML(binName)
+	// 8. Write .goreleaser.yaml.
+	yamlContent := goreleaserYAML(projectName, bins)
 	if err := os.WriteFile(".goreleaser.yaml", []byte(yamlContent), 0o644); err != nil {
 		fatalf("writing .goreleaser.yaml: %v", err)
 	}
 	fmt.Fprintln(os.Stderr, "wrote .goreleaser.yaml")
 
-	// 9. Emit release script to stdout
+	// 9. Emit the release script to stdout.
 	headSHA := mustRun("git", "rev-parse", "HEAD")
-	printScript(binName, version, currentTag, prevTag, repoPath, headSHA,
+	printScript(projectName, bins, version, currentTag, prevTag, repoPath, headSHA,
 		isPreRelease, needsNewTag, isDirty)
 }
+
+// parseBinaries converts positional CLI arguments into binary descriptors.
+//
+// Each arg is the path to a Go main package, relative to the module directory.
+// "." is special-cased: the binary name is taken from the current working
+// directory name rather than from ".".
+func parseBinaries(args []string) []binary {
+	cwd, _ := os.Getwd()
+	bins := make([]binary, 0, len(args))
+	for _, arg := range args {
+		// Normalise to a clean, forward-slash path.
+		clean := filepath.ToSlash(filepath.Clean(arg))
+
+		var name string
+		if clean == "." {
+			name = filepath.Base(cwd) // e.g., "tcpfwd" from working dir name
+		} else {
+			name = filepath.Base(clean) // e.g., "gsheet2csv"
+		}
+
+		// Restore "./" prefix that filepath.Clean strips, so goreleaser sees
+		// an explicit relative path (e.g. "./cmd/gsheet2csv" not "cmd/gsheet2csv").
+		mainPath := clean
+		if clean != "." && !strings.HasPrefix(clean, "./") && !strings.HasPrefix(clean, "../") {
+			mainPath = "./" + clean
+		}
+
+		bins = append(bins, binary{name: name, mainPath: mainPath})
+	}
+	return bins
+}
+
+// ── Version computation ────────────────────────────────────────────────────
 
 // computeVersion returns (version, fullTag, isPreRelease, needsNewTag).
 //
 // Examples:
 //
-//	At "cmd/tcpfwd/v1.1.0", no changes → ("1.1.0", "cmd/tcpfwd/v1.1.0", false, false)
-//	3 commits past "cmd/tcpfwd/v1.1.0" → ("1.1.1-pre3", "cmd/tcpfwd/v1.1.1-pre3", true, true)
-//	dirty, 0 new commits             → ("1.1.1-pre1.dirty", "cmd/tcpfwd/v1.1.1-pre1.dirty", true, false)
+//	At "cmd/tcpfwd/v1.1.0", clean   → ("1.1.0",          "cmd/tcpfwd/v1.1.0",          false, false)
+//	3 commits past v1.1.0, clean    → ("1.1.1-pre3",      "cmd/tcpfwd/v1.1.1-pre3",      true,  true)
+//	dirty, 0 new commits            → ("1.1.1-pre1.dirty","cmd/tcpfwd/v1.1.1-pre1.dirty", true,  false)
 func computeVersion(prefix, latestTag string, commitCount int, isDirty bool) (version, currentTag string, isPreRelease, needsNewTag bool) {
 	if latestTag == "" {
 		// Very first release – default to v0.1.0.
@@ -143,6 +210,8 @@ func computeVersion(prefix, latestTag string, commitCount int, isDirty bool) (ve
 	needsNewTag = !isDirty
 	return version, currentTag, true, needsNewTag
 }
+
+// ── Semver helpers ─────────────────────────────────────────────────────────
 
 // semverLess returns true if semver string a < b.
 // Handles "vX.Y.Z" and "vX.Y.Z-preN" forms.
@@ -201,76 +270,93 @@ func preNum(s string) int {
 	return n
 }
 
-// goreleaserYAML returns the contents of .goreleaser.yaml for binName.
+// ── goreleaser YAML generation ─────────────────────────────────────────────
+
+// goreleaserYAML returns .goreleaser.yaml content for one or more binaries.
 //
-// Key design decisions:
-//   - Uses {{.Env.VERSION}} instead of {{.Version}} everywhere so the
-//     prefixed monorepo tag (cmd/tcpfwd/v1.1.0) doesn't bleed into filenames.
-//   - release.disable: true because we use `gh` to create the GitHub Release
-//     (goreleaser Pro is required to publish with a prefixed tag).
-//   - Checksum file is named with VERSION so it matches the archive names.
-func goreleaserYAML(binName string) string {
-	// NOTE: "BINNAME" is our placeholder; goreleaser template markers
-	// ({{ ... }}) are kept verbatim – this is NOT a Go text/template.
-	const tpl = `# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-# vim: set ts=2 sw=2 tw=0 fo=cnqoj
-# Generated by monorel (github.com/therootcompany/golib/tools/monorel)
+// Design decisions:
+//   - Uses {{.Env.VERSION}} instead of {{.Version}} everywhere so a prefixed
+//     monorepo tag (e.g. io/transform/gsheet2csv/v1.2.3) never bleeds into
+//     artifact filenames.
+//   - Each binary gets its own build (with id) and its own archive (with ids)
+//     so cross-platform tarballs are separate per tool.
+//   - The checksum file is named <projectName>_VERSION_checksums.txt and
+//     covers every archive produced in the run.
+//   - release.disable: true — goreleaser Pro is required to publish with a
+//     prefixed tag; we use `gh release` in the generated script instead.
+func goreleaserYAML(projectName string, bins []binary) string {
+	var b strings.Builder
+	w := func(s string) { b.WriteString(s) }
+	wf := func(format string, args ...any) { fmt.Fprintf(&b, format, args...) }
 
-version: 2
+	w("# yaml-language-server: $schema=https://goreleaser.com/static/schema.json\n")
+	w("# vim: set ts=2 sw=2 tw=0 fo=cnqoj\n")
+	w("# Generated by monorel (github.com/therootcompany/golib/tools/monorel)\n")
+	w("\nversion: 2\n")
+	w("\nbefore:\n  hooks:\n    - go mod tidy\n    - go generate ./...\n")
 
-before:
-  hooks:
-    - go mod tidy
-    - go generate ./...
+	// ── builds ──────────────────────────────────────────────────────────────
+	w("\nbuilds:\n")
+	for _, bin := range bins {
+		wf("  - id: %s\n", bin.name)
+		wf("    binary: %s\n", bin.name)
+		if bin.mainPath != "." {
+			wf("    main: %s\n", bin.mainPath)
+		}
+		w("    env:\n      - CGO_ENABLED=0\n")
+		w("    ldflags:\n")
+		w("      - -s -w" +
+			" -X main.version={{.Env.VERSION}}" +
+			" -X main.commit={{.Commit}}" +
+			" -X main.date={{.Date}}" +
+			" -X main.builtBy=goreleaser\n")
+		w("    goos:\n      - linux\n      - windows\n      - darwin\n")
+	}
 
-builds:
-  - env:
-      - CGO_ENABLED=0
-    binary: BINNAME
-    ldflags:
-      - -s -w -X main.version={{.Env.VERSION}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser
-    goos:
-      - linux
-      - windows
-      - darwin
+	// ── archives ────────────────────────────────────────────────────────────
+	w("\narchives:\n")
+	for _, bin := range bins {
+		wf("  - id: %s\n", bin.name)
+		wf("    ids: [%s]\n", bin.name)
+		w("    formats: [tar.gz]\n")
+		w("    # name_template uses VERSION env var so the prefixed monorepo tag\n")
+		w("    # doesn't appear in archive filenames.\n")
+		w("    name_template: >-\n")
+		wf("      %s_{{ .Env.VERSION }}_\n", bin.name)
+		w("      {{- title .Os }}_\n")
+		w("      {{- if eq .Arch \"amd64\" }}x86_64\n")
+		w("      {{- else if eq .Arch \"386\" }}i386\n")
+		w("      {{- else }}{{ .Arch }}{{ end }}\n")
+		w("      {{- if .Arm }}v{{ .Arm }}{{ end }}\n")
+		w("    format_overrides:\n")
+		w("      - goos: windows\n")
+		w("        formats: [zip]\n")
+	}
 
-archives:
-  - formats: [tar.gz]
-    # name_template uses VERSION env var so the prefixed monorepo tag
-    # (e.g. cmd/tcpfwd/v1.1.0) doesn't appear in archive filenames.
-    name_template: >-
-      BINNAME_{{ .Env.VERSION }}_
-      {{- title .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
-    format_overrides:
-      - goos: windows
-        formats: [zip]
+	// ── changelog ───────────────────────────────────────────────────────────
+	w("\nchangelog:\n  sort: asc\n  filters:\n    exclude:\n")
+	w("      - \"^docs:\"\n      - \"^test:\"\n")
 
-changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
+	// ── checksum ────────────────────────────────────────────────────────────
+	w("\nchecksum:\n")
+	wf("  name_template: \"%s_{{ .Env.VERSION }}_checksums.txt\"\n", projectName)
+	w("  disable: false\n")
 
-checksum:
-  name_template: "BINNAME_{{ .Env.VERSION }}_checksums.txt"
-  disable: false
+	// ── release ─────────────────────────────────────────────────────────────
+	w("\n# Release is disabled: goreleaser Pro is required to publish with a\n")
+	w("# prefixed monorepo tag. We use 'gh release' instead (see release script).\n")
+	w("release:\n  disable: true\n")
 
-# Release is disabled: goreleaser Pro is required to publish with a
-# prefixed monorepo tag. We use 'gh release' instead (see release script).
-release:
-  disable: true
-`
-	return strings.ReplaceAll(tpl, "BINNAME", binName)
+	return b.String()
 }
 
-// printScript writes a bash release script to stdout.
+// ── Release script generation ──────────────────────────────────────────────
+
+// printScript writes a numbered, ready-to-review bash release script to stdout.
 func printScript(
-	binName, version, currentTag, prevTag, repoPath, headSHA string,
+	projectName string,
+	bins []binary,
+	version, currentTag, prevTag, repoPath, headSHA string,
 	isPreRelease, needsNewTag, isDirty bool,
 ) {
 	line := func(format string, args ...any) { fmt.Printf(format+"\n", args...) }
@@ -294,7 +380,15 @@ func printScript(
 
 	// Summary comment block.
 	blank()
-	line("# %-16s %s", "Binary:", binName)
+	if len(bins) == 1 {
+		line("# %-16s %s", "Binary:", bins[0].name)
+	} else {
+		names := make([]string, len(bins))
+		for i, b := range bins {
+			names[i] = b.name
+		}
+		line("# %-16s %s", "Binaries:", strings.Join(names, ", "))
+	}
 	line("# %-16s %s", "VERSION:", version)
 	line("# %-16s %s", "Current tag:", currentTag)
 	if prevTag != "" {
@@ -309,7 +403,7 @@ func printScript(
 	line("export VERSION=%q", version)
 	line("export GORELEASER_CURRENT_TAG=%q", currentTag)
 
-	// Step 2 – create tag (only for clean pre-releases or first release).
+	// Step 2 – create tag (clean pre-releases and first releases only).
 	if needsNewTag {
 		section("Step 2: Create git tag")
 		line("git tag %q", currentTag)
@@ -318,13 +412,13 @@ func printScript(
 
 	// Step 3 – build.
 	section("Step 3: Build with goreleaser")
-	line("# release.disable=true is set in .goreleaser.yaml; goreleaser only builds.")
+	line("# release.disable=true in .goreleaser.yaml; goreleaser only builds.")
 	line("goreleaser release --clean --skip=validate,announce")
 
 	// Step 4 – release notes.
 	section("Step 4: Generate release notes")
 	if prevTag != "" {
-		// Path-limited log: only commits that touched files under this directory.
+		// Path-limited: only commits touching files under the module directory.
 		line("RELEASE_NOTES=$(git --no-pager log %q..HEAD \\", prevTag)
 		line("  --pretty=format:'- %%h %%s' -- ./)")
 	} else {
@@ -334,8 +428,8 @@ func printScript(
 
 	// Step 5 – create draft release.
 	section("Step 5: Create draft GitHub release")
-	tagVersion := currentTag[strings.LastIndex(currentTag, "/")+1:] // strip prefix
-	title := binName + " " + tagVersion
+	tagVersion := currentTag[strings.LastIndex(currentTag, "/")+1:] // strip module prefix
+	title := projectName + " " + tagVersion
 	line("gh release create %q \\", currentTag)
 	line("  --title %q \\", title)
 	line("  --notes \"${RELEASE_NOTES}\" \\")
@@ -348,9 +442,11 @@ func printScript(
 	// Step 6 – upload artifacts.
 	section("Step 6: Upload artifacts")
 	line("gh release upload %q \\", currentTag)
-	line("  ./dist/%s_*.tar.gz \\", binName)
-	line("  ./dist/%s_*.zip \\", binName)
-	line("  \"./dist/%s_%s_checksums.txt\" \\", binName, version)
+	for _, bin := range bins {
+		line("  ./dist/%s_*.tar.gz \\", bin.name)
+		line("  ./dist/%s_*.zip \\", bin.name)
+	}
+	line("  \"./dist/%s_%s_checksums.txt\" \\", projectName, version)
 	line("  --clobber")
 
 	// Step 7 – publish.
@@ -358,6 +454,8 @@ func printScript(
 	line("gh release edit %q --draft=false", currentTag)
 	blank()
 }
+
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 // normalizeGitURL strips scheme, credentials, and .git suffix from a remote URL.
 //
@@ -368,7 +466,6 @@ func normalizeGitURL(rawURL string) string {
 	rawURL = strings.TrimSuffix(rawURL, ".git")
 	if idx := strings.Index(rawURL, "://"); idx >= 0 {
 		rawURL = rawURL[idx+3:]
-		// Drop any "user:pass@" prefix.
 		if idx2 := strings.Index(rawURL, "@"); idx2 >= 0 {
 			rawURL = rawURL[idx2+1:]
 		}
@@ -398,4 +495,3 @@ func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "monorel: error: "+format+"\n", args...)
 	os.Exit(1)
 }
-
