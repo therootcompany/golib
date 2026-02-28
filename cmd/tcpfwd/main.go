@@ -44,11 +44,11 @@ type forward struct {
 
 // parseForward parses a "local-port:remote-host:remote-port" string.
 func parseForward(s string) (forward, error) {
-	i := strings.Index(s, ":")
-	if i < 0 || !strings.Contains(s[i+1:], ":") {
+	localPort, target, ok := strings.Cut(s, ":")
+	if !ok || !strings.Contains(target, ":") {
 		return forward{}, fmt.Errorf("invalid forward %q: expected local-port:remote-host:remote-port", s)
 	}
-	return forward{listenAddr: ":" + s[:i], target: s[i+1:]}, nil
+	return forward{listenAddr: ":" + localPort, target: target}, nil
 }
 
 // connEntry tracks an active proxied connection pair.
