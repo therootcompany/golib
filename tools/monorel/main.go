@@ -157,11 +157,12 @@ func runRelease(args []string) {
 func runBump(args []string) {
 	fs := flag.NewFlagSet("monorel bump", flag.ExitOnError)
 	var component string
-	var recursive, all, force bool
+	var recursive, all, force, dryRun bool
 	fs.StringVar(&component, "r", "patch", "version component to bump: major, minor, or patch")
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.BoolVar(&force, "force", false, "if no new commits, create an empty bump commit and tag it")
+	fs.BoolVar(&dryRun, "dry-run", false, "print what would happen without creating commits or tags")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel bump [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -174,6 +175,7 @@ func runBump(args []string) {
 		fmt.Fprintln(os.Stderr, "  monorel bump -r major ./cmd/csvauth         # bump major")
 		fmt.Fprintln(os.Stderr, "  monorel bump -recursive .                   # bump patch for all modules")
 		fmt.Fprintln(os.Stderr, "  monorel bump -force ./cmd/csvauth           # bump even with no new commits")
+		fmt.Fprintln(os.Stderr, "  monorel bump -dry-run -recursive .          # preview tags without creating them")
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
@@ -205,8 +207,15 @@ func runBump(args []string) {
 		fatalf("%v", err)
 	}
 	for _, group := range groups {
-		newTag := bumpModuleTag(group, component, force)
-		fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+		newTag := bumpModuleTag(group, component, force, dryRun)
+		switch {
+		case newTag == "":
+			// skipped: already printed a skip message
+		case dryRun:
+			fmt.Fprintf(os.Stderr, "[dry-run] would create tag: %s\n", newTag)
+		default:
+			fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+		}
 	}
 }
 
@@ -214,9 +223,10 @@ func runBump(args []string) {
 
 func runInit(args []string) {
 	fs := flag.NewFlagSet("monorel init", flag.ExitOnError)
-	var recursive, all bool
+	var recursive, all, dryRun bool
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
+	fs.BoolVar(&dryRun, "dry-run", false, "print what would happen without writing files, creating commits, or tags")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel init [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -250,13 +260,14 @@ func runInit(args []string) {
 		fatalf("%v", err)
 	}
 	for _, group := range groups {
-		initModuleGroup(group)
+		initModuleGroup(group, dryRun)
 	}
 }
 
 // initModuleGroup writes .goreleaser.yaml, commits it (if changed), and
 // creates an initial version tag (bump patch) for one module group.
-func initModuleGroup(group *moduleGroup) {
+// When dryRun is true no files are written and no git mutations are made.
+func initModuleGroup(group *moduleGroup, dryRun bool) {
 	modRoot := group.root
 	bins := group.bins
 
@@ -271,24 +282,35 @@ func initModuleGroup(group *moduleGroup) {
 	// 1. Write .goreleaser.yaml.
 	yamlContent := goreleaserYAML(projectName, bins)
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
-	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
-		fatalf("writing %s: %v", yamlPath, err)
-	}
-	fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
-
-	// 2. Stage and commit if the file changed.
-	mustRunIn(modRoot, "git", "add", ".goreleaser.yaml")
-	if status := runIn(modRoot, "git", "status", "--porcelain", "--", ".goreleaser.yaml"); status != "" {
-		commitMsg := "chore(release): add .goreleaser.yaml for " + projectName
-		mustRunIn(modRoot, "git", "commit", "-m", commitMsg)
-		fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
+	if dryRun {
+		fmt.Fprintf(os.Stderr, "[dry-run] would write %s\n", yamlPath)
 	} else {
-		fmt.Fprintf(os.Stderr, "note: .goreleaser.yaml unchanged, skipping commit\n")
+		if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
+			fatalf("writing %s: %v", yamlPath, err)
+		}
+		fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
+
+		// 2. Stage and commit if the file changed.
+		mustRunIn(modRoot, "git", "add", ".goreleaser.yaml")
+		if status := runIn(modRoot, "git", "status", "--porcelain", "--", ".goreleaser.yaml"); status != "" {
+			commitMsg := "chore(release): add .goreleaser.yaml for " + projectName
+			mustRunIn(modRoot, "git", "commit", "-m", commitMsg)
+			fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
+		} else {
+			fmt.Fprintf(os.Stderr, "note: .goreleaser.yaml unchanged, skipping commit\n")
+		}
 	}
 
 	// 3. Bump patch.
-	newTag := bumpModuleTag(group, "patch", false)
-	fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+	newTag := bumpModuleTag(group, "patch", false, dryRun)
+	switch {
+	case newTag == "":
+		// skipped
+	case dryRun:
+		fmt.Fprintf(os.Stderr, "[dry-run] would create tag: %s\n", newTag)
+	default:
+		fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+	}
 }
 
 // ── Bump helpers ───────────────────────────────────────────────────────────
@@ -297,11 +319,12 @@ func initModuleGroup(group *moduleGroup) {
 // version by bumping the given component (major, minor, or patch), creates the
 // git tag at the module's latest commit, and returns the new tag name.
 //
-// If the module's latest commit is the same as the one already tagged by the
-// previous stable tag, bumpModuleTag refuses to create a duplicate tag — unless
-// force is true, in which case it creates an empty commit
-// ("chore(release): bump to <version>") and tags that instead.
-func bumpModuleTag(group *moduleGroup, component string, force bool) string {
+// If the module's latest commit is already tagged by the previous stable tag,
+// bumpModuleTag prints a skip message and returns "". With force=true it
+// instead creates an empty bump commit and tags that. With dryRun=true no git
+// mutations are made; the computed tag name is returned so the caller can
+// report what would have happened.
+func bumpModuleTag(group *moduleGroup, component string, force, dryRun bool) string {
 	modRoot := group.root
 
 	prefix := mustRunIn(modRoot, "git", "rev-parse", "--show-prefix")
@@ -344,22 +367,30 @@ func bumpModuleTag(group *moduleGroup, component string, force bool) string {
 		fatalf("no commits found in %s", modRoot)
 	}
 
-	// Guard: refuse to tag the same commit twice.
+	// Guard: skip (or force-bump) when the module's latest commit is already tagged.
 	if latestStable != "" {
 		prevCommit := mustRunIn(modRoot, "git", "rev-list", "-n", "1", latestStable)
 		if prevCommit == commitSHA {
 			if !force {
-				fatalf("no new commits in %s since %s; nothing to tag\n"+
-					"  (use -force to create an empty bump commit)", prefix, latestStable)
+				fmt.Fprintf(os.Stderr, "monorel: skip: no new commits in %s since %s\n",
+					prefix, latestStable)
+				return ""
 			}
 			// Create an empty commit so we have something new to tag.
 			commitMsg := "chore(release): bump to " + newVersion
-			mustRunIn(modRoot, "git", "commit", "--allow-empty", "-m", commitMsg)
-			fmt.Fprintf(os.Stderr, "created empty commit: %s\n", commitMsg)
-			commitSHA = mustRunIn(modRoot, "git", "rev-parse", "HEAD")
+			if dryRun {
+				fmt.Fprintf(os.Stderr, "[dry-run] would create empty commit: %s\n", commitMsg)
+			} else {
+				mustRunIn(modRoot, "git", "commit", "--allow-empty", "-m", commitMsg)
+				fmt.Fprintf(os.Stderr, "created empty commit: %s\n", commitMsg)
+				commitSHA = mustRunIn(modRoot, "git", "rev-parse", "HEAD")
+			}
 		}
 	}
 
+	if dryRun {
+		return newTag
+	}
 	mustRunIn(modRoot, "git", "tag", newTag, commitSHA)
 	return newTag
 }
