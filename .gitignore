@@ -6,6 +6,7 @@ env.*
 !example.env
 
 # Project binaries
+dist/
 auth/csvauth/cmd/csvauth/csvauth
 cmd/auth-proxy/auth-proxy
 cmd/httplog/httplog
