@@ -1,3 +1,15 @@
+// tcpfwd - Accepts and forwards local connections to remote hosts.
+//
+// Authored in 2026 by AJ ONeal <aj@therootcompany.com>, assisted by Claude Code.
+// To the extent possible under law, the author(s) have dedicated all copyright
+// and related and neighboring rights to this software to the public domain
+// worldwide. This software is distributed without any warranty.
+//
+// You should have received a copy of the CC0 Public Domain Dedication along with
+// this software. If not, see <https://creativecommons.org/publicdomain/zero/1.0/>.
+//
+// SPDX-License-Identifier: CC0-1.0
+
 package main
 
 import (
@@ -18,8 +30,8 @@ import (
 
 const (
 	name         = "tcpfwd"
-	description  = "TCP port forwarder - bridge local ports to remote hosts"
-	licenseYear  = "2025"
+	description  = "Accepts and forwards local connections to remote hosts."
+	licenseYear  = "2026"
 	licenseOwner = "AJ ONeal <aj@therootcompany.com> (https://therootcompany.com)"
 	licenseType  = "CC0-1.0"
 )
@@ -76,8 +88,8 @@ func (e *connEntry) isIdle(now time.Time, threshold time.Duration) bool {
 }
 
 func (e *connEntry) close() {
-	e.client.Close()
-	e.remote.Close()
+	_ = e.client.Close()
+	_ = e.remote.Close()
 }
 
 // connRegistry tracks all active connections.
@@ -265,7 +277,7 @@ func main() {
 			for {
 				client, err := bl.Accept()
 				if err != nil {
-					if isClosedConn(err) {
+					if errors.Is(err, net.ErrClosed) {
 						return
 					}
 					log.Printf("Accept error: %v", err)
@@ -284,22 +296,28 @@ func main() {
 
 	// Stop accepting new connections
 	for _, l := range listeners {
-		l.Close()
+		_ = l.Close()
 	}
 
-	// Close connections that have been idle longer than idleTimeout
-	if n := reg.closeIdle(time.Now(), idleTimeout); n > 0 {
-		log.Printf("Closed %d idle connection(s) (idle > %s)", n, idleTimeout)
-	}
+	// Close connections as they become idle
+	go func() {
+		for {
+			if n := reg.closeIdle(time.Now(), idleTimeout); n > 0 {
+				log.Printf("Closed %d idle connection(s) (idle > %s)", n, idleTimeout)
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}()
 
 	// Wait for remaining active connections to drain, up to shutdownTimeout
 	if waitWithTimeout(&reg.wg, shutdownTimeout) {
 		log.Printf("All connections closed cleanly")
-	} else {
-		log.Printf("Shutdown timeout (%s) exceeded, force-closing remaining connections", shutdownTimeout)
-		reg.closeAll()
-		reg.wg.Wait()
+		return
 	}
+
+	log.Printf("Shutdown timeout (%s) exceeded, force-closing remaining connections", shutdownTimeout)
+	reg.closeAll()
+	reg.wg.Wait()
 }
 
 // waitWithTimeout waits for wg to reach zero, returning true if it drained
@@ -319,7 +337,7 @@ func handleConn(client net.Conn, target string, reg *connRegistry, clock func() 
 	remote, err := net.Dial("tcp", target)
 	if err != nil {
 		log.Printf("Failed to connect to %s: %v", target, err)
-		client.Close()
+		_ = client.Close()
 		return
 	}
 
@@ -329,8 +347,10 @@ func handleConn(client net.Conn, target string, reg *connRegistry, clock func() 
 
 	reg.add(entry)
 	defer reg.remove(entry)
-	defer client.Close()
-	defer remote.Close()
+	defer func() {
+		_ = client.Close()
+		_ = remote.Close()
+	}()
 
 	log.Printf("New connection %s ↔ %s", client.RemoteAddr(), remote.RemoteAddr())
 
@@ -345,15 +365,10 @@ func handleConn(client net.Conn, target string, reg *connRegistry, clock func() 
 // copyAndClose copies until EOF or error, then closes dst.
 func copyAndClose(dst, src net.Conn) error {
 	_, err := io.Copy(dst, src)
-	dst.Close()
-	if err != nil && !isClosedConn(err) {
+	_ = dst.Close()
+	if err != nil && !errors.Is(err, net.ErrClosed) {
 		log.Printf("Copy error (%s → %s): %v",
 			src.RemoteAddr(), dst.RemoteAddr(), err)
 	}
 	return err
-}
-
-// isClosedConn detects closed-connection errors.
-func isClosedConn(err error) bool {
-	return errors.Is(err, net.ErrClosed)
 }
