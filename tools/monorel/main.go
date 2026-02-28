@@ -11,7 +11,7 @@
 //	    Generate .goreleaser.yaml and print a ready-to-review bash release script.
 //
 //	monorel bump [-r major|minor|patch] <binary-path>...
-//	    Create a new semver git tag at HEAD for each module (default: patch).
+//	    Create a new semver tag at the module's latest commit (default: patch).
 //
 //	monorel init <binary-path>...
 //	    Write .goreleaser.yaml, commit it, and run bump patch for each module
@@ -102,8 +102,10 @@ func usage() {
 
 func runRelease(args []string) {
 	fs := flag.NewFlagSet("monorel release", flag.ExitOnError)
+	var recursive bool
+	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: monorel release <binary-path>...")
+		fmt.Fprintln(os.Stderr, "usage: monorel release [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Writes .goreleaser.yaml next to each module's go.mod and prints a")
 		fmt.Fprintln(os.Stderr, "ready-to-review bash release script to stdout.")
@@ -112,6 +114,7 @@ func runRelease(args []string) {
 		fmt.Fprintln(os.Stderr, "  monorel release .                          # single binary at module root")
 		fmt.Fprintln(os.Stderr, "  monorel release ./cmd/foo ./cmd/bar        # multiple binaries, same module")
 		fmt.Fprintln(os.Stderr, "  monorel release auth/csvauth/cmd/csvauth   # from repo root")
+		fmt.Fprintln(os.Stderr, "  monorel release -recursive .               # all modules under current directory")
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
@@ -122,7 +125,14 @@ func runRelease(args []string) {
 		os.Exit(2)
 	}
 
-	groups, err := groupByModule(binPaths)
+	allPaths, err := expandPaths(binPaths, recursive)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	if len(allPaths) == 0 {
+		fatalf("no main packages found under the given paths")
+	}
+	groups, err := groupByModule(allPaths)
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -146,17 +156,20 @@ func runRelease(args []string) {
 func runBump(args []string) {
 	fs := flag.NewFlagSet("monorel bump", flag.ExitOnError)
 	var component string
+	var recursive bool
 	fs.StringVar(&component, "r", "patch", "version component to bump: major, minor, or patch")
+	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: monorel bump [-r major|minor|patch] <binary-path>...")
+		fmt.Fprintln(os.Stderr, "usage: monorel bump [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "Creates a new semver git tag at HEAD for the module of each binary path.")
+		fmt.Fprintln(os.Stderr, "Creates a new semver git tag at the module's latest commit.")
 		fmt.Fprintln(os.Stderr, "The tag is created locally; push it with 'git push --tags'.")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Examples:")
-		fmt.Fprintln(os.Stderr, "  monorel bump ./cmd/csvauth              # bump patch (default)")
-		fmt.Fprintln(os.Stderr, "  monorel bump -r minor ./cmd/csvauth     # bump minor")
-		fmt.Fprintln(os.Stderr, "  monorel bump -r major ./cmd/csvauth     # bump major")
+		fmt.Fprintln(os.Stderr, "  monorel bump ./cmd/csvauth                  # bump patch (default)")
+		fmt.Fprintln(os.Stderr, "  monorel bump -r minor ./cmd/csvauth         # bump minor")
+		fmt.Fprintln(os.Stderr, "  monorel bump -r major ./cmd/csvauth         # bump major")
+		fmt.Fprintln(os.Stderr, "  monorel bump -recursive .                   # bump patch for all modules")
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
@@ -176,7 +189,14 @@ func runBump(args []string) {
 		os.Exit(2)
 	}
 
-	groups, err := groupByModule(binPaths)
+	allPaths, err := expandPaths(binPaths, recursive)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	if len(allPaths) == 0 {
+		fatalf("no main packages found under the given paths")
+	}
+	groups, err := groupByModule(allPaths)
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -190,13 +210,19 @@ func runBump(args []string) {
 
 func runInit(args []string) {
 	fs := flag.NewFlagSet("monorel init", flag.ExitOnError)
+	var recursive bool
+	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: monorel init <binary-path>...")
+		fmt.Fprintln(os.Stderr, "usage: monorel init [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "For each module (in command-line order):")
 		fmt.Fprintln(os.Stderr, "  1. Writes .goreleaser.yaml next to go.mod")
 		fmt.Fprintln(os.Stderr, "  2. Commits it (skipped if file is unchanged)")
 		fmt.Fprintln(os.Stderr, "  3. Creates an initial version tag (equivalent to 'bump patch')")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Examples:")
+		fmt.Fprintln(os.Stderr, "  monorel init ./auth/csvauth/cmd/csvauth")
+		fmt.Fprintln(os.Stderr, "  monorel init -recursive .               # init all modules under current directory")
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
@@ -207,7 +233,14 @@ func runInit(args []string) {
 		os.Exit(2)
 	}
 
-	groups, err := groupByModule(binPaths)
+	allPaths, err := expandPaths(binPaths, recursive)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	if len(allPaths) == 0 {
+		fatalf("no main packages found under the given paths")
+	}
+	groups, err := groupByModule(allPaths)
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -337,6 +370,69 @@ func computeBumpTag(prefix, latestStableTag, component string) string {
 }
 
 // ── Module discovery ───────────────────────────────────────────────────────
+
+// expandPaths returns paths unchanged when recursive is false.  When true, it
+// replaces each path with all main-package directories found beneath it.
+func expandPaths(paths []string, recursive bool) ([]string, error) {
+	if !recursive {
+		return paths, nil
+	}
+	var all []string
+	for _, p := range paths {
+		found, err := findMainPackages(p)
+		if err != nil {
+			return nil, fmt.Errorf("searching %s: %w", p, err)
+		}
+		all = append(all, found...)
+	}
+	return all, nil
+}
+
+// findMainPackages recursively walks root and returns the absolute path of
+// every directory that contains a Go main package.  It stops descending into
+// any directory listed in stopMarkers (e.g. .git directories), preventing
+// the walk from crossing into a parent repository.
+func findMainPackages(root string) ([]string, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolving %s: %w", root, err)
+	}
+	var paths []string
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		if checkPackageMain(dir) == nil {
+			paths = append(paths, dir)
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			// Honour stopMarkers: skip .git directories (repo boundary).
+			// A .git FILE (submodule pointer) is not a directory, so it is
+			// not matched here and we keep descending — consistent with
+			// findModuleRoot's behaviour.
+			skip := false
+			for _, stop := range stopMarkers {
+				if e.Name() == stop {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+			if err := walk(filepath.Join(dir, e.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return paths, walk(abs)
+}
 
 // findModuleRoot walks upward from absDir looking for a directory that
 // contains go.mod.  It stops (with an error) if it encounters a stopMarker
@@ -789,7 +885,6 @@ func printModuleScript(
 
 	section("Step 1: Environment variables")
 	line("export VERSION=%q", version)
-	line("export GORELEASER_CURRENT_TAG=%q", currentTag)
 
 	if needsNewTag {
 		section("Step 2: Create git tag")
@@ -802,7 +897,10 @@ func printModuleScript(
 	if relPath == "." {
 		line("goreleaser release --clean --skip=validate,announce")
 	} else {
-		line("( cd %q && goreleaser release --clean --skip=validate,announce )", relPath)
+		line("(")
+		line("  cd %q", relPath)
+		line("  goreleaser release --clean --skip=validate,announce")
+		line(")")
 	}
 
 	section("Step 4: Generate release notes")
