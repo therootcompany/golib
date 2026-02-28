@@ -102,8 +102,9 @@ func usage() {
 
 func runRelease(args []string) {
 	fs := flag.NewFlagSet("monorel release", flag.ExitOnError)
-	var recursive bool
+	var recursive, all bool
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
+	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel release [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -125,7 +126,7 @@ func runRelease(args []string) {
 		os.Exit(2)
 	}
 
-	allPaths, err := expandPaths(binPaths, recursive)
+	allPaths, err := expandPaths(binPaths, recursive, all)
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -156,9 +157,11 @@ func runRelease(args []string) {
 func runBump(args []string) {
 	fs := flag.NewFlagSet("monorel bump", flag.ExitOnError)
 	var component string
-	var recursive bool
+	var recursive, all, force bool
 	fs.StringVar(&component, "r", "patch", "version component to bump: major, minor, or patch")
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
+	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
+	fs.BoolVar(&force, "force", false, "if no new commits, create an empty bump commit and tag it")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel bump [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -170,6 +173,7 @@ func runBump(args []string) {
 		fmt.Fprintln(os.Stderr, "  monorel bump -r minor ./cmd/csvauth         # bump minor")
 		fmt.Fprintln(os.Stderr, "  monorel bump -r major ./cmd/csvauth         # bump major")
 		fmt.Fprintln(os.Stderr, "  monorel bump -recursive .                   # bump patch for all modules")
+		fmt.Fprintln(os.Stderr, "  monorel bump -force ./cmd/csvauth           # bump even with no new commits")
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
@@ -189,7 +193,7 @@ func runBump(args []string) {
 		os.Exit(2)
 	}
 
-	allPaths, err := expandPaths(binPaths, recursive)
+	allPaths, err := expandPaths(binPaths, recursive, all)
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -201,7 +205,7 @@ func runBump(args []string) {
 		fatalf("%v", err)
 	}
 	for _, group := range groups {
-		newTag := bumpModuleTag(group, component)
+		newTag := bumpModuleTag(group, component, force)
 		fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
 	}
 }
@@ -210,8 +214,9 @@ func runBump(args []string) {
 
 func runInit(args []string) {
 	fs := flag.NewFlagSet("monorel init", flag.ExitOnError)
-	var recursive bool
+	var recursive, all bool
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
+	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel init [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -233,7 +238,7 @@ func runInit(args []string) {
 		os.Exit(2)
 	}
 
-	allPaths, err := expandPaths(binPaths, recursive)
+	allPaths, err := expandPaths(binPaths, recursive, all)
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -282,7 +287,7 @@ func initModuleGroup(group *moduleGroup) {
 	}
 
 	// 3. Bump patch.
-	newTag := bumpModuleTag(group, "patch")
+	newTag := bumpModuleTag(group, "patch", false)
 	fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
 }
 
@@ -290,8 +295,13 @@ func initModuleGroup(group *moduleGroup) {
 
 // bumpModuleTag finds the latest stable tag for the module, computes the next
 // version by bumping the given component (major, minor, or patch), creates the
-// git tag at HEAD, and returns the new tag name.
-func bumpModuleTag(group *moduleGroup, component string) string {
+// git tag at the module's latest commit, and returns the new tag name.
+//
+// If the module's latest commit is the same as the one already tagged by the
+// previous stable tag, bumpModuleTag refuses to create a duplicate tag — unless
+// force is true, in which case it creates an empty commit
+// ("chore(release): bump to <version>") and tags that instead.
+func bumpModuleTag(group *moduleGroup, component string, force bool) string {
 	modRoot := group.root
 
 	prefix := mustRunIn(modRoot, "git", "rev-parse", "--show-prefix")
@@ -325,12 +335,31 @@ func bumpModuleTag(group *moduleGroup, component string) string {
 	}
 
 	newTag := computeBumpTag(prefix, latestStable, component)
+	newVersion := strings.TrimPrefix(newTag, prefix+"/")
+
 	// Tag the most recent commit that touched this module's directory, which
 	// may be behind HEAD if other modules have been updated more recently.
 	commitSHA := mustRunIn(modRoot, "git", "log", "--format=%H", "-1", "--", ".")
 	if commitSHA == "" {
 		fatalf("no commits found in %s", modRoot)
 	}
+
+	// Guard: refuse to tag the same commit twice.
+	if latestStable != "" {
+		prevCommit := mustRunIn(modRoot, "git", "rev-list", "-n", "1", latestStable)
+		if prevCommit == commitSHA {
+			if !force {
+				fatalf("no new commits in %s since %s; nothing to tag\n"+
+					"  (use -force to create an empty bump commit)", prefix, latestStable)
+			}
+			// Create an empty commit so we have something new to tag.
+			commitMsg := "chore(release): bump to " + newVersion
+			mustRunIn(modRoot, "git", "commit", "--allow-empty", "-m", commitMsg)
+			fmt.Fprintf(os.Stderr, "created empty commit: %s\n", commitMsg)
+			commitSHA = mustRunIn(modRoot, "git", "rev-parse", "HEAD")
+		}
+	}
+
 	mustRunIn(modRoot, "git", "tag", newTag, commitSHA)
 	return newTag
 }
@@ -373,26 +402,33 @@ func computeBumpTag(prefix, latestStableTag, component string) string {
 
 // expandPaths returns paths unchanged when recursive is false.  When true, it
 // replaces each path with all main-package directories found beneath it.
-func expandPaths(paths []string, recursive bool) ([]string, error) {
+// all mirrors the -A flag: include dot/underscore-prefixed directories and
+// warn on errors instead of failing.
+func expandPaths(paths []string, recursive, all bool) ([]string, error) {
 	if !recursive {
 		return paths, nil
 	}
-	var all []string
+	var result []string
 	for _, p := range paths {
-		found, err := findMainPackages(p)
+		found, err := findMainPackages(p, all)
 		if err != nil {
 			return nil, fmt.Errorf("searching %s: %w", p, err)
 		}
-		all = append(all, found...)
+		result = append(result, found...)
 	}
-	return all, nil
+	return result, nil
 }
 
 // findMainPackages recursively walks root and returns the absolute path of
 // every directory that contains a Go main package.  It stops descending into
 // any directory listed in stopMarkers (e.g. .git directories), preventing
 // the walk from crossing into a parent repository.
-func findMainPackages(root string) ([]string, error) {
+//
+// By default directories whose names begin with '.' or '_' are skipped (they
+// are conventionally hidden or disabled).  Pass all=true (the -A flag) to
+// include them; in that mode ReadDir failures are downgraded to warnings so
+// that a single unreadable directory doesn't abort the whole walk.
+func findMainPackages(root string, all bool) ([]string, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s: %w", root, err)
@@ -402,6 +438,10 @@ func findMainPackages(root string) ([]string, error) {
 	walk = func(dir string) error {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
+			if all {
+				fmt.Fprintf(os.Stderr, "warning: skipping %s: %v\n", dir, err)
+				return nil
+			}
 			return err
 		}
 		if checkPackageMain(dir) == nil {
@@ -411,13 +451,14 @@ func findMainPackages(root string) ([]string, error) {
 			if !e.IsDir() {
 				continue
 			}
+			name := e.Name()
 			// Honour stopMarkers: skip .git directories (repo boundary).
 			// A .git FILE (submodule pointer) is not a directory, so it is
 			// not matched here and we keep descending — consistent with
 			// findModuleRoot's behaviour.
 			skip := false
 			for _, stop := range stopMarkers {
-				if e.Name() == stop {
+				if name == stop {
 					skip = true
 					break
 				}
@@ -425,7 +466,11 @@ func findMainPackages(root string) ([]string, error) {
 			if skip {
 				continue
 			}
-			if err := walk(filepath.Join(dir, e.Name())); err != nil {
+			// Skip dot- and underscore-prefixed directories unless -A is set.
+			if !all && len(name) > 0 && (name[0] == '.' || name[0] == '_') {
+				continue
+			}
+			if err := walk(filepath.Join(dir, name)); err != nil {
 				return err
 			}
 		}
