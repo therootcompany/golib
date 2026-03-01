@@ -997,6 +997,17 @@ func processModule(group *moduleGroup, relPath string) {
 		prevTag = latestTag
 	}
 
+	// Pre-compute release notes now so the generated script contains the
+	// actual commit list rather than a git command the user must re-run.
+	var releaseNotes string
+	if prevTag != "" {
+		releaseNotes = runIn(modRoot, "git", "--no-pager", "log", prevTag+"..HEAD",
+			"--pretty=format:- %h %s", "--", ".")
+	} else {
+		releaseNotes = runIn(modRoot, "git", "--no-pager", "log",
+			"--pretty=format:- %h %s", "--", ".")
+	}
+
 	// Write .goreleaser.yaml next to go.mod.
 	// Warn if an existing file uses {{ .ProjectName }} (stock goreleaser config)
 	// and the module is a monorepo subdirectory (go.mod not adjacent to .git/).
@@ -1020,7 +1031,7 @@ func processModule(group *moduleGroup, relPath string) {
 	headSHA := mustRunIn(modRoot, "git", "rev-parse", "HEAD")
 	printModuleScript(relPath, projectName, bins,
 		version, currentTag, prevTag, repoPath, headSHA,
-		isPreRelease, needsNewTag, isDirty)
+		releaseNotes, isPreRelease, needsNewTag, isDirty)
 }
 
 // ── Version computation ────────────────────────────────────────────────────
@@ -1207,6 +1218,7 @@ func printModuleScript(
 	relPath string,
 	projectName string, bins []binary,
 	version, currentTag, prevTag, repoPath, headSHA string,
+	releaseNotes string,
 	isPreRelease, needsNewTag, isDirty bool,
 ) {
 	line := func(format string, args ...any) { fmt.Printf(format+"\n", args...) }
@@ -1218,12 +1230,10 @@ func printModuleScript(
 	}
 
 	// Paths used in the generated script, all relative to the invoking CWD.
-	var gitPathSpec, distDir string
+	var distDir string
 	if relPath == "." {
-		gitPathSpec = "./"
 		distDir = "./dist"
 	} else {
-		gitPathSpec = relPath + "/"
 		distDir = relPath + "/dist"
 	}
 
@@ -1287,14 +1297,8 @@ func printModuleScript(
 		line(")")
 	}
 
-	section("Step 4: Generate release notes")
-	if prevTag != "" {
-		line("%s=$(git --no-pager log %q..HEAD \\", notesVar, prevTag)
-		line("  --pretty=format:'- %%h %%s' -- %s)", gitPathSpec)
-	} else {
-		line("%s=$(git --no-pager log \\", notesVar)
-		line("  --pretty=format:'- %%h %%s' -- %s)", gitPathSpec)
-	}
+	section("Step 4: Release notes")
+	line("%s=%s", notesVar, shellSingleQuote(releaseNotes))
 
 	section("Step 5: Create draft GitHub release")
 	tagVersion := currentTag[strings.LastIndex(currentTag, "/")+1:]
@@ -1324,6 +1328,12 @@ func printModuleScript(
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+// shellSingleQuote wraps s in bash single quotes, escaping any literal single
+// quotes inside s as '\''.  For example: it's → 'it'\''s'.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
 
 func normalizeGitURL(rawURL string) string {
 	rawURL = strings.TrimSpace(rawURL)
