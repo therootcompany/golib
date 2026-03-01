@@ -312,16 +312,17 @@ func initModuleGroup(group *moduleGroup, dryRun bool) {
 	prefixParts := strings.Split(prefix, "/")
 	projectName := prefixParts[len(prefixParts)-1]
 
-	// 1. Write .goreleaser.yaml (always regenerate so it stays current).
+	// 1. Write .goreleaser.yaml only when the content has changed.
 	yamlContent := goreleaserYAML(projectName, bins)
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
-	isNewFile := true
-	if _, err := os.ReadFile(yamlPath); err == nil {
-		isNewFile = false
-	}
+	existing, readErr := os.ReadFile(yamlPath)
+	isNewFile := readErr != nil
+	isChanged := isNewFile || string(existing) != yamlContent
 	if dryRun {
-		fmt.Fprintf(os.Stderr, "[dry-run] would write %s\n", yamlPath)
-	} else {
+		if isChanged {
+			fmt.Fprintf(os.Stderr, "[dry-run] would write %s\n", yamlPath)
+		}
+	} else if isChanged {
 		if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
 			fatalf("writing %s: %v", yamlPath, err)
 		}
