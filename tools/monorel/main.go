@@ -312,9 +312,13 @@ func initModuleGroup(group *moduleGroup, dryRun bool) {
 	prefixParts := strings.Split(prefix, "/")
 	projectName := prefixParts[len(prefixParts)-1]
 
-	// 1. Write .goreleaser.yaml.
+	// 1. Write .goreleaser.yaml (always regenerate so it stays current).
 	yamlContent := goreleaserYAML(projectName, bins)
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
+	isNewFile := true
+	if _, err := os.ReadFile(yamlPath); err == nil {
+		isNewFile = false
+	}
 	if dryRun {
 		fmt.Fprintf(os.Stderr, "[dry-run] would write %s\n", yamlPath)
 	} else {
@@ -323,14 +327,15 @@ func initModuleGroup(group *moduleGroup, dryRun bool) {
 		}
 		fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
 
-		// 2. Stage and commit if the file changed.
-		mustRunIn(modRoot, "git", "add", ".goreleaser.yaml")
-		if status := runIn(modRoot, "git", "status", "--porcelain", "--", ".goreleaser.yaml"); status != "" {
-			commitMsg := "chore(release): add .goreleaser.yaml for " + projectName
-			mustRunIn(modRoot, "git", "commit", "-m", commitMsg)
-			fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
-		} else {
-			fmt.Fprintf(os.Stderr, "note: .goreleaser.yaml unchanged, skipping commit\n")
+		// 2. Auto-commit — only when the file was newly created.
+		// Updates to an existing file require manual review and commit.
+		if isNewFile {
+			mustRunIn(modRoot, "git", "add", ".goreleaser.yaml")
+			if status := runIn(modRoot, "git", "status", "--porcelain", "--", ".goreleaser.yaml"); status != "" {
+				commitMsg := "chore(" + prefix + "): add .goreleaser.yaml"
+				mustRunIn(modRoot, "git", "commit", "-m", commitMsg)
+				fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
+			}
 		}
 	}
 
@@ -338,8 +343,9 @@ func initModuleGroup(group *moduleGroup, dryRun bool) {
 	// commit since the last stable tag (the common "first setup" scenario).
 	// If other commits are already waiting to be tagged the user should choose
 	// the right semver component with an explicit 'monorel bump'.
-	shouldBump := true
-	if !dryRun {
+	// Auto-bump only applies when the yaml was newly created.
+	shouldBump := isNewFile
+	if !dryRun && isNewFile {
 		latestStable := findLatestStableTag(modRoot, prefix)
 		if latestStable != "" {
 			logOut := strings.TrimSpace(runIn(modRoot, "git", "log", "--oneline", latestStable+"..HEAD", "--", "."))
