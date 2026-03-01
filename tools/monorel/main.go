@@ -44,6 +44,14 @@ import (
 // Adjust this slice if you ever need to search across repository boundaries.
 var stopMarkers = []string{".git"}
 
+// defaultGoos is the CGO_ENABLED=0 build matrix used in generated .goreleaser.yaml files.
+// Platforms requiring CGO or special toolchains (ios, android) are emitted as comments.
+var defaultGoos = []string{
+	"aix", "darwin", "dragonfly", "freebsd", "illumos",
+	"js", "linux", "netbsd", "openbsd", "plan9",
+	"solaris", "wasip1", "windows",
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 // binary describes one Go main package to build and release.
@@ -1241,34 +1249,52 @@ func goreleaserYAML(projectName string, bins []binary) string {
 	w("    # you may remove this if you don't need go generate\n")
 	w("    - go generate ./...\n")
 
+	// When multiple binaries share a module, define the common build options
+	// once with a YAML anchor on the first build and merge them into the rest.
+	// Single-binary modules use plain fields (no anchor overhead).
+	multibin := len(bins) > 1
+
 	w("\nbuilds:\n")
-	for _, bin := range bins {
+	for i, bin := range bins {
 		wf("  - id: %s\n", bin.name)
 		wf("    binary: %s\n", bin.name)
 		if bin.mainPath != "." {
 			wf("    main: %s\n", bin.mainPath)
 		}
-		w("    env:\n      - CGO_ENABLED=0\n")
-		w("    ldflags:\n")
-		w("      - -s -w" +
-			" -X main.version={{.Env.VERSION}}" +
-			" -X main.commit={{.Commit}}" +
-			" -X main.date={{.Date}}" +
-			" -X main.builtBy=goreleaser\n")
-		w("    goos:\n")
-		w("      - aix\n")
-		w("      - darwin\n")
-		w("      - dragonfly\n")
-		w("      - freebsd\n")
-		w("      - illumos\n")
-		w("      - js\n")
-		w("      - linux\n")
-		w("      - netbsd\n")
-		w("      - openbsd\n")
-		w("      - plan9\n")
-		w("      - solaris\n")
-		w("      - wasip1\n")
-		w("      - windows\n")
+
+		// Shared build options — defined once via anchor, merged into the rest.
+		switch {
+		case !multibin:
+			// Single binary: plain fields.
+			w("    env:\n      - CGO_ENABLED=0\n")
+			w("    ldflags:\n")
+			w("      - -s -w" +
+				" -X main.version={{.Env.VERSION}}" +
+				" -X main.commit={{.Commit}}" +
+				" -X main.date={{.Date}}" +
+				" -X main.builtBy=goreleaser\n")
+			w("    goos:\n")
+			for _, g := range defaultGoos {
+				wf("      - %s\n", g)
+			}
+		case i == 0:
+			// First of multiple binaries: define the anchor.
+			w("    <<: &build_defaults\n")
+			w("      env:\n        - CGO_ENABLED=0\n")
+			w("      ldflags:\n")
+			w("        - -s -w" +
+				" -X main.version={{.Env.VERSION}}" +
+				" -X main.commit={{.Commit}}" +
+				" -X main.date={{.Date}}" +
+				" -X main.builtBy=goreleaser\n")
+			w("      goos:\n")
+			for _, g := range defaultGoos {
+				wf("        - %s\n", g)
+			}
+		default:
+			// Subsequent binaries: reference the anchor.
+			w("    <<: *build_defaults\n")
+		}
 
 		// iOS requires CGO and Xcode toolchain — commented out by default.
 		wf("  # iOS requires CGO_ENABLED=1 and the Xcode toolchain.\n")
@@ -1277,7 +1303,14 @@ func goreleaserYAML(projectName string, bins []binary) string {
 		if bin.mainPath != "." {
 			wf("  #  main: %s\n", bin.mainPath)
 		}
-		w("  #  env:\n  #    - CGO_ENABLED=1\n")
+		if multibin && i == 0 {
+			w("  #  <<: &build_defaults_ios\n")
+			w("  #    env:\n  #      - CGO_ENABLED=1\n")
+		} else if multibin {
+			w("  #  <<: *build_defaults_ios\n")
+		} else {
+			w("  #  env:\n  #    - CGO_ENABLED=1\n")
+		}
 		w("  #  goos:\n  #    - ios\n")
 
 		// Android: CGO_ENABLED=0 supports arm64 only; full CGO requires the NDK.
