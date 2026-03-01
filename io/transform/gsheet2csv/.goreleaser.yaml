@@ -18,36 +18,33 @@ builds:
   - id: gsheet2csv
     binary: gsheet2csv
     main: ./cmd/gsheet2csv
-    env:
-      - CGO_ENABLED=0
-    ldflags:
-      - -s -w -X main.version={{.Env.VERSION}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser
-    goos:
-      - linux
-      - windows
-      - darwin
+    <<: &build_defaults
+      env:
+        - CGO_ENABLED=0
+      ldflags:
+        - -s -w -X main.version={{.Env.VERSION}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser
+      goos:
+        - aix
+        - darwin
+        - dragonfly
+        - freebsd
+        - illumos
+        - js
+        - linux
+        - netbsd
+        - openbsd
+        - plan9
+        - solaris
+        - wasip1
+        - windows
   - id: gsheet2env
     binary: gsheet2env
     main: ./cmd/gsheet2env
-    env:
-      - CGO_ENABLED=0
-    ldflags:
-      - -s -w -X main.version={{.Env.VERSION}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser
-    goos:
-      - linux
-      - windows
-      - darwin
+    <<: *build_defaults
   - id: gsheet2tsv
     binary: gsheet2tsv
     main: ./cmd/gsheet2tsv
-    env:
-      - CGO_ENABLED=0
-    ldflags:
-      - -s -w -X main.version={{.Env.VERSION}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser
-    goos:
-      - linux
-      - windows
-      - darwin
+    <<: *build_defaults
 
 archives:
   - id: gsheet2csv
