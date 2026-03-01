@@ -964,9 +964,10 @@ func processModule(group *moduleGroup, relPath string) {
 	// on disk and leave committing to the user.
 	yamlContent := goreleaserYAML(projectName, bins)
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
-	isNewFile := true
-	if existing, err := os.ReadFile(yamlPath); err == nil {
-		isNewFile = false
+	existing, readErr := os.ReadFile(yamlPath)
+	isNewFile := readErr != nil
+	isChanged := isNewFile || string(existing) != yamlContent
+	if !isNewFile && isChanged {
 		// Warn if a stock {{ .ProjectName }} template is in use.
 		hasProjectName := strings.Contains(string(existing), "{{ .ProjectName }}") ||
 			strings.Contains(string(existing), "{{.ProjectName}}")
@@ -977,16 +978,18 @@ func processModule(group *moduleGroup, relPath string) {
 			fmt.Fprintf(os.Stderr, "  replacing stock goreleaser config with monorel-generated config.\n")
 		}
 	}
-	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
-		fatalf("writing %s: %v", yamlPath, err)
+	if isChanged {
+		if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
+			fatalf("writing %s: %v", yamlPath, err)
+		}
+		fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
 	}
-	fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
 
 	// 2. Auto-commit + auto-tag — only when the file was newly created.
 	if isNewFile {
 		mustRunIn(modRoot, "git", "add", ".goreleaser.yaml")
 		if status := runIn(modRoot, "git", "status", "--porcelain", "--", ".goreleaser.yaml"); status != "" {
-			commitMsg := "chore(release): add .goreleaser.yaml for " + projectName
+			commitMsg := "chore(" + prefix + "): add .goreleaser.yaml"
 			mustRunIn(modRoot, "git", "commit", "-m", commitMsg)
 			fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
 		}
