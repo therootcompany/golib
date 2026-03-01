@@ -12,6 +12,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -47,24 +48,22 @@ func main() {
 		ignoreSet[c] = true
 	}
 
-	// 1. prefix (relative to root)
 	// prefixB, _ := exec.Command("git", "rev-parse", "--show-prefix").Output()
 	// prefix := strings.TrimSuffix(strings.TrimSpace(string(prefixB)), "/")
 
-	// 2. cd root
 	rootB, _ := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	root := strings.TrimSpace(string(rootB))
 	_ = os.Chdir(root)
+	repoName := filepath.Base(root)
 
-	// 3. committed files
 	ls, _ := runGit("ls-files")
 	committed := strings.Split(ls, "\n")
 
-	// 4+6. modules (go + node) + untracked
 	type Module struct {
 		Path      string
 		Type      string
 		Untracked bool
+		Bins      map[string]string
 	}
 	modMap := make(map[string]Module)
 	modTypes := map[string]string{"go.mod": "go", "package.json": "node"}
@@ -82,7 +81,7 @@ func main() {
 		}
 	}
 	untrackedS, _ := runGit("ls-files", "--others", "--exclude-standard")
-	for f := range strings.SplitSeq(untrackedS, "\n") {
+	for _, f := range strings.Split(untrackedS, "\n") {
 		if f == "" {
 			continue
 		}
@@ -100,13 +99,142 @@ func main() {
 		}
 	}
 
+	goCommS, _ := runGit("ls-files", "--", "*.go")
+	goUntrS, _ := runGit("ls-files", "--others", "--exclude-standard", "--", "*.go")
+	allGoFiles := []string{}
+	for _, s := range []string{goCommS, goUntrS} {
+		for _, line := range strings.Split(s, "\n") {
+			if line != "" {
+				allGoFiles = append(allGoFiles, line)
+			}
+		}
+	}
+
 	modules := make([]Module, 0, len(modMap))
 	for _, m := range modMap {
 		modules = append(modules, m)
 	}
 	sort.Slice(modules, func(i, j int) bool { return modules[i].Path < modules[j].Path })
 
-	// 5. dirty (porcelain)
+	goModulePrefixes := []string{}
+	for _, m := range modules {
+		if m.Type == "go" {
+			if m.Path == "" {
+				goModulePrefixes = append(goModulePrefixes, "")
+			} else {
+				goModulePrefixes = append(goModulePrefixes, m.Path+"/")
+			}
+		}
+	}
+	sort.Slice(goModulePrefixes, func(i, j int) bool {
+		return len(goModulePrefixes[i]) > len(goModulePrefixes[j])
+	})
+
+	goToModule := make(map[string]string)
+	for _, gf := range allGoFiles {
+		dir := filepath.Dir(gf)
+		if dir == "." {
+			dir = ""
+		}
+		matchP := ""
+		matched := false
+		for _, pre := range goModulePrefixes {
+			if pre != "" && strings.HasPrefix(dir+"/", pre) {
+				matchP = strings.TrimSuffix(pre, "/")
+				matched = true
+				break
+			} else if pre == "" && !matched {
+				matchP = ""
+				matched = true
+			}
+		}
+		if matched {
+			goToModule[gf] = matchP
+		}
+	}
+
+	for i := range modules {
+		m := &modules[i]
+		m.Bins = make(map[string]string)
+		if m.Type == "node" {
+			pkgFile := "package.json"
+			if m.Path != "" {
+				pkgFile = filepath.Join(m.Path, "package.json")
+			}
+			data, err := os.ReadFile(pkgFile)
+			if err != nil {
+				continue
+			}
+			var pi struct {
+				Name string `json:"name"`
+				Bin  any    `json:"bin"`
+			}
+			if json.Unmarshal(data, &pi) != nil {
+				continue
+			}
+			switch v := pi.Bin.(type) {
+			case string:
+				if v != "" {
+					rel := filepath.Clean(filepath.Join(m.Path, v))
+					name := pi.Name
+					if name == "" {
+						name = strings.TrimSuffix(filepath.Base(v), filepath.Ext(v))
+					}
+					if name == "" || name == "." {
+						name = "bin"
+					}
+					m.Bins[name] = rel
+				}
+			case map[string]any:
+				for k, vv := range v {
+					if s, ok := vv.(string); ok && s != "" {
+						rel := filepath.Clean(filepath.Join(m.Path, s))
+						m.Bins[k] = rel
+					}
+				}
+			}
+		} else if m.Type == "go" {
+			mainDirs := make(map[string]bool)
+			for _, gf := range allGoFiles {
+				if goToModule[gf] != m.Path {
+					continue
+				}
+				if strings.HasSuffix(gf, "_test.go") {
+					continue
+				}
+				data, err := os.ReadFile(gf)
+				if err != nil {
+					continue
+				}
+				hasMain := false
+				for _, line := range strings.Split(string(data), "\n") {
+					if line == "package main" {
+						hasMain = true
+						break
+					}
+				}
+				if hasMain {
+					dir := filepath.Dir(gf)
+					if dir == "." {
+						dir = ""
+					}
+					mainDirs[dir] = true
+				}
+			}
+			for dir := range mainDirs {
+				var name, fullP string
+				if dir == "" || dir == "." {
+					name = repoName
+					fullP = "."
+				} else {
+					name = filepath.Base(dir)
+					fullP = dir
+				}
+				m.Bins[name] = fullP
+			}
+		}
+	}
+
 	por, _ := runGit("status", "--porcelain", ".")
 	porLines := strings.Split(por, "\n")
 	dirtyMod := make(map[string]bool)
@@ -126,7 +254,6 @@ func main() {
 		status := line[0:2]
 		fileP := line[3:]
 
-		// classify
 		types := []rune{}
 		if status == "??" {
 			types = append(types, 'u')
@@ -152,7 +279,6 @@ func main() {
 			continue
 		}
 
-		// assign to module
 		matched := false
 		for _, pre := range modPrefixes {
 			if strings.HasPrefix(fileP, pre) {
@@ -163,11 +289,10 @@ func main() {
 			}
 		}
 		if !matched {
-			dirtyMod[""] = true // root
+			dirtyMod[""] = true
 		}
 	}
 
-	// 7. tags (highest first)
 	tagsS, _ := runGit("tag", "--list", "--sort=-version:refname")
 	tags := strings.Split(tagsS, "\n")
 	modLatest := make(map[string]string)
@@ -201,7 +326,6 @@ func main() {
 		}
 	}
 
-	// 8+9. display
 	for _, m := range modules {
 		d := dirtyMod[m.Path]
 		latest := modLatest[m.Path]
@@ -227,11 +351,33 @@ func main() {
 		if d {
 			ver += "-dirty"
 		}
-		if m.Untracked {
-			fmt.Printf("./%s (%s, untracked): %s\n", m.Path, m.Type, ver)
-		} else {
-			fmt.Printf("./%s (%s): %s\n", m.Path, m.Type, ver)
+
+		pathShow := m.Path
+		if pathShow == "" {
+			pathShow = "."
 		}
+		unStr := ""
+		if m.Untracked {
+			unStr = ", untracked"
+		}
+		fmt.Printf("./%s (%s%s): %s\n", pathShow, m.Type, unStr, ver)
+
+		if len(m.Bins) > 0 {
+			names := make([]string, 0, len(m.Bins))
+			for n := range m.Bins {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			for _, n := range names {
+				p := m.Bins[n]
+				showP := p
+				if showP == "" || showP == "." {
+					showP = "."
+				}
+				fmt.Printf("   %s -> ./%s\n", n, showP)
+			}
+		}
+
 		if *verbose && commits > 0 && latest != "" {
 			pArg := "."
 			if m.Path != "" {
