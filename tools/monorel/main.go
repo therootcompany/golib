@@ -1322,7 +1322,10 @@ func printModuleScript(
 		line("# To undo:  git tag -d %q", currentTag)
 	}
 
-	section("Step 3: Build with goreleaser")
+	section("Step 3: Push commits and tags to remote")
+	line("git push && git push --tags")
+
+	section("Step 4: Build with goreleaser")
 	line("# release.disable=true in .goreleaser.yaml; goreleaser only builds.")
 	if relPath == "." {
 		line("goreleaser release --clean --skip=validate,announce")
@@ -1333,10 +1336,10 @@ func printModuleScript(
 		line(")")
 	}
 
-	section("Step 4: Release notes")
+	section("Step 5: Release notes")
 	line("%s=%s", notesVar, shellSingleQuote(releaseNotes))
 
-	section("Step 5: Create draft GitHub release")
+	section("Step 6: Create draft GitHub release")
 	tagVersion := currentTag[strings.LastIndex(currentTag, "/")+1:]
 	title := projectName + " " + tagVersion
 	line("gh release create %q \\", currentTag)
@@ -1348,7 +1351,7 @@ func printModuleScript(
 	line("  --draft \\")
 	line("  --target %q", headSHA)
 
-	section("Step 6: Upload artifacts")
+	section("Step 7: Upload artifacts")
 	line("gh release upload %q \\", currentTag)
 	for _, bin := range bins {
 		line("  %s/%s_*.tar.gz \\", distDir, bin.name)
@@ -1357,7 +1360,7 @@ func printModuleScript(
 	line("  \"%s/%s_%s_checksums.txt\" \\", distDir, projectName, version)
 	line("  --clobber")
 
-	section("Step 7: Publish release (remove draft)")
+	section("Step 8: Publish release (remove draft)")
 	line("gh release edit %q --draft=false", currentTag)
 
 	blank()
