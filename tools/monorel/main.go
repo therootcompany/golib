@@ -1209,7 +1209,7 @@ func goreleaserYAML(projectName string, bins []binary) string {
 	for _, bin := range bins {
 		wf("  - id: %s\n", bin.name)
 		wf("    ids: [%s]\n", bin.name)
-		w("    formats: [tar.gz]\n")
+		w("    formats: [tar.gz, tar.zst]\n")
 		w("    # name_template uses VERSION env var so the prefixed monorepo tag\n")
 		w("    # doesn't appear in archive filenames.\n")
 		w("    name_template: >-\n")
@@ -1221,7 +1221,7 @@ func goreleaserYAML(projectName string, bins []binary) string {
 		w("      {{- if .Arm }}v{{ .Arm }}{{ end }}\n")
 		w("    format_overrides:\n")
 		w("      - goos: windows\n")
-		w("        formats: [zip]\n")
+		w("        formats: [zip, tar.gz]\n")
 	}
 
 	w("\nchangelog:\n  sort: asc\n  filters:\n    exclude:\n")
@@ -1355,6 +1355,7 @@ func printModuleScript(
 	line("gh release upload %q \\", currentTag)
 	for _, bin := range bins {
 		line("  %s/%s_*.tar.gz \\", distDir, bin.name)
+		line("  %s/%s_*.tar.zst \\", distDir, bin.name)
 		line("  %s/%s_*.zip \\", distDir, bin.name)
 	}
 	line("  \"%s/%s_%s_checksums.txt\" \\", distDir, projectName, version)
