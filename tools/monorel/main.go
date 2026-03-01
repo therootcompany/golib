@@ -117,8 +117,8 @@ func runRelease(args []string) {
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.BoolVar(&dryRun, "dry-run", false, "show each step without running it")
 	fs.BoolVar(&yes, "yes", false, "run all steps without prompting")
-	fs.BoolVar(&draft, "draft", false, "create GitHub release as a draft")
-	fs.BoolVar(&prerelease, "prerelease", false, "mark GitHub release as a pre-release")
+	fs.BoolVar(&draft, "draft", false, "keep the GitHub release in draft state after uploading (default: publish)")
+	fs.BoolVar(&prerelease, "prerelease", false, "keep the GitHub release marked as pre-release even for clean tags (default: promote clean tags to stable)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel release [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -1093,7 +1093,7 @@ func processModule(group *moduleGroup, relPath string, dryRun, yes, draft, prere
 	steps := buildModuleSteps(
 		modRoot, relPath, projectName, bins,
 		version, currentTag, repoPath, headSHA,
-		releaseNotes, needsNewTag, draft, prerelease,
+		releaseNotes, needsNewTag, isPreRelease, draft, prerelease,
 	)
 	if err := runSteps(steps, dryRun, yes); err != nil {
 		fmt.Fprintf(os.Stderr, "monorel: %v\n", err)
@@ -1353,7 +1353,7 @@ func buildModuleSteps(
 	modRoot, relPath, projectName string, bins []binary,
 	version, currentTag, repoPath, headSHA string,
 	releaseNotes string,
-	needsNewTag, draft, prerelease bool,
+	needsNewTag, isPreRelease, draft, prerelease bool,
 ) []releaseStep {
 	distDir := filepath.Join(modRoot, "dist")
 	var distRelDir string
@@ -1417,45 +1417,26 @@ func buildModuleSteps(
 		},
 	})
 
-	// Step: Create GitHub release.
-	// --draft and --prerelease are always explicit so the intent is unambiguous.
-	draftFlag := "--draft=false"
-	if draft {
-		draftFlag = "--draft"
-	}
-	prereleaseFlag := "--prerelease=false"
-	if prerelease {
-		prereleaseFlag = "--prerelease"
-	}
-	var stepTitle string
-	switch {
-	case draft && prerelease:
-		stepTitle = fmt.Sprintf("create draft pre-release %s", currentTag)
-	case draft:
-		stepTitle = fmt.Sprintf("create draft GitHub release %s", currentTag)
-	case prerelease:
-		stepTitle = fmt.Sprintf("create pre-release %s", currentTag)
-	default:
-		stepTitle = fmt.Sprintf("create GitHub release %s", currentTag)
-	}
+	// Step: Create GitHub release — always as draft+prerelease so artifacts
+	// can be uploaded before visibility is determined.
 	ghCreateDisplay := []string{
 		fmt.Sprintf("gh release create %q \\", currentTag),
 		fmt.Sprintf("  --title %q \\", title),
 		fmt.Sprintf("  --notes %s \\", shellSingleQuote(releaseNotes)),
-		fmt.Sprintf("  %s \\", draftFlag),
-		fmt.Sprintf("  %s \\", prereleaseFlag),
+		"  --draft \\",
+		"  --prerelease \\",
 		fmt.Sprintf("  --target %q", headSHA),
 	}
 	steps = append(steps, releaseStep{
-		title:   "Create GitHub release",
-		prompt:  stepTitle,
+		title:  "Create GitHub release",
+		prompt: fmt.Sprintf("create GitHub release %s (draft, pre-release)", currentTag),
 		display: ghCreateDisplay,
 		run: func() error {
 			return execIn(modRoot, "gh", "release", "create", currentTag,
 				"--title", title,
 				"--notes", releaseNotes,
-				draftFlag,
-				prereleaseFlag,
+				"--draft",
+				"--prerelease",
 				"--target", headSHA,
 			)
 		},
@@ -1497,15 +1478,36 @@ func buildModuleSteps(
 		},
 	})
 
-	// Step: Publish release — only needed when creating as draft without prerelease.
-	// draft+prerelease: stays as draft; neither: published immediately; prerelease-only: published immediately.
-	if draft && !prerelease {
+	// Step: Finalise release visibility.
+	// Always created as draft+prerelease; this step removes whichever flags
+	// should not remain after uploading:
+	//   --draft=false     unless --draft was given (keep as draft)
+	//   --prerelease=false unless --prerelease was given OR the tag itself is a
+	//                     pre-release (has a suffix like -pre3 or .dirty)
+	needRemoveDraft := !draft
+	needRemovePrerelease := !prerelease && !isPreRelease
+	if needRemoveDraft || needRemovePrerelease {
+		var editDisplay []string
+		var editArgs []string
+		editDisplay = append(editDisplay, fmt.Sprintf("gh release edit %q \\", currentTag))
+		if needRemoveDraft {
+			editDisplay = append(editDisplay, "  --draft=false \\")
+			editArgs = append(editArgs, "--draft=false")
+		}
+		if needRemovePrerelease {
+			editDisplay = append(editDisplay, "  --prerelease=false")
+			editArgs = append(editArgs, "--prerelease=false")
+		} else {
+			// trim trailing backslash-space from last display line
+			editDisplay[len(editDisplay)-1] = strings.TrimSuffix(editDisplay[len(editDisplay)-1], " \\")
+		}
+		allEditArgs := append([]string{"release", "edit", currentTag}, editArgs...)
 		steps = append(steps, releaseStep{
-			title:   "Publish release (remove draft)",
-			prompt:  fmt.Sprintf("publish release %s", currentTag),
-			display: []string{fmt.Sprintf("gh release edit %q --draft=false", currentTag)},
+			title:   "Finalise release visibility",
+			prompt:  fmt.Sprintf("finalise release %s", currentTag),
+			display: editDisplay,
 			run: func() error {
-				return execIn(modRoot, "gh", "release", "edit", currentTag, "--draft=false")
+				return execIn(modRoot, "gh", allEditArgs...)
 			},
 		})
 	}
