@@ -317,7 +317,7 @@ func initModuleGroup(group *moduleGroup, dryRun bool) {
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
 	existing, readErr := os.ReadFile(yamlPath)
 	isNewFile := readErr != nil
-	isChanged := isNewFile || string(existing) != yamlContent
+	isChanged := isNewFile || !yamlLooksCorrect(string(existing), bins)
 	if dryRun {
 		if isChanged {
 			fmt.Fprintf(os.Stderr, "[dry-run] would write %s\n", yamlPath)
@@ -966,9 +966,10 @@ func processModule(group *moduleGroup, relPath string) {
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
 	existing, readErr := os.ReadFile(yamlPath)
 	isNewFile := readErr != nil
-	isChanged := isNewFile || string(existing) != yamlContent
+	isChanged := isNewFile || !yamlLooksCorrect(string(existing), bins)
 	if !isNewFile && isChanged {
-		// Warn if a stock {{ .ProjectName }} template is in use.
+		// Warn if a stock {{ .ProjectName }} template is in use (one of the
+		// reasons yamlLooksCorrect may have returned false).
 		hasProjectName := strings.Contains(string(existing), "{{ .ProjectName }}") ||
 			strings.Contains(string(existing), "{{.ProjectName}}")
 		gitInfo, gitErr := os.Stat(filepath.Join(modRoot, ".git"))
@@ -1241,6 +1242,31 @@ func goreleaserYAML(projectName string, bins []binary) string {
 	w("release:\n  disable: true\n")
 
 	return b.String()
+}
+
+// yamlLooksCorrect returns true when content appears to be a valid monorel-
+// generated (or compatible) .goreleaser.yaml for the given binaries:
+//
+//   - `-X main.version={{.Env.VERSION}}` is present (version injection)
+//   - `<binname>_{{ .Env.VERSION }}_` is present for every binary (archive naming)
+//   - `{{ .ProjectName }}` / `{{.ProjectName}}` are absent (stock goreleaser template)
+//
+// When these hold the file is left untouched so that compatible local edits
+// (e.g. adding extra build targets or tweaking flags) are preserved.
+func yamlLooksCorrect(content string, bins []binary) bool {
+	if !strings.Contains(content, "-X main.version={{.Env.VERSION}}") {
+		return false
+	}
+	for _, bin := range bins {
+		if !strings.Contains(content, bin.name+"_{{ .Env.VERSION }}_") {
+			return false
+		}
+	}
+	if strings.Contains(content, "{{ .ProjectName }}") ||
+		strings.Contains(content, "{{.ProjectName}}") {
+		return false
+	}
+	return true
 }
 
 // ── Release script generation ──────────────────────────────────────────────
