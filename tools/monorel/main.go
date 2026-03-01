@@ -572,11 +572,6 @@ func findMainPackages(root string, all bool) ([]string, error) {
 				continue
 			}
 			child := filepath.Join(dir, name)
-			// Stop at directories with their own go.mod — they are independent
-			// module roots and should not be included in this module's walk.
-			if _, err := os.Stat(filepath.Join(child, "go.mod")); err == nil {
-				continue
-			}
 			// Skip directories that contain no git-tracked files.
 			if trackedDirs != nil && !trackedDirs[child] {
 				continue
