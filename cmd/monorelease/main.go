@@ -12,7 +12,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -28,13 +27,20 @@ import (
 	"sync"
 )
 
-// var verbose = flag.Bool("verbose", false, "")
-var ignoreDirty = flag.String("ignore-dirty", "", "ignore dirty states [u n m d]")
-var useCSV = flag.Bool("csv", false, "output CSV instead of table")
-var csvComma = flag.String("comma", ",", "CSV field separator")
-
 func runGit(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
+	var b bytes.Buffer
+	cmd.Stdout = &b
+	err := cmd.Run()
+	return strings.TrimSpace(b.String()), err
+}
+
+func RunGoFrom(chdir string, args ...string) (string, error) {
+	cmd := exec.Command("go", args...)
+	if chdir != "" {
+		cmd.Dir = chdir
+	}
+
 	var b bytes.Buffer
 	cmd.Stdout = &b
 	err := cmd.Run()
@@ -92,7 +98,8 @@ type Releaser struct {
 }
 
 type GoModule struct {
-	Path string
+	PackageName string
+	Path        string
 }
 
 type NodePackage struct {
@@ -197,16 +204,24 @@ func (r *Releaser) LatestTag(modPath string) string {
 func getDirtyTypes(xy string) []rune {
 	types := []rune{}
 	if xy == "??" {
-		types = append(types, 'u')
+		types = append(types, '?')
+		return types
 	}
+
 	if strings.Contains(xy, "A") {
-		types = append(types, 'n')
+		types = append(types, 'A')
 	}
-	if strings.ContainsAny(xy, "MRC") {
-		types = append(types, 'm')
+	if strings.ContainsAny(xy, "M") {
+		types = append(types, 'M')
+	}
+	if strings.ContainsAny(xy, "R") {
+		types = append(types, 'R')
+	}
+	if strings.ContainsAny(xy, "C") {
+		types = append(types, 'C')
 	}
 	if strings.Contains(xy, "D") {
-		types = append(types, 'd')
+		types = append(types, 'D')
 	}
 	return types
 }
@@ -273,7 +288,7 @@ func getVersionStatus(r *Releaser, modPath, manifestRel string) (ver string, com
 	}
 	dirtyMap := r.DirtyStates(modPath)
 	dirtyStr := ""
-	for _, c := range []rune{'u', 'n', 'm', 'd'} {
+	for _, c := range []rune{'?', 'A', 'M', 'R', 'C', 'D'} {
 		if dirtyMap[c] && !r.Ignore[c] {
 			dirtyStr += string(c)
 		}
@@ -288,6 +303,9 @@ func getVersionStatus(r *Releaser, modPath, manifestRel string) (ver string, com
 	if untrackedMod {
 		status = "-" // untracked
 		ver = "-"
+		if tagStr == "-" {
+			tagStr = ""
+		}
 	} else if dirtyStr != "" {
 		if ver == "" {
 			// ver = "v0.0.0"
@@ -302,7 +320,15 @@ func getVersionStatus(r *Releaser, modPath, manifestRel string) (ver string, com
 }
 
 func (r *Releaser) DiscoverGoModules() []GoModule {
-	seen := make(map[string]bool)
+	modCh := make(chan GoModule, 10)
+
+	var wg sync.WaitGroup
+	var mods []GoModule
+	go func() {
+		for mod := range modCh {
+			mods = append(mods, mod)
+		}
+	}()
 	for _, f := range append(r.Committed, r.Untracked...) {
 		if f == "" {
 			continue
@@ -312,13 +338,17 @@ func (r *Releaser) DiscoverGoModules() []GoModule {
 			if p == "." {
 				p = ""
 			}
-			seen[p] = true
+			mods = append(mods, GoModule{PackageName: "", Path: p})
+			// TODO for when we need the real package name
+			wg.Go(func() {
+				// pkg, _ := RunGoFrom(p, "list", "-f", "{{.Name}}", ".")
+				// modCh <- GoModule{PackageName: pkg, Path: p}
+			})
 		}
 	}
-	var mods []GoModule
-	for p := range seen {
-		mods = append(mods, GoModule{Path: p})
-	}
+	wg.Wait()
+	close(modCh)
+
 	sort.Slice(mods, func(i, j int) bool { return mods[i].Path < mods[j].Path })
 
 	r.GoModulePrefixes = make([]string, 0, len(mods))
@@ -381,10 +411,9 @@ func (m GoModule) Process(r *Releaser) []Releasable {
 	name := ""
 	goModFile := manifestRel
 	if data, err := os.ReadFile(goModFile); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "module ") {
-				full := strings.TrimSpace(strings.TrimPrefix(line, "module "))
+			if full, ok := strings.CutPrefix(line, "module "); ok {
 				name = filepath.Base(full)
 				break
 			}
@@ -582,14 +611,33 @@ func (p NodePackage) Process(r *Releaser) []Releasable {
 	return rows
 }
 
-func main() {
-	flag.Parse()
+type MainConfig struct {
+	ignoreDirty string
+	useCSV      bool
+	csvComma    string
+	rows        []Releasable
+}
 
+func main() {
+	cli := &MainConfig{}
+
+	fs := flag.NewFlagSet("rerelease status", flag.ExitOnError)
+	// var verbose = flag.Bool("verbose", false, "")
+	fs.StringVar(&cli.ignoreDirty, "ignore-dirty", "", "ignore dirty states [? A M R C D]")
+	fs.BoolVar(&cli.useCSV, "csv", false, "output CSV instead of table")
+	fs.StringVar(&cli.csvComma, "comma", ",", "CSV field separator")
+	_ = fs.Parse(os.Args[1:])
+
+	cli.init()
+	cli.status()
+}
+
+func (cli *MainConfig) init() {
 	r := &Releaser{}
 	r.Init()
 
 	r.Ignore = make(map[rune]bool)
-	for _, c := range *ignoreDirty {
+	for _, c := range cli.ignoreDirty {
 		r.Ignore[c] = true
 	}
 
@@ -615,85 +663,11 @@ func main() {
 		return len(r.ModulePrefixes[i]) > len(r.ModulePrefixes[j])
 	})
 
-	rows := []Releasable{}
+	cli.rows = []Releasable{}
 	for _, m := range goMods {
-		rows = append(rows, m.Process(r)...)
+		cli.rows = append(cli.rows, m.Process(r)...)
 	}
 	for _, p := range nodePkgs {
-		rows = append(rows, p.Process(r)...)
-	}
-
-	if *useCSV {
-		c := ','
-		if len(*csvComma) > 0 {
-			c = rune((*csvComma)[0])
-		}
-		w := csv.NewWriter(os.Stdout)
-		w.Comma = c
-		_ = w.Write([]string{"type", "name", "next_version", "current_tag", "status"})
-		for _, rr := range rows {
-			_ = w.Write([]string{rr.releasable, rr.Status, rr.Version, rr.CurrentTag, rr.Path})
-		}
-		w.Flush()
-	} else {
-		headers := []string{ /*"t",*/ "name", "next_version", "current_tag", "status"}
-		colWidths := make([]int, len(headers))
-		for i, h := range headers {
-			colWidths[i] = len(h)
-		}
-		// var typeIdx = 0
-		var nameIdx = 0
-		var versionIdx = 1
-		var tagIdx = 2
-		var statusIdx = 3
-		for _, rr := range rows {
-			// colWidths[typeIdx] = 0
-			// if len(rr.Type) > colWidths[typeIdx] {
-			// 	colWidths[typeIdx] = len(rr.Type)
-			// }
-			if len(rr.releasable) > colWidths[nameIdx] {
-				colWidths[nameIdx] = len(rr.releasable)
-			}
-			if len(rr.Version) > colWidths[versionIdx] {
-				colWidths[versionIdx] = len(rr.Version)
-			}
-			if len(rr.CurrentTag) > colWidths[tagIdx] {
-				colWidths[tagIdx] = len(rr.CurrentTag)
-			}
-			if len(rr.Status) > colWidths[statusIdx] {
-				colWidths[statusIdx] = len(rr.Status)
-			}
-			// if len(rr.Path) > colWidths[5] {
-			// 	colWidths[5] = len(rr.Path)
-			// }
-		}
-		sep := ""
-		fmt.Print(sep)
-		{
-			fmt.Printf("%-*s %s", colWidths[nameIdx], headers[nameIdx], sep)
-			fmt.Printf(" %-*s %s", colWidths[versionIdx], headers[versionIdx], sep)
-			fmt.Printf(" %-*s %s", colWidths[tagIdx], headers[tagIdx], sep)
-			fmt.Printf(" %-*s %s", colWidths[statusIdx], headers[statusIdx], sep)
-		}
-		fmt.Println()
-		fmt.Print(sep)
-		for i, w := range colWidths {
-			if i == 0 {
-				fmt.Printf("%s %s", strings.Repeat("-", w), sep)
-				continue
-			}
-			fmt.Printf(" %s %s", strings.Repeat("-", w), sep)
-		}
-		fmt.Println()
-		for _, rr := range rows {
-			fmt.Print(sep)
-			// fmt.Printf(" %-*s %s", colWidths[typeIdx], rr.Type, sep)
-			fmt.Printf("%-*s %s", colWidths[nameIdx], rr.releasable, sep)
-			fmt.Printf(" %-*s %s", colWidths[versionIdx], rr.Version, sep)
-			fmt.Printf(" %-*s %s", colWidths[tagIdx], rr.CurrentTag, sep)
-			fmt.Printf(" %-*s %s", colWidths[statusIdx], rr.Status, sep)
-			// fmt.Printf(" %-*s %s", colWidths[5], rr.Path, sep)
-			fmt.Println()
-		}
+		cli.rows = append(cli.rows, p.Process(r)...)
 	}
 }
