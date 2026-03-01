@@ -956,12 +956,16 @@ func processModule(group *moduleGroup, relPath string) {
 	rawURL := mustRunIn(modRoot, "git", "remote", "get-url", "origin")
 	repoPath := normalizeGitURL(rawURL)
 
-	// 1. Write .goreleaser.yaml, commit if the file changed.
-	// Warn if an existing file uses {{ .ProjectName }} (stock goreleaser
-	// config) and the module is a monorepo subdirectory.
+	// 1. Write .goreleaser.yaml (always regenerate).
+	// Track whether this is a first-time creation: auto-commit and auto-tag
+	// only apply when the file is new.  If it already exists, just update it
+	// on disk and leave committing to the user.
 	yamlContent := goreleaserYAML(projectName, bins)
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
+	isNewFile := true
 	if existing, err := os.ReadFile(yamlPath); err == nil {
+		isNewFile = false
+		// Warn if a stock {{ .ProjectName }} template is in use.
 		hasProjectName := strings.Contains(string(existing), "{{ .ProjectName }}") ||
 			strings.Contains(string(existing), "{{.ProjectName}}")
 		gitInfo, gitErr := os.Stat(filepath.Join(modRoot, ".git"))
@@ -975,33 +979,36 @@ func processModule(group *moduleGroup, relPath string) {
 		fatalf("writing %s: %v", yamlPath, err)
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
-	mustRunIn(modRoot, "git", "add", ".goreleaser.yaml")
-	if status := runIn(modRoot, "git", "status", "--porcelain", "--", ".goreleaser.yaml"); status != "" {
-		commitMsg := "chore(release): add .goreleaser.yaml for " + projectName
-		mustRunIn(modRoot, "git", "commit", "-m", commitMsg)
-		fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
-	}
 
-	// 2. Auto-tag patch if the goreleaser.yaml commit is the sole new commit
-	// since the last stable tag — same heuristic as 'monorel init'.
-	latestStable := findLatestStableTag(modRoot, prefix)
-	shouldBump := true
-	if latestStable != "" {
-		logOut := strings.TrimSpace(runIn(modRoot, "git", "log", "--oneline", latestStable+"..HEAD", "--", "."))
-		count := 0
-		if logOut != "" {
-			count = len(strings.Split(logOut, "\n"))
+	// 2. Auto-commit + auto-tag — only when the file was newly created.
+	if isNewFile {
+		mustRunIn(modRoot, "git", "add", ".goreleaser.yaml")
+		if status := runIn(modRoot, "git", "status", "--porcelain", "--", ".goreleaser.yaml"); status != "" {
+			commitMsg := "chore(release): add .goreleaser.yaml for " + projectName
+			mustRunIn(modRoot, "git", "commit", "-m", commitMsg)
+			fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
 		}
-		if count > 1 {
-			fmt.Fprintf(os.Stderr,
-				"note: %d commits since %s; skipping auto-bump — run 'monorel bump' when ready\n",
-				count, latestStable)
-			shouldBump = false
+		// Auto-tag patch if the yaml commit is the sole new commit since the
+		// last stable tag — same heuristic as 'monorel init'.
+		latestStable := findLatestStableTag(modRoot, prefix)
+		shouldBump := true
+		if latestStable != "" {
+			logOut := strings.TrimSpace(runIn(modRoot, "git", "log", "--oneline", latestStable+"..HEAD", "--", "."))
+			count := 0
+			if logOut != "" {
+				count = len(strings.Split(logOut, "\n"))
+			}
+			if count > 1 {
+				fmt.Fprintf(os.Stderr,
+					"note: %d commits since %s; skipping auto-bump — run 'monorel bump' when ready\n",
+					count, latestStable)
+				shouldBump = false
+			}
 		}
-	}
-	if shouldBump {
-		if newTag := bumpModuleTag(group, "patch", false, false); newTag != "" {
-			fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+		if shouldBump {
+			if newTag := bumpModuleTag(group, "patch", false, false); newTag != "" {
+				fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+			}
 		}
 	}
 
