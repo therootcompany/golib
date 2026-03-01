@@ -18,14 +18,17 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
-var verbose = flag.Bool("verbose", false, "")
+// var verbose = flag.Bool("verbose", false, "")
 var ignoreDirty = flag.String("ignore-dirty", "", "ignore dirty states [u n m d]")
 var useCSV = flag.Bool("csv", false, "output CSV instead of table")
 var csvComma = flag.String("comma", ",", "CSV field separator")
@@ -43,513 +46,653 @@ func isVersion(s string) bool {
 	return re.MatchString(s)
 }
 
-type Module struct {
-	Path        string
-	Type        string
-	Untracked   bool
-	Name        string
-	Bins        map[string]string
-	HasRootMain bool
+type Tag struct {
+	ShortHash string
+	Name      string
 }
 
-type Row struct {
-	Status  string
-	Typ     string
-	Name    string
-	Version string
-	Tag     string
-	Path    string
+type GitFile struct {
+	Path       string
+	XY         string
+	Releasable string
 }
 
-func manifestPath(m Module) string {
-	f := "go.mod"
-	if m.Type == "node" {
-		f = "package.json"
-	}
-	if m.Path == "" {
-		return "./" + f
-	}
-	return "./" + m.Path + "/" + f
+func (f GitFile) IsClean() bool {
+	return f.XY == ""
 }
 
-func main() {
-	flag.Parse()
+func (f GitFile) IsTracked() bool {
+	return f.XY != "??"
+}
 
-	ignoreSet := make(map[rune]bool)
-	for _, c := range *ignoreDirty {
-		ignoreSet[c] = true
+type Releasable struct {
+	Status     string
+	Type       string
+	Name       string
+	Version    string
+	CurrentTag string
+	Path       string
+	releasable string
+}
+
+type Releaser struct {
+	Root             string
+	Prefix           string
+	Committed        []string
+	Untracked        []string
+	TagList          []Tag
+	StatusLines      []string
+	GitFiles         map[string]GitFile
+	AllGoFiles       []string
+	RepoName         string
+	Ignore           map[rune]bool
+	GoModulePrefixes []string
+	GoToModule       map[string]string
+	ModulePrefixes   []string
+}
+
+type GoModule struct {
+	Path string
+}
+
+type NodePackage struct {
+	Path string
+}
+
+func (r *Releaser) Init() {
+	var wg sync.WaitGroup
+	var untracked string
+	var tagsStr string
+
+	wg.Go(func() {
+		out, _ := runGit("remote", "get-url", "origin")
+		r.RepoName, _ = strings.CutSuffix(strings.TrimSpace(path.Base(out)), ".git")
+	})
+	wg.Go(func() {
+		out, _ := runGit("rev-parse", "--show-toplevel")
+		r.Root = strings.TrimSpace(out)
+	})
+	wg.Go(func() {
+		out, _ := runGit("rev-parse", "--show-prefix")
+		r.Prefix = strings.TrimSuffix(strings.TrimSpace(out), "/")
+	})
+	wg.Go(func() {
+		out, _ := runGit("ls-files", "--others", "--exclude-standard")
+		untracked = strings.TrimSpace(out)
+	})
+	wg.Go(func() {
+		out, _ := runGit("tag", "--list", "--sort=version:refname", "--format=%(objectname:short=7) %(refname:strip=2)")
+		tagsStr = strings.TrimSpace(out)
+	})
+	wg.Wait()
+
+	if untracked != "" {
+		r.Untracked = strings.Split(untracked, "\n")
 	}
-
-	rootB, _ := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	root := strings.TrimSpace(string(rootB))
-	_ = os.Chdir(root)
-	repoName := filepath.Base(root)
-
-	ls, _ := runGit("ls-files")
-	committed := strings.Split(ls, "\n")
-
-	modMap := make(map[string]Module)
-	modTypes := map[string]string{"go.mod": "go", "package.json": "node"}
-
-	for _, f := range committed {
-		for suf, typ := range modTypes {
-			if f == suf || strings.HasSuffix(f, "/"+suf) {
-				p := filepath.Dir(f)
-				if p == "." {
-					p = ""
-				}
-				modMap[p] = Module{Path: p, Type: typ, Untracked: false}
-				break
+	if tagsStr != "" {
+		for line := range strings.SplitSeq(tagsStr, "\n") {
+			if line == "" {
+				continue
+			}
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				r.TagList = append(r.TagList, Tag{ShortHash: parts[0], Name: parts[1]})
 			}
 		}
 	}
-	untrackedS, _ := runGit("ls-files", "--others", "--exclude-standard")
-	for _, f := range strings.Split(untrackedS, "\n") {
+	for i, j := 0, len(r.TagList)-1; i < j; i, j = i+1, j-1 {
+		r.TagList[i], r.TagList[j] = r.TagList[j], r.TagList[i]
+	}
+
+	statusStr, _ := runGit("status", "--porcelain", ".")
+	r.StatusLines = strings.Split(statusStr, "\n")
+	lsStr, _ := runGit("ls-files")
+	r.Committed = strings.Split(lsStr, "\n")
+
+	r.GitFiles = make(map[string]GitFile)
+	for _, line := range r.StatusLines {
+		if len(line) < 3 || line[2] != ' ' {
+			continue
+		}
+		xy := line[0:2]
+		p := line[3:]
+		r.GitFiles[p] = GitFile{Path: p, XY: xy, Releasable: ""}
+	}
+
+	goCommStr, _ := runGit("ls-files", "--", "*.go")
+	goUntrStr, _ := runGit("ls-files", "--others", "--exclude-standard", "--", "*.go")
+	for _, s := range []string{goCommStr, goUntrStr} {
+		if s == "" {
+			continue
+		}
+		for f := range strings.SplitSeq(s, "\n") {
+			if f != "" {
+				r.AllGoFiles = append(r.AllGoFiles, f)
+			}
+		}
+	}
+
+	_ = os.Chdir(r.Root)
+}
+
+func (r *Releaser) LatestTag(modPath string) string {
+	for _, t := range r.TagList {
+		match := false
+		if modPath == "" {
+			if !strings.Contains(t.Name, "/") && isVersion(t.Name) {
+				match = true
+			}
+		} else if suf, ok := strings.CutPrefix(t.Name, modPath+"/"); ok {
+			if isVersion(suf) {
+				match = true
+			}
+		}
+		if match {
+			return t.Name
+		}
+	}
+	return ""
+}
+
+func getDirtyTypes(xy string) []rune {
+	types := []rune{}
+	if xy == "??" {
+		types = append(types, 'u')
+	}
+	if strings.Contains(xy, "A") {
+		types = append(types, 'n')
+	}
+	if strings.ContainsAny(xy, "MRC") {
+		types = append(types, 'm')
+	}
+	if strings.Contains(xy, "D") {
+		types = append(types, 'd')
+	}
+	return types
+}
+
+func (r *Releaser) DirtyStates(modPath string) map[rune]bool {
+	dr := make(map[rune]bool)
+	if modPath != "" {
+		pre := modPath + "/"
+		for p, gf := range r.GitFiles {
+			if p == modPath || strings.HasPrefix(p, pre) {
+				for _, t := range getDirtyTypes(gf.XY) {
+					dr[t] = true
+				}
+			}
+		}
+	} else {
+		for p, gf := range r.GitFiles {
+			matched := false
+			for _, pre := range r.ModulePrefixes {
+				if pre != "" && strings.HasPrefix(p, pre) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				for _, t := range getDirtyTypes(gf.XY) {
+					dr[t] = true
+				}
+			}
+		}
+	}
+	return dr
+}
+
+func getVersionStatus(r *Releaser, modPath, manifestRel string) (ver string, commits int, tagStr, status string) {
+	ver = "" // empty for no change
+	latest := r.LatestTag(modPath)
+	tagStr = "-"
+	if latest != "" {
+		tagStr = latest
+	}
+	pArg := "."
+	if modPath != "" {
+		pArg = "./" + modPath
+	}
+	var suf string
+	if latest != "" {
+		suf = latest
+		if modPath != "" {
+			suf = strings.TrimPrefix(latest, modPath+"/")
+		}
+		cS, _ := runGit("rev-list", "--count", latest+"..", "--", pArg)
+		commits, _ = strconv.Atoi(cS)
+		if commits > 0 {
+			ver = fmt.Sprintf("%s-%d", suf, commits)
+		}
+	} else {
+		ver = "v0.1.0"
+		cS, _ := runGit("rev-list", "--count", "--", pArg)
+		commits, _ = strconv.Atoi(cS)
+		if commits > 0 {
+			ver = fmt.Sprintf("%s-%d", ver, commits)
+		}
+	}
+	dirtyMap := r.DirtyStates(modPath)
+	dirtyStr := ""
+	for _, c := range []rune{'u', 'n', 'm', 'd'} {
+		if dirtyMap[c] && !r.Ignore[c] {
+			dirtyStr += string(c)
+		}
+	}
+	untrackedMod := false
+	if gf, ok := r.GitFiles[manifestRel]; ok && gf.XY == "??" {
+		untrackedMod = true
+	} else {
+		untrackedMod = slices.Contains(r.Untracked, manifestRel)
+	}
+	status = "" // current, clean
+	if untrackedMod {
+		status = "-" // untracked
+		ver = "-"
+	} else if dirtyStr != "" {
+		if ver == "" {
+			// ver = "v0.0.0"
+			ver = suf
+		}
+		ver += "+dev"
+		status = "dirty (" + dirtyStr + ")"
+	} else if commits > 0 {
+		status = "++"
+	}
+	return
+}
+
+func (r *Releaser) DiscoverGoModules() []GoModule {
+	seen := make(map[string]bool)
+	for _, f := range append(r.Committed, r.Untracked...) {
 		if f == "" {
 			continue
 		}
-		for suf, typ := range modTypes {
-			if f == suf || strings.HasSuffix(f, "/"+suf) {
-				p := filepath.Dir(f)
-				if p == "." {
-					p = ""
-				}
-				if _, ok := modMap[p]; !ok {
-					modMap[p] = Module{Path: p, Type: typ, Untracked: true}
-				}
-				break
+		if f == "go.mod" || strings.HasSuffix(f, "/go.mod") {
+			p := filepath.Dir(f)
+			if p == "." {
+				p = ""
 			}
+			seen[p] = true
 		}
 	}
+	var mods []GoModule
+	for p := range seen {
+		mods = append(mods, GoModule{Path: p})
+	}
+	sort.Slice(mods, func(i, j int) bool { return mods[i].Path < mods[j].Path })
 
-	goCommS, _ := runGit("ls-files", "--", "*.go")
-	goUntrS, _ := runGit("ls-files", "--others", "--exclude-standard", "--", "*.go")
-	allGoFiles := []string{}
-	for _, s := range []string{goCommS, goUntrS} {
-		for _, line := range strings.Split(s, "\n") {
-			if line != "" {
-				allGoFiles = append(allGoFiles, line)
-			}
+	r.GoModulePrefixes = make([]string, 0, len(mods))
+	for _, m := range mods {
+		pre := m.Path
+		if pre != "" {
+			pre += "/"
 		}
+		r.GoModulePrefixes = append(r.GoModulePrefixes, pre)
 	}
+	sort.Slice(r.GoModulePrefixes, func(i, j int) bool { return len(r.GoModulePrefixes[i]) > len(r.GoModulePrefixes[j]) })
 
-	modules := make([]Module, 0, len(modMap))
-	for _, m := range modMap {
-		modules = append(modules, m)
-	}
-	sort.Slice(modules, func(i, j int) bool { return modules[i].Path < modules[j].Path })
-
-	goModulePrefixes := []string{}
-	for _, m := range modules {
-		if m.Type == "go" {
-			pre := m.Path
-			if pre != "" {
-				pre += "/"
-			}
-			goModulePrefixes = append(goModulePrefixes, pre)
-		}
-	}
-	sort.Slice(goModulePrefixes, func(i, j int) bool { return len(goModulePrefixes[i]) > len(goModulePrefixes[j]) })
-
-	goToModule := make(map[string]string)
-	for _, gf := range allGoFiles {
+	r.GoToModule = make(map[string]string)
+	for _, gf := range r.AllGoFiles {
 		dir := filepath.Dir(gf)
 		if dir == "." {
 			dir = ""
 		}
 		matchP := ""
-		for _, pre := range goModulePrefixes {
-			if pre != "" && strings.HasPrefix(dir+"/", pre) {
+		for _, pre := range r.GoModulePrefixes {
+			if pre != "" && strings.HasPrefix(dir+"/", pre) || pre == "" {
 				matchP = strings.TrimSuffix(pre, "/")
 				break
-			} else if pre == "" {
-				matchP = ""
-				break
 			}
 		}
-		if matchP != "" || goToModule[gf] == "" {
-			goToModule[gf] = matchP
-		}
+		r.GoToModule[gf] = matchP
 	}
+	return mods
+}
 
-	for i := range modules {
-		m := &modules[i]
-		m.Bins = make(map[string]string)
-		m.Name = ""
-		if m.Type == "node" {
-			pkgFile := "package.json"
-			if m.Path != "" {
-				pkgFile = filepath.Join(m.Path, "package.json")
-			}
-			data, err := os.ReadFile(pkgFile)
-			if err == nil {
-				var pi struct {
-					Name string `json:"name"`
-					Bin  any    `json:"bin"`
-				}
-				if json.Unmarshal(data, &pi) == nil {
-					if pi.Name != "" {
-						name := pi.Name
-						if idx := strings.LastIndex(name, "/"); idx != -1 {
-							name = name[idx+1:]
-						}
-						m.Name = name
-					}
-					switch v := pi.Bin.(type) {
-					case string:
-						if v != "" {
-							rel := filepath.Clean(filepath.Join(m.Path, v))
-							n := m.Name
-							if n == "" {
-								n = strings.TrimSuffix(filepath.Base(v), filepath.Ext(v))
-							}
-							if n == "" || n == "." {
-								n = "bin"
-							}
-							m.Bins[n] = rel
-						}
-					case map[string]any:
-						for k, vv := range v {
-							if s, ok := vv.(string); ok && s != "" {
-								rel := filepath.Clean(filepath.Join(m.Path, s))
-								m.Bins[k] = rel
-							}
-						}
-					}
-				}
-			}
-		} else if m.Type == "go" {
-			goModPath := "go.mod"
-			if m.Path != "" {
-				goModPath = filepath.Join(m.Path, "go.mod")
-			}
-			if data, err := os.ReadFile(goModPath); err == nil {
-				for _, line := range strings.Split(string(data), "\n") {
-					line = strings.TrimSpace(line)
-					if strings.HasPrefix(line, "module ") {
-						full := strings.TrimSpace(strings.TrimPrefix(line, "module "))
-						m.Name = filepath.Base(full)
-						break
-					}
-				}
-			}
-			if m.Name == "" {
-				if m.Path == "" {
-					m.Name = repoName
-				} else {
-					m.Name = filepath.Base(m.Path)
-				}
-			}
-
-			mainDirs := make(map[string]bool)
-			for _, gf := range allGoFiles {
-				if goToModule[gf] != m.Path {
-					continue
-				}
-				if strings.HasSuffix(gf, "_test.go") {
-					continue
-				}
-				data, err := os.ReadFile(gf)
-				if err != nil {
-					continue
-				}
-				hasMain := false
-				for _, line := range strings.Split(string(data), "\n") {
-					if strings.TrimSpace(line) == "package main" {
-						hasMain = true
-						break
-					}
-				}
-				if hasMain {
-					dir := filepath.Dir(gf)
-					if dir == "." {
-						dir = ""
-					}
-					mainDirs[dir] = true
-				}
-			}
-			for dir := range mainDirs {
-				var name, fullP string
-				if dir == "" || dir == "." {
-					name = repoName
-					fullP = "."
-				} else {
-					name = filepath.Base(dir)
-					fullP = dir
-				}
-				m.Bins[name] = fullP
-				if (dir == "" && m.Path == "") || dir == m.Path {
-					m.HasRootMain = true
-				}
-			}
-		}
-		if m.Name == "" {
-			if m.Path == "" {
-				m.Name = repoName
-			} else {
-				m.Name = filepath.Base(m.Path)
-			}
-		}
-	}
-
-	dirtyReasons := make(map[string]map[rune]bool)
-	por, _ := runGit("status", "--porcelain", ".")
-	for _, line := range strings.Split(por, "\n") {
-		if len(line) < 3 || line[2] != ' ' {
+func (r *Releaser) DiscoverNodePackages() []NodePackage {
+	seen := make(map[string]bool)
+	for _, f := range append(r.Committed, r.Untracked...) {
+		if f == "" {
 			continue
 		}
-		status := line[0:2]
-		fileP := line[3:]
+		if f == "package.json" || strings.HasSuffix(f, "/package.json") {
+			p := filepath.Dir(f)
+			if p == "." {
+				p = ""
+			}
+			seen[p] = true
+		}
+	}
+	var pkgs []NodePackage
+	for p := range seen {
+		pkgs = append(pkgs, NodePackage{Path: p})
+	}
+	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].Path < pkgs[j].Path })
+	return pkgs
+}
 
-		types := []rune{}
-		if status == "??" {
-			types = append(types, 'u')
-		}
-		if strings.Contains(status, "A") {
-			types = append(types, 'n')
-		}
-		if strings.Contains(status, "M") || strings.Contains(status, "R") || strings.Contains(status, "C") {
-			types = append(types, 'm')
-		}
-		if strings.Contains(status, "D") {
-			types = append(types, 'd')
-		}
+func (m GoModule) Process(r *Releaser) []Releasable {
+	manifestRel := "go.mod"
+	if m.Path != "" {
+		manifestRel = m.Path + "/go.mod"
+	}
+	ver, _, tagStr, status := getVersionStatus(r, m.Path, manifestRel)
 
-		thisDirty := false
-		for _, t := range types {
-			if !ignoreSet[t] {
-				thisDirty = true
+	name := ""
+	goModFile := manifestRel
+	if data, err := os.ReadFile(goModFile); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "module ") {
+				full := strings.TrimSpace(strings.TrimPrefix(line, "module "))
+				name = filepath.Base(full)
 				break
-			}
-		}
-		if !thisDirty {
-			continue
-		}
-
-		matched := false
-		modPrefixes := make([]string, 0, len(modules))
-		for _, m := range modules {
-			if m.Path != "" {
-				modPrefixes = append(modPrefixes, m.Path+"/")
-			}
-		}
-		sort.Slice(modPrefixes, func(i, j int) bool { return len(modPrefixes[i]) > len(modPrefixes[j]) })
-		for _, pre := range modPrefixes {
-			if strings.HasPrefix(fileP, pre) {
-				modP := strings.TrimSuffix(pre, "/")
-				if dirtyReasons[modP] == nil {
-					dirtyReasons[modP] = make(map[rune]bool)
-				}
-				for _, t := range types {
-					dirtyReasons[modP][t] = true
-				}
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			if dirtyReasons[""] == nil {
-				dirtyReasons[""] = make(map[rune]bool)
-			}
-			for _, t := range types {
-				dirtyReasons[""][t] = true
 			}
 		}
 	}
-
-	tagsS, _ := runGit("tag", "--list", "--sort=-version:refname")
-	tags := strings.Split(tagsS, "\n")
-	modLatest := make(map[string]string)
-	for _, t := range tags {
-		if t == "" {
-			continue
-		}
-		matched := false
-		for _, m := range modules {
-			match := false
-			if m.Path == "" {
-				if !strings.Contains(t, "/") && isVersion(t) {
-					match = true
-				}
-			} else if strings.HasPrefix(t, m.Path+"/") {
-				suf := t[len(m.Path)+1:]
-				if isVersion(suf) {
-					match = true
-				}
-			}
-			if match {
-				if _, ok := modLatest[m.Path]; !ok {
-					modLatest[m.Path] = t
-				}
-				matched = true
-				break
-			}
-		}
-		if !matched && *verbose {
-			fmt.Printf("unmatched tag: %s\n", t)
-		}
-	}
-
-	rows := []Row{}
-	for _, m := range modules {
-		latest := modLatest[m.Path]
-		tagStr := "-"
-		if latest != "" {
-			tagStr = latest
-		}
-
-		pArg := "."
-		if m.Path != "" {
-			pArg = "./" + m.Path
-		}
-		var commits int
-		ver := "v0.0.0"
-		if latest != "" {
-			suf := latest
-			if m.Path != "" {
-				suf = strings.TrimPrefix(latest, m.Path+"/")
-			}
-			ver = suf
-			cS, _ := runGit("rev-list", "--count", latest+"..", "--", pArg)
-			commits, _ = strconv.Atoi(cS)
-			if commits > 0 {
-				ver += fmt.Sprintf("-%d", commits)
-			}
+	if name == "" {
+		if m.Path == "" {
+			name = r.RepoName
 		} else {
-			cS, _ := runGit("rev-list", "--count", "--", pArg)
-			commits, _ = strconv.Atoi(cS)
-			if commits > 0 {
-				ver = fmt.Sprintf("v0.0.0-%d", commits)
+			name = filepath.Base(m.Path)
+		}
+	}
+
+	mainDirs := make(map[string]bool)
+	for _, gf := range r.AllGoFiles {
+		if r.GoToModule[gf] != m.Path {
+			continue
+		}
+		if strings.HasSuffix(gf, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(gf)
+		if err != nil {
+			continue
+		}
+		hasMain := false
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if strings.TrimSpace(line) == "package main" {
+				hasMain = true
+				break
 			}
 		}
-
-		dirtyStr := ""
-		if dr, ok := dirtyReasons[m.Path]; ok && len(dr) > 0 {
-			order := []rune{'u', 'n', 'm', 'd'}
-			for _, c := range order {
-				if dr[c] {
-					dirtyStr += string(c)
-				}
+		if hasMain {
+			dir := filepath.Dir(gf)
+			if dir == "." {
+				dir = ""
 			}
+			mainDirs[dir] = true
 		}
+	}
 
-		status := "current"
-		if m.Untracked {
-			status = "untracked"
-		} else if dirtyStr != "" {
-			status = "dirty (" + dirtyStr + ")"
-		} else if commits > 0 {
-			status = "new commits"
+	bins := make(map[string]string)
+	for dir := range mainDirs {
+		var bname, fullP string
+		if dir == "" || dir == "." {
+			bname = r.RepoName
+			fullP = "."
+		} else {
+			bname = filepath.Base(dir)
+			fullP = dir
 		}
+		bins[bname] = fullP
+	}
 
-		showModRow := true
-		if (m.Type == "go" && m.HasRootMain) || (m.Type == "node" && len(m.Bins) > 0) {
-			showModRow = false
+	hasRootMain := false
+	rootD := m.Path
+	if rootD == "" {
+		rootD = ""
+	}
+	for d := range mainDirs {
+		if d == rootD {
+			hasRootMain = true
+			break
 		}
+	}
+	showModRow := !hasRootMain
 
-		if showModRow {
-			rows = append(rows, Row{
-				Status:  status,
-				Typ:     "mod",
-				Name:    m.Name,
-				Version: ver,
-				Tag:     tagStr,
-				Path:    manifestPath(m),
+	rows := []Releasable{}
+	if showModRow {
+		relname := m.Path
+		if relname == "" {
+			relname = r.RepoName
+		}
+		rows = append(rows, Releasable{
+			Status:     status,
+			Type:       "mod",
+			Name:       name,
+			Version:    ver,
+			CurrentTag: tagStr,
+			Path:       "./" + manifestRel,
+			releasable: relname,
+		})
+	}
+	if len(bins) > 0 {
+		names := make([]string, 0, len(bins))
+		for n := range bins {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			fullP := bins[n]
+			binShow := fullP
+			if fullP == "" || fullP == "." {
+				binShow = "."
+			} else {
+				binShow += "/"
+			}
+			rows = append(rows, Releasable{
+				Status:     status,
+				Type:       "bin",
+				Name:       n,
+				Version:    ver,
+				CurrentTag: tagStr,
+				Path:       "./" + binShow,
+				releasable: strings.TrimSuffix(binShow, "/"),
 			})
 		}
+	}
+	return rows
+}
 
-		if len(m.Bins) > 0 {
-			names := make([]string, 0, len(m.Bins))
-			for n := range m.Bins {
-				names = append(names, n)
-			}
-			sort.Strings(names)
-			for _, n := range names {
-				binLoc := m.Bins[n]
-				var binShow string
-				if m.Type == "go" {
-					if binLoc == "" || binLoc == "." {
-						binLoc = m.Path
-						if binLoc == "" {
-							binLoc = "."
-						}
-					}
-					if binLoc == "." {
-						binShow = "."
-					} else {
-						binShow = binLoc + "/"
-					}
-				} else {
-					binShow = binLoc
+func (p NodePackage) Process(r *Releaser) []Releasable {
+	manifestRel := "package.json"
+	if p.Path != "" {
+		manifestRel = p.Path + "/package.json"
+	}
+	ver, _, tagStr, status := getVersionStatus(r, p.Path, manifestRel)
+
+	pkgFile := manifestRel
+	name := ""
+	bins := make(map[string]string)
+	if data, err := os.ReadFile(pkgFile); err == nil {
+		var pi struct {
+			Name string `json:"name"`
+			Bin  any    `json:"bin"`
+		}
+		if json.Unmarshal(data, &pi) == nil {
+			if pi.Name != "" {
+				name = pi.Name
+				if idx := strings.LastIndex(name, "/"); idx != -1 {
+					name = name[idx+1:]
 				}
-				rows = append(rows, Row{
-					Status:  status,
-					Typ:     "bin",
-					Name:    n,
-					Version: ver,
-					Tag:     tagStr,
-					Path:    "./" + binShow,
-				})
+			}
+			switch v := pi.Bin.(type) {
+			case string:
+				if v != "" {
+					rel := filepath.Clean(filepath.Join(p.Path, v))
+					n := name
+					if n == "" {
+						n = strings.TrimSuffix(filepath.Base(v), filepath.Ext(v))
+					}
+					if n == "" || n == "." {
+						n = "bin"
+					}
+					bins[n] = rel
+				}
+			case map[string]any:
+				for k, vv := range v {
+					if s, ok := vv.(string); ok && s != "" {
+						rel := filepath.Clean(filepath.Join(p.Path, s))
+						bins[k] = rel
+					}
+				}
 			}
 		}
+	}
+	if name == "" {
+		if p.Path == "" {
+			name = r.RepoName
+		} else {
+			name = filepath.Base(p.Path)
+		}
+	}
+
+	showModRow := len(bins) == 0
+	rows := []Releasable{}
+	if showModRow {
+		rows = append(rows, Releasable{
+			Status:     status,
+			Type:       "mod",
+			Name:       name,
+			Version:    ver,
+			CurrentTag: tagStr,
+			Path:       "./" + manifestRel,
+		})
+	}
+	if len(bins) > 0 {
+		names := make([]string, 0, len(bins))
+		for n := range bins {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			rel := bins[n]
+			rows = append(rows, Releasable{
+				Status:     status,
+				Type:       "bin",
+				Name:       n,
+				Version:    ver,
+				CurrentTag: tagStr,
+				Path:       "./" + rel,
+			})
+		}
+	}
+	return rows
+}
+
+func main() {
+	flag.Parse()
+
+	r := &Releaser{}
+	r.Init()
+
+	r.Ignore = make(map[rune]bool)
+	for _, c := range *ignoreDirty {
+		r.Ignore[c] = true
+	}
+
+	goMods := r.DiscoverGoModules()
+	nodePkgs := r.DiscoverNodePackages()
+
+	r.ModulePrefixes = make([]string, 0)
+	for _, gm := range goMods {
+		pre := gm.Path
+		if pre != "" {
+			pre += "/"
+		}
+		r.ModulePrefixes = append(r.ModulePrefixes, pre)
+	}
+	for _, np := range nodePkgs {
+		pre := np.Path
+		if pre != "" {
+			pre += "/"
+		}
+		r.ModulePrefixes = append(r.ModulePrefixes, pre)
+	}
+	sort.Slice(r.ModulePrefixes, func(i, j int) bool {
+		return len(r.ModulePrefixes[i]) > len(r.ModulePrefixes[j])
+	})
+
+	rows := []Releasable{}
+	for _, m := range goMods {
+		rows = append(rows, m.Process(r)...)
+	}
+	for _, p := range nodePkgs {
+		rows = append(rows, p.Process(r)...)
 	}
 
 	if *useCSV {
 		c := ','
-		if *csvComma != "" && len(*csvComma) > 0 {
+		if len(*csvComma) > 0 {
 			c = rune((*csvComma)[0])
 		}
 		w := csv.NewWriter(os.Stdout)
 		w.Comma = c
-		_ = w.Write([]string{"status", "type", "name", "version", "current tag", "path"})
-		for _, r := range rows {
-			_ = w.Write([]string{r.Status, r.Typ, r.Name, r.Version, r.Tag, r.Path})
+		_ = w.Write([]string{"type", "name", "next_version", "current_tag", "status"})
+		for _, rr := range rows {
+			_ = w.Write([]string{rr.releasable, rr.Status, rr.Version, rr.CurrentTag, rr.Path})
 		}
 		w.Flush()
 	} else {
-		headers := []string{"status", "type", "name", "version", "current tag", "path"}
+		headers := []string{ /*"t",*/ "name", "next_version", "current_tag", "status"}
 		colWidths := make([]int, len(headers))
 		for i, h := range headers {
 			colWidths[i] = len(h)
 		}
-		for _, r := range rows {
-			if len(r.Status) > colWidths[0] {
-				colWidths[0] = len(r.Status)
+		// var typeIdx = 0
+		var nameIdx = 0
+		var versionIdx = 1
+		var tagIdx = 2
+		var statusIdx = 3
+		for _, rr := range rows {
+			// colWidths[typeIdx] = 0
+			// if len(rr.Type) > colWidths[typeIdx] {
+			// 	colWidths[typeIdx] = len(rr.Type)
+			// }
+			if len(rr.releasable) > colWidths[nameIdx] {
+				colWidths[nameIdx] = len(rr.releasable)
 			}
-			if len(r.Typ) > colWidths[1] {
-				colWidths[1] = len(r.Typ)
+			if len(rr.Version) > colWidths[versionIdx] {
+				colWidths[versionIdx] = len(rr.Version)
 			}
-			if len(r.Name) > colWidths[2] {
-				colWidths[2] = len(r.Name)
+			if len(rr.CurrentTag) > colWidths[tagIdx] {
+				colWidths[tagIdx] = len(rr.CurrentTag)
 			}
-			if len(r.Version) > colWidths[3] {
-				colWidths[3] = len(r.Version)
+			if len(rr.Status) > colWidths[statusIdx] {
+				colWidths[statusIdx] = len(rr.Status)
 			}
-			if len(r.Tag) > colWidths[4] {
-				colWidths[4] = len(r.Tag)
-			}
-			if len(r.Path) > colWidths[5] {
-				colWidths[5] = len(r.Path)
-			}
+			// if len(rr.Path) > colWidths[5] {
+			// 	colWidths[5] = len(rr.Path)
+			// }
 		}
-		fmt.Print("|")
-		for i, h := range headers {
-			fmt.Printf(" %-*s |", colWidths[i], h)
+		sep := ""
+		fmt.Print(sep)
+		{
+			fmt.Printf("%-*s %s", colWidths[nameIdx], headers[nameIdx], sep)
+			fmt.Printf(" %-*s %s", colWidths[versionIdx], headers[versionIdx], sep)
+			fmt.Printf(" %-*s %s", colWidths[tagIdx], headers[tagIdx], sep)
+			fmt.Printf(" %-*s %s", colWidths[statusIdx], headers[statusIdx], sep)
 		}
 		fmt.Println()
-		fmt.Print("|")
-		for _, w := range colWidths {
-			fmt.Printf(" %s |", strings.Repeat("-", w))
+		fmt.Print(sep)
+		for i, w := range colWidths {
+			if i == 0 {
+				fmt.Printf("%s %s", strings.Repeat("-", w), sep)
+				continue
+			}
+			fmt.Printf(" %s %s", strings.Repeat("-", w), sep)
 		}
 		fmt.Println()
-		for _, r := range rows {
-			fmt.Print("|")
-			fmt.Printf(" %-*s |", colWidths[0], r.Status)
-			fmt.Printf(" %-*s |", colWidths[1], r.Typ)
-			fmt.Printf(" %-*s |", colWidths[2], r.Name)
-			fmt.Printf(" %-*s |", colWidths[3], r.Version)
-			fmt.Printf(" %-*s |", colWidths[4], r.Tag)
-			fmt.Printf(" %-*s |", colWidths[5], r.Path)
+		for _, rr := range rows {
+			fmt.Print(sep)
+			// fmt.Printf(" %-*s %s", colWidths[typeIdx], rr.Type, sep)
+			fmt.Printf("%-*s %s", colWidths[nameIdx], rr.releasable, sep)
+			fmt.Printf(" %-*s %s", colWidths[versionIdx], rr.Version, sep)
+			fmt.Printf(" %-*s %s", colWidths[tagIdx], rr.CurrentTag, sep)
+			fmt.Printf(" %-*s %s", colWidths[statusIdx], rr.Status, sep)
+			// fmt.Printf(" %-*s %s", colWidths[5], rr.Path, sep)
 			fmt.Println()
 		}
 	}
