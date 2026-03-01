@@ -232,10 +232,11 @@ func runBump(args []string) {
 
 func runInit(args []string) {
 	fs := flag.NewFlagSet("monorel init", flag.ExitOnError)
-	var recursive, all, dryRun bool
+	var recursive, all, dryRun, cmd bool
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.BoolVar(&dryRun, "dry-run", false, "print what would happen without writing files, creating commits, or tags")
+	fs.BoolVar(&cmd, "cmd", false, "for each cmd/ child with package main, run go mod init+tidy (suggests a commit at the end)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel init [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -244,9 +245,13 @@ func runInit(args []string) {
 		fmt.Fprintln(os.Stderr, "  2. Commits it (skipped if file is unchanged)")
 		fmt.Fprintln(os.Stderr, "  3. Creates an initial version tag (equivalent to 'bump patch')")
 		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "With -cmd, first scans for cmd/ subdirectories and runs go mod init+tidy")
+		fmt.Fprintln(os.Stderr, "for each direct child that contains package main but has no go.mod yet.")
+		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Examples:")
 		fmt.Fprintln(os.Stderr, "  monorel init ./auth/csvauth/cmd/csvauth")
 		fmt.Fprintln(os.Stderr, "  monorel init -recursive .               # init all modules under current directory")
+		fmt.Fprintln(os.Stderr, "  monorel init -cmd -recursive .          # make cmd/ children independently versioned")
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
@@ -255,6 +260,10 @@ func runInit(args []string) {
 	if len(binPaths) == 0 {
 		fs.Usage()
 		os.Exit(2)
+	}
+
+	if cmd {
+		initCmdModules(binPaths, dryRun)
 	}
 
 	allPaths, err := expandPaths(binPaths, recursive, all)
@@ -291,6 +300,15 @@ func initModuleGroup(group *moduleGroup, dryRun bool) {
 		fmt.Fprintf(os.Stderr, "monorel: skip: %s is at the repository root; binaries at the repo root cannot have prefixed tags\n", modRoot)
 		return
 	}
+
+	// Guard: skip if the module has uncommitted changes (files inside child
+	// module directories — those with their own go.mod on disk — are excluded
+	// so that a freshly-run --cmd step does not block the parent module).
+	if hasUncommittedChanges(modRoot) {
+		fmt.Fprintf(os.Stderr, "monorel: skip: %s has uncommitted changes; commit or stash them first\n", modRoot)
+		return
+	}
+
 	prefixParts := strings.Split(prefix, "/")
 	projectName := prefixParts[len(prefixParts)-1]
 
@@ -554,6 +572,11 @@ func findMainPackages(root string, all bool) ([]string, error) {
 				continue
 			}
 			child := filepath.Join(dir, name)
+			// Stop at directories with their own go.mod — they are independent
+			// module roots and should not be included in this module's walk.
+			if _, err := os.Stat(filepath.Join(child, "go.mod")); err == nil {
+				continue
+			}
 			// Skip directories that contain no git-tracked files.
 			if trackedDirs != nil && !trackedDirs[child] {
 				continue
@@ -594,6 +617,181 @@ func buildTrackedDirs(dir string) map[string]bool {
 		}
 	}
 	return dirs
+}
+
+// readModulePath returns the module path declared in the go.mod file at
+// modRoot, or "" if the file cannot be read or the module line is absent.
+func readModulePath(modRoot string) string {
+	data, err := os.ReadFile(filepath.Join(modRoot, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
+}
+
+// findChildModuleRoots returns the absolute paths of all subdirectories of
+// modRoot that have their own go.mod on disk (even if untracked by git).
+// It stops recursing past the first go.mod it finds in any subtree.
+func findChildModuleRoots(modRoot string) []string {
+	var roots []string
+	var scan func(dir string)
+	scan = func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			child := filepath.Join(dir, e.Name())
+			if _, err := os.Stat(filepath.Join(child, "go.mod")); err == nil {
+				roots = append(roots, child)
+				continue // don't recurse past a submodule
+			}
+			scan(child)
+		}
+	}
+	scan(modRoot)
+	return roots
+}
+
+// hasUncommittedChanges reports whether modRoot contains modified or untracked
+// files according to "git status --porcelain".  Files inside child module
+// directories (subdirectories with their own go.mod on disk, even if untracked)
+// are excluded from the check.
+func hasUncommittedChanges(modRoot string) bool {
+	status := runIn(modRoot, "git", "status", "--porcelain", "--", ".")
+	if status == "" {
+		return false
+	}
+	childRoots := findChildModuleRoots(modRoot)
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		relFile := strings.TrimSpace(line[3:])
+		abs := filepath.Join(modRoot, filepath.FromSlash(relFile))
+		inChild := false
+		for _, cr := range childRoots {
+			if abs == cr || strings.HasPrefix(abs, cr+string(filepath.Separator)) {
+				inChild = true
+				break
+			}
+		}
+		if !inChild {
+			return true
+		}
+	}
+	return false
+}
+
+// initCmdModules scans each of roots recursively, and for every direct child
+// of a directory named "cmd" that contains a Go main package but has no go.mod
+// yet, runs "go mod init <path>" and "go mod tidy".  At the end it prints a
+// suggested git command to commit the new files.
+func initCmdModules(roots []string, dryRun bool) {
+	var initialized []string
+	seen := make(map[string]bool)
+
+	var scan func(dir string)
+	scan = func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			isStop := false
+			for _, stop := range stopMarkers {
+				if name == stop {
+					isStop = true
+					break
+				}
+			}
+			if isStop || (len(name) > 0 && (name[0] == '.' || name[0] == '_')) {
+				continue
+			}
+			child := filepath.Join(dir, name)
+			if name == "cmd" {
+				// Inspect each direct child of this cmd/ directory.
+				cmdEntries, err := os.ReadDir(child)
+				if err == nil {
+					for _, ce := range cmdEntries {
+						if !ce.IsDir() {
+							continue
+						}
+						target := filepath.Join(child, ce.Name())
+						if seen[target] {
+							continue
+						}
+						seen[target] = true
+						// Already has its own module — skip.
+						if _, err := os.Stat(filepath.Join(target, "go.mod")); err == nil {
+							continue
+						}
+						// Not a main package — skip.
+						if checkPackageMain(target) != nil {
+							continue
+						}
+						// Compute new module path from the parent module.
+						modRoot, err := findModuleRoot(target)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "warning: --cmd: no module root for %s: %v\n", target, err)
+							continue
+						}
+						parentModPath := readModulePath(modRoot)
+						if parentModPath == "" {
+							fmt.Fprintf(os.Stderr, "warning: --cmd: cannot read module path from %s\n", modRoot)
+							continue
+						}
+						rel, _ := filepath.Rel(modRoot, target)
+						newModPath := parentModPath + "/" + filepath.ToSlash(rel)
+						if dryRun {
+							fmt.Fprintf(os.Stderr, "[dry-run] would init module %s\n", newModPath)
+							fmt.Fprintf(os.Stderr, "[dry-run] would run go mod tidy in %s\n", target)
+						} else {
+							fmt.Fprintf(os.Stderr, "init module %s\n", newModPath)
+							runPrintIn(target, "go", "mod", "init", newModPath)
+							runPrintIn(target, "go", "mod", "tidy")
+						}
+						initialized = append(initialized, target)
+					}
+				}
+			}
+			scan(child) // always recurse into children
+		}
+	}
+
+	for _, root := range roots {
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: --cmd: resolving %s: %v\n", root, err)
+			continue
+		}
+		scan(abs)
+	}
+
+	if len(initialized) > 0 {
+		fmt.Fprintln(os.Stderr)
+		if dryRun {
+			fmt.Fprintf(os.Stderr, "[dry-run] %d cmd module(s) would be initialised\n", len(initialized))
+		} else {
+			fmt.Fprintf(os.Stderr, "note: initialised %d cmd module(s); to commit them, run:\n", len(initialized))
+			fmt.Fprintf(os.Stderr, "  git add '**/cmd/**/go.*' && git commit -m \"chore(release): independently versioned modules for all\"\n")
+		}
+	} else if !dryRun {
+		fmt.Fprintln(os.Stderr, "note: --cmd: no uninitialised cmd modules found")
+	}
 }
 
 // findModuleRoot walks upward from absDir looking for a directory that
@@ -1158,6 +1356,19 @@ func runIn(dir, name string, args ...string) string {
 	cmd.Dir = dir
 	out, _ := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out))
+}
+
+// runPrintIn runs name with args in dir, forwarding its stdout and stderr to
+// the current process's stderr so that build-tool output (go mod tidy, etc.)
+// is visible in the terminal.
+func runPrintIn(dir, name string, args ...string) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %s %v in %s: %v\n", name, args, dir, err)
+	}
 }
 
 func fatalf(format string, args ...any) {
