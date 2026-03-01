@@ -112,11 +112,12 @@ func usage() {
 
 func runRelease(args []string) {
 	fs := flag.NewFlagSet("monorel release", flag.ExitOnError)
-	var recursive, all, dryRun, yes, draft, prerelease bool
+	var recursive, all, dryRun, yes, force, draft, prerelease bool
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.BoolVar(&dryRun, "dry-run", false, "show each step without running it")
 	fs.BoolVar(&yes, "yes", false, "run all steps without prompting")
+	fs.BoolVar(&force, "force", false, "overwrite .goreleaser.yaml without prompting even if it has been modified")
 	fs.BoolVar(&draft, "draft", false, "keep the GitHub release in draft state after uploading (default: publish)")
 	fs.BoolVar(&prerelease, "prerelease", false, "keep the GitHub release marked as pre-release even for clean tags (default: promote clean tags to stable)")
 	fs.Usage = func() {
@@ -161,7 +162,7 @@ func runRelease(args []string) {
 		printGroupHeader(cwd, group)
 		relPath, _ := filepath.Rel(cwd, group.root)
 		relPath = filepath.ToSlash(relPath)
-		processModule(group, relPath, dryRun, yes, draft, prerelease)
+		processModule(group, relPath, dryRun, yes, force, draft, prerelease)
 	}
 }
 
@@ -952,7 +953,7 @@ func printGroupHeader(cwd string, group *moduleGroup) {
 // for one module group.  relPath is the path from the caller's CWD to the
 // module root; it is used in the script for all paths so that the script can
 // be run from the directory where monorel was invoked.
-func processModule(group *moduleGroup, relPath string, dryRun, yes, draft, prerelease bool) {
+func processModule(group *moduleGroup, relPath string, dryRun, yes, force, draft, prerelease bool) {
 	modRoot := group.root
 	bins := group.bins
 
@@ -971,18 +972,18 @@ func processModule(group *moduleGroup, relPath string, dryRun, yes, draft, prere
 	rawURL := mustRunIn(modRoot, "git", "remote", "get-url", "origin")
 	repoPath := normalizeGitURL(rawURL)
 
-	// 1. Write .goreleaser.yaml (always regenerate).
-	// Track whether this is a first-time creation: auto-commit and auto-tag
-	// only apply when the file is new.  If it already exists, just update it
-	// on disk and leave committing to the user.
+	// 1. Write .goreleaser.yaml when necessary.
+	// For release, the file is considered compatible if it has no stock
+	// {{ .ProjectName }} template and at least one binary uses the VERSION env
+	// var — local edits that add extra binaries etc. are preserved.
+	// Auto-commit and auto-tag only apply when the file is brand new.
 	yamlContent := goreleaserYAML(projectName, bins)
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
 	existing, readErr := os.ReadFile(yamlPath)
 	isNewFile := readErr != nil
-	isChanged := isNewFile || !yamlLooksCorrect(string(existing), bins)
+	isChanged := isNewFile || !yamlIsCompatible(string(existing), bins)
 	if !isNewFile && isChanged {
-		// Warn if a stock {{ .ProjectName }} template is in use (one of the
-		// reasons yamlLooksCorrect may have returned false).
+		// Warn if a stock {{ .ProjectName }} template is in use.
 		hasProjectName := strings.Contains(string(existing), "{{ .ProjectName }}") ||
 			strings.Contains(string(existing), "{{.ProjectName}}")
 		gitInfo, gitErr := os.Stat(filepath.Join(modRoot, ".git"))
@@ -990,6 +991,23 @@ func processModule(group *moduleGroup, relPath string, dryRun, yes, draft, prere
 		if hasProjectName && !atGitRoot {
 			fmt.Fprintf(os.Stderr, "warning: %s: contains {{ .ProjectName }} but module is a monorepo subdirectory;\n", yamlPath)
 			fmt.Fprintf(os.Stderr, "  replacing stock goreleaser config with monorel-generated config.\n")
+		}
+		// Prompt before overwriting a modified file. --yes does not apply;
+		// use --force to skip the prompt. If stdin is not a terminal and
+		// --force is not set, refuse rather than silently clobber.
+		if !force {
+			fi, statErr := os.Stdin.Stat()
+			isTTY := statErr == nil && fi.Mode()&os.ModeCharDevice != 0
+			if !isTTY {
+				fatalf("%s needs updating but stdin is not a terminal; use --force to overwrite", cwdRelPath(yamlPath))
+			}
+			fmt.Fprintf(os.Stderr, "%s needs updating; overwrite? [Y/n] ", cwdRelPath(yamlPath))
+			reader := bufio.NewReader(os.Stdin)
+			line, _ := reader.ReadString('\n')
+			if resp := strings.ToLower(strings.TrimSpace(line)); resp == "n" || resp == "no" {
+				fmt.Fprintf(os.Stderr, "skipped %s\n", cwdRelPath(yamlPath))
+				return
+			}
 		}
 	}
 	if isChanged {
@@ -1271,6 +1289,24 @@ func goreleaserYAML(projectName string, bins []binary) string {
 	w("release:\n  disable: true\n")
 
 	return b.String()
+}
+
+// yamlIsCompatible is the looser check used by the release subcommand.
+// It returns true when the file has no stock {{ .ProjectName }} template and
+// at least one binary already uses the VERSION env var in its archive name.
+// This preserves hand-edited files that add extra binaries or tweak settings,
+// where yamlLooksCorrect would demand every declared binary be present.
+func yamlIsCompatible(content string, bins []binary) bool {
+	if strings.Contains(content, "{{ .ProjectName }}") ||
+		strings.Contains(content, "{{.ProjectName}}") {
+		return false
+	}
+	for _, bin := range bins {
+		if strings.Contains(content, bin.name+"_{{ .Env.VERSION }}_") {
+			return true
+		}
+	}
+	return false
 }
 
 // yamlLooksCorrect returns true when content appears to be a valid monorel-
