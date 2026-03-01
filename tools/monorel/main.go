@@ -321,6 +321,8 @@ func initModuleGroup(group *moduleGroup, dryRun bool) {
 	if dryRun {
 		if isChanged {
 			fmt.Fprintf(os.Stderr, "[dry-run] would write %s\n", yamlPath)
+		} else {
+			fmt.Fprintf(os.Stderr, "found config %s with monorepo support\n", cwdRelPath(yamlPath))
 		}
 	} else if isChanged {
 		if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
@@ -338,6 +340,8 @@ func initModuleGroup(group *moduleGroup, dryRun bool) {
 				fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
 			}
 		}
+	} else {
+		fmt.Fprintf(os.Stderr, "found config %s with monorepo support\n", cwdRelPath(yamlPath))
 	}
 
 	// 3. Bump patch — but only when the goreleaser.yaml commit is the sole new
@@ -984,6 +988,8 @@ func processModule(group *moduleGroup, relPath string) {
 			fatalf("writing %s: %v", yamlPath, err)
 		}
 		fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
+	} else {
+		fmt.Fprintf(os.Stderr, "found config %s with monorepo support\n", cwdRelPath(yamlPath))
 	}
 
 	// 2. Auto-commit + auto-tag — only when the file was newly created.
@@ -1409,6 +1415,20 @@ func printModuleScript(
 // quotes inside s as '\''.  For example: it's → 'it'\''s'.
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// relPath returns path relative to the current working directory, prefixed
+// with "./".  Falls back to the absolute path if cwd cannot be determined.
+func cwdRelPath(path string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return path
+	}
+	rel, err := filepath.Rel(cwd, path)
+	if err != nil {
+		return path
+	}
+	return "./" + rel
 }
 
 func normalizeGitURL(rawURL string) string {
