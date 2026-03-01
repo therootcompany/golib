@@ -112,11 +112,13 @@ func usage() {
 
 func runRelease(args []string) {
 	fs := flag.NewFlagSet("monorel release", flag.ExitOnError)
-	var recursive, all, dryRun, yes bool
+	var recursive, all, dryRun, yes, draft, prerelease bool
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.BoolVar(&dryRun, "dry-run", false, "show each step without running it")
 	fs.BoolVar(&yes, "yes", false, "run all steps without prompting")
+	fs.BoolVar(&draft, "draft", false, "create GitHub release as a draft")
+	fs.BoolVar(&prerelease, "prerelease", false, "mark GitHub release as a pre-release")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel release [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -159,7 +161,7 @@ func runRelease(args []string) {
 		printGroupHeader(cwd, group)
 		relPath, _ := filepath.Rel(cwd, group.root)
 		relPath = filepath.ToSlash(relPath)
-		processModule(group, relPath, dryRun, yes)
+		processModule(group, relPath, dryRun, yes, draft, prerelease)
 	}
 }
 
@@ -950,7 +952,7 @@ func printGroupHeader(cwd string, group *moduleGroup) {
 // for one module group.  relPath is the path from the caller's CWD to the
 // module root; it is used in the script for all paths so that the script can
 // be run from the directory where monorel was invoked.
-func processModule(group *moduleGroup, relPath string, dryRun, yes bool) {
+func processModule(group *moduleGroup, relPath string, dryRun, yes, draft, prerelease bool) {
 	modRoot := group.root
 	bins := group.bins
 
@@ -1091,7 +1093,7 @@ func processModule(group *moduleGroup, relPath string, dryRun, yes bool) {
 	steps := buildModuleSteps(
 		modRoot, relPath, projectName, bins,
 		version, currentTag, repoPath, headSHA,
-		releaseNotes, isPreRelease, needsNewTag,
+		releaseNotes, needsNewTag, draft, prerelease,
 	)
 	if err := runSteps(steps, dryRun, yes); err != nil {
 		fmt.Fprintf(os.Stderr, "monorel: %v\n", err)
@@ -1351,7 +1353,7 @@ func buildModuleSteps(
 	modRoot, relPath, projectName string, bins []binary,
 	version, currentTag, repoPath, headSHA string,
 	releaseNotes string,
-	isPreRelease, needsNewTag bool,
+	needsNewTag, draft, prerelease bool,
 ) []releaseStep {
 	distDir := filepath.Join(modRoot, "dist")
 	var distRelDir string
@@ -1415,31 +1417,47 @@ func buildModuleSteps(
 		},
 	})
 
-	// Step: Create draft GitHub release.
-	var ghCreateDisplay []string
-	ghCreateDisplay = append(ghCreateDisplay, fmt.Sprintf("gh release create %q \\", currentTag))
-	ghCreateDisplay = append(ghCreateDisplay, fmt.Sprintf("  --title %q \\", title))
-	ghCreateDisplay = append(ghCreateDisplay, fmt.Sprintf("  --notes %s \\", shellSingleQuote(releaseNotes)))
-	if isPreRelease {
-		ghCreateDisplay = append(ghCreateDisplay, "  --prerelease \\")
+	// Step: Create GitHub release.
+	// --draft and --prerelease are always explicit so the intent is unambiguous.
+	draftFlag := "--draft=false"
+	if draft {
+		draftFlag = "--draft"
 	}
-	ghCreateDisplay = append(ghCreateDisplay, "  --draft \\")
-	ghCreateDisplay = append(ghCreateDisplay, fmt.Sprintf("  --target %q", headSHA))
+	prereleaseFlag := "--prerelease=false"
+	if prerelease {
+		prereleaseFlag = "--prerelease"
+	}
+	var stepTitle string
+	switch {
+	case draft && prerelease:
+		stepTitle = fmt.Sprintf("create draft pre-release %s", currentTag)
+	case draft:
+		stepTitle = fmt.Sprintf("create draft GitHub release %s", currentTag)
+	case prerelease:
+		stepTitle = fmt.Sprintf("create pre-release %s", currentTag)
+	default:
+		stepTitle = fmt.Sprintf("create GitHub release %s", currentTag)
+	}
+	ghCreateDisplay := []string{
+		fmt.Sprintf("gh release create %q \\", currentTag),
+		fmt.Sprintf("  --title %q \\", title),
+		fmt.Sprintf("  --notes %s \\", shellSingleQuote(releaseNotes)),
+		fmt.Sprintf("  %s \\", draftFlag),
+		fmt.Sprintf("  %s \\", prereleaseFlag),
+		fmt.Sprintf("  --target %q", headSHA),
+	}
 	steps = append(steps, releaseStep{
-		title:   "Create draft GitHub release",
-		prompt:  fmt.Sprintf("create draft GitHub release %s", currentTag),
+		title:   "Create GitHub release",
+		prompt:  stepTitle,
 		display: ghCreateDisplay,
 		run: func() error {
-			ghArgs := []string{"release", "create", currentTag,
+			return execIn(modRoot, "gh", "release", "create", currentTag,
 				"--title", title,
 				"--notes", releaseNotes,
-				"--draft",
+				draftFlag,
+				prereleaseFlag,
 				"--target", headSHA,
-			}
-			if isPreRelease {
-				ghArgs = append(ghArgs, "--prerelease")
-			}
-			return execIn(modRoot, "gh", ghArgs...)
+			)
 		},
 	})
 
@@ -1479,15 +1497,18 @@ func buildModuleSteps(
 		},
 	})
 
-	// Step: Publish release.
-	steps = append(steps, releaseStep{
-		title:   "Publish release (remove draft)",
-		prompt:  fmt.Sprintf("publish release %s", currentTag),
-		display: []string{fmt.Sprintf("gh release edit %q --draft=false", currentTag)},
-		run: func() error {
-			return execIn(modRoot, "gh", "release", "edit", currentTag, "--draft=false")
-		},
-	})
+	// Step: Publish release — only needed when creating as draft without prerelease.
+	// draft+prerelease: stays as draft; neither: published immediately; prerelease-only: published immediately.
+	if draft && !prerelease {
+		steps = append(steps, releaseStep{
+			title:   "Publish release (remove draft)",
+			prompt:  fmt.Sprintf("publish release %s", currentTag),
+			display: []string{fmt.Sprintf("gh release edit %q --draft=false", currentTag)},
+			run: func() error {
+				return execIn(modRoot, "gh", "release", "edit", currentTag, "--draft=false")
+			},
+		})
+	}
 
 	return steps
 }
