@@ -1255,7 +1255,41 @@ func goreleaserYAML(projectName string, bins []binary) string {
 			" -X main.commit={{.Commit}}" +
 			" -X main.date={{.Date}}" +
 			" -X main.builtBy=goreleaser\n")
-		w("    goos:\n      - linux\n      - windows\n      - darwin\n")
+		w("    goos:\n")
+		w("      - aix\n")
+		w("      - darwin\n")
+		w("      - dragonfly\n")
+		w("      - freebsd\n")
+		w("      - illumos\n")
+		w("      - js\n")
+		w("      - linux\n")
+		w("      - netbsd\n")
+		w("      - openbsd\n")
+		w("      - plan9\n")
+		w("      - solaris\n")
+		w("      - wasip1\n")
+		w("      - windows\n")
+
+		// iOS requires CGO and Xcode toolchain — commented out by default.
+		wf("  # iOS requires CGO_ENABLED=1 and the Xcode toolchain.\n")
+		wf("  #- id: %s-ios\n", bin.name)
+		wf("  #  binary: %s\n", bin.name)
+		if bin.mainPath != "." {
+			wf("  #  main: %s\n", bin.mainPath)
+		}
+		w("  #  env:\n  #    - CGO_ENABLED=1\n")
+		w("  #  goos:\n  #    - ios\n")
+
+		// Android: CGO_ENABLED=0 supports arm64 only; full CGO requires the NDK.
+		wf("  # Android CGO_ENABLED=0 builds arm64 only; CGO builds require the NDK.\n")
+		wf("  #- id: %s-android\n", bin.name)
+		wf("  #  binary: %s\n", bin.name)
+		if bin.mainPath != "." {
+			wf("  #  main: %s\n", bin.mainPath)
+		}
+		w("  #  env:\n  #    - CGO_ENABLED=0\n")
+		w("  #  goos:\n  #    - android\n")
+		w("  #  goarch:\n  #    - arm64\n")
 	}
 
 	w("\narchives:\n")
