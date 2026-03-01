@@ -1008,25 +1008,35 @@ func processModule(group *moduleGroup, relPath string) {
 			"--pretty=format:- %h %s", "--", ".")
 	}
 
-	// Write .goreleaser.yaml next to go.mod.
-	// Warn if an existing file uses {{ .ProjectName }} (stock goreleaser config)
-	// and the module is a monorepo subdirectory (go.mod not adjacent to .git/).
+	// Write .goreleaser.yaml if it does not yet exist, then commit it.
+	// If it already exists, leave it unchanged — updates require manual review.
 	yamlContent := goreleaserYAML(projectName, bins)
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
 	if existing, err := os.ReadFile(yamlPath); err == nil {
+		// File exists — leave it for manual review.
 		hasProjectName := strings.Contains(string(existing), "{{ .ProjectName }}") ||
 			strings.Contains(string(existing), "{{.ProjectName}}")
 		gitInfo, gitErr := os.Stat(filepath.Join(modRoot, ".git"))
 		atGitRoot := gitErr == nil && gitInfo.IsDir()
 		if hasProjectName && !atGitRoot {
-			fmt.Fprintf(os.Stderr, "warning: %s: contains {{ .ProjectName }} but module is a monorepo subdirectory;\n", yamlPath)
-			fmt.Fprintf(os.Stderr, "  replacing stock goreleaser config with monorel-generated config.\n")
+			fmt.Fprintf(os.Stderr, "warning: %s uses {{ .ProjectName }} in a monorepo subdirectory;\n", yamlPath)
+			fmt.Fprintf(os.Stderr, "  update it manually and re-run 'monorel release'\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "note: %s exists; leaving unchanged\n", yamlPath)
+		}
+	} else {
+		// File is missing — write it and commit it so goreleaser has a config.
+		if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
+			fatalf("writing %s: %v", yamlPath, err)
+		}
+		fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
+		mustRunIn(modRoot, "git", "add", ".goreleaser.yaml")
+		if status := runIn(modRoot, "git", "status", "--porcelain", "--", ".goreleaser.yaml"); status != "" {
+			commitMsg := "chore(release): add .goreleaser.yaml for " + projectName
+			mustRunIn(modRoot, "git", "commit", "-m", commitMsg)
+			fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
 		}
 	}
-	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
-		fatalf("writing %s: %v", yamlPath, err)
-	}
-	fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
 
 	headSHA := mustRunIn(modRoot, "git", "rev-parse", "HEAD")
 	printModuleScript(relPath, projectName, bins,
