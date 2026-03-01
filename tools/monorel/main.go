@@ -956,7 +956,57 @@ func processModule(group *moduleGroup, relPath string) {
 	rawURL := mustRunIn(modRoot, "git", "remote", "get-url", "origin")
 	repoPath := normalizeGitURL(rawURL)
 
-	// Collect and semver-sort tags matching "<prefix>/v*".
+	// 1. Write .goreleaser.yaml, commit if the file changed.
+	// Warn if an existing file uses {{ .ProjectName }} (stock goreleaser
+	// config) and the module is a monorepo subdirectory.
+	yamlContent := goreleaserYAML(projectName, bins)
+	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
+	if existing, err := os.ReadFile(yamlPath); err == nil {
+		hasProjectName := strings.Contains(string(existing), "{{ .ProjectName }}") ||
+			strings.Contains(string(existing), "{{.ProjectName}}")
+		gitInfo, gitErr := os.Stat(filepath.Join(modRoot, ".git"))
+		atGitRoot := gitErr == nil && gitInfo.IsDir()
+		if hasProjectName && !atGitRoot {
+			fmt.Fprintf(os.Stderr, "warning: %s: contains {{ .ProjectName }} but module is a monorepo subdirectory;\n", yamlPath)
+			fmt.Fprintf(os.Stderr, "  replacing stock goreleaser config with monorel-generated config.\n")
+		}
+	}
+	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
+		fatalf("writing %s: %v", yamlPath, err)
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
+	mustRunIn(modRoot, "git", "add", ".goreleaser.yaml")
+	if status := runIn(modRoot, "git", "status", "--porcelain", "--", ".goreleaser.yaml"); status != "" {
+		commitMsg := "chore(release): add .goreleaser.yaml for " + projectName
+		mustRunIn(modRoot, "git", "commit", "-m", commitMsg)
+		fmt.Fprintf(os.Stderr, "committed: %s\n", commitMsg)
+	}
+
+	// 2. Auto-tag patch if the goreleaser.yaml commit is the sole new commit
+	// since the last stable tag — same heuristic as 'monorel init'.
+	latestStable := findLatestStableTag(modRoot, prefix)
+	shouldBump := true
+	if latestStable != "" {
+		logOut := strings.TrimSpace(runIn(modRoot, "git", "log", "--oneline", latestStable+"..HEAD", "--", "."))
+		count := 0
+		if logOut != "" {
+			count = len(strings.Split(logOut, "\n"))
+		}
+		if count > 1 {
+			fmt.Fprintf(os.Stderr,
+				"note: %d commits since %s; skipping auto-bump — run 'monorel bump' when ready\n",
+				count, latestStable)
+			shouldBump = false
+		}
+	}
+	if shouldBump {
+		if newTag := bumpModuleTag(group, "patch", false, false); newTag != "" {
+			fmt.Fprintf(os.Stderr, "created tag: %s\n", newTag)
+		}
+	}
+
+	// 3. Collect and semver-sort tags — done after yaml commit + auto-tag so
+	// the version computation reflects any tag just created above.
 	rawTags := runIn(modRoot, "git", "tag", "--list", prefix+"/v*")
 	var tags []string
 	for _, t := range strings.Split(rawTags, "\n") {
@@ -997,8 +1047,7 @@ func processModule(group *moduleGroup, relPath string) {
 		prevTag = latestTag
 	}
 
-	// Pre-compute release notes now so the generated script contains the
-	// actual commit list rather than a git command the user must re-run.
+	// 4. Pre-compute release notes so the script contains the actual commit list.
 	var releaseNotes string
 	if prevTag != "" {
 		releaseNotes = runIn(modRoot, "git", "--no-pager", "log", prevTag+"..HEAD",
@@ -1007,27 +1056,6 @@ func processModule(group *moduleGroup, relPath string) {
 		releaseNotes = runIn(modRoot, "git", "--no-pager", "log",
 			"--pretty=format:- %h %s", "--", ".")
 	}
-
-	// Write .goreleaser.yaml next to go.mod.
-	// Warn if an existing file uses {{ .ProjectName }} (stock goreleaser config)
-	// and the module is a monorepo subdirectory (go.mod not adjacent to .git/).
-	// The file is written but not committed; commit it manually when satisfied.
-	yamlContent := goreleaserYAML(projectName, bins)
-	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
-	if existing, err := os.ReadFile(yamlPath); err == nil {
-		hasProjectName := strings.Contains(string(existing), "{{ .ProjectName }}") ||
-			strings.Contains(string(existing), "{{.ProjectName}}")
-		gitInfo, gitErr := os.Stat(filepath.Join(modRoot, ".git"))
-		atGitRoot := gitErr == nil && gitInfo.IsDir()
-		if hasProjectName && !atGitRoot {
-			fmt.Fprintf(os.Stderr, "warning: %s: contains {{ .ProjectName }} but module is a monorepo subdirectory;\n", yamlPath)
-			fmt.Fprintf(os.Stderr, "  replacing stock goreleaser config with monorel-generated config.\n")
-		}
-	}
-	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0o644); err != nil {
-		fatalf("writing %s: %v", yamlPath, err)
-	}
-	fmt.Fprintf(os.Stderr, "wrote %s\n", yamlPath)
 
 	headSHA := mustRunIn(modRoot, "git", "rev-parse", "HEAD")
 	printModuleScript(relPath, projectName, bins,
