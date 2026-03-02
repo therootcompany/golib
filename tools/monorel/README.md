@@ -83,8 +83,8 @@ monorel init --cmd --recursive .
 | `--dry-run` | off | Print what would happen without writing or tagging |
 | `--cmd` | off | Run `go mod init` + `go mod tidy` for unmodularised `cmd/` children |
 | `--almost-all` | off | Widen build matrix to include esoteric platforms (see [Build matrix](#build-matrix)) |
-| `--ios` | off | Generate an active iOS build entry instead of a commented stub |
-| `--android-ndk` | off | Generate an active Android NDK build entry instead of a commented stub |
+| `--ios` | off | Add an iOS build entry (requires CGO_ENABLED=1 and Xcode) |
+| `--android-ndk` | off | Add an Android NDK build entry (requires CGO_ENABLED=1 and NDK) |
 
 ---
 
@@ -188,8 +188,8 @@ A *clean tag* is one without a pre-release suffix (no `-pre3` or `.dirty`).
 ## Build matrix
 
 The generated `.goreleaser.yaml` targets `CGO_ENABLED=0` by default.
-Platforms that require CGO or a special toolchain are emitted as **commented
-stubs** unless the corresponding flag is given.
+Platforms that require CGO or a special toolchain are only included when the
+corresponding flag is given.
 
 ### Default matrix
 

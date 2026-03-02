@@ -166,8 +166,8 @@ func runRelease(args []string) {
 	fs.BoolVar(&draft, "draft", false, "keep the GitHub release in draft state after uploading (default: publish)")
 	fs.BoolVar(&prerelease, "prerelease", false, "keep the GitHub release marked as pre-release even for clean tags (default: promote clean tags to stable)")
 	fs.BoolVar(&almostAll, "almost-all", false, "widen build matrix to include esoteric goos/goarch targets and goamd64 v1-v4")
-	fs.BoolVar(&ios, "ios", false, "generate an active iOS build entry (requires CGO_ENABLED=1 and Xcode; commented stub by default)")
-	fs.BoolVar(&androidNDK, "android-ndk", false, "generate an active Android NDK build entry (requires CGO_ENABLED=1 and NDK; commented stub by default)")
+	fs.BoolVar(&ios, "ios", false, "add an iOS build entry to the generated .goreleaser.yaml (requires CGO_ENABLED=1 and Xcode)")
+	fs.BoolVar(&androidNDK, "android-ndk", false, "add an Android NDK build entry to the generated .goreleaser.yaml (requires CGO_ENABLED=1 and NDK)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel release [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -299,8 +299,8 @@ func runInit(args []string) {
 	fs.BoolVar(&dryRun, "dry-run", false, "print what would happen without writing files, creating commits, or tags")
 	fs.BoolVar(&cmd, "cmd", false, "for each cmd/ child with package main, run go mod init+tidy (suggests a commit at the end)")
 	fs.BoolVar(&almostAll, "almost-all", false, "widen build matrix to include esoteric goos/goarch targets and goamd64 v1-v4")
-	fs.BoolVar(&ios, "ios", false, "generate an active iOS build entry (requires CGO_ENABLED=1 and Xcode; commented stub by default)")
-	fs.BoolVar(&androidNDK, "android-ndk", false, "generate an active Android NDK build entry (requires CGO_ENABLED=1 and NDK; commented stub by default)")
+	fs.BoolVar(&ios, "ios", false, "add an iOS build entry to the generated .goreleaser.yaml (requires CGO_ENABLED=1 and Xcode)")
+	fs.BoolVar(&androidNDK, "android-ndk", false, "add an Android NDK build entry to the generated .goreleaser.yaml (requires CGO_ENABLED=1 and NDK)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel init [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -1364,7 +1364,7 @@ func goreleaserYAML(projectName string, bins []binary, opts buildOptions) string
 			w("    <<: *build_defaults\n")
 		}
 
-		// iOS build: active when --ios, commented stub otherwise.
+		// iOS build — only when --ios is set.
 		if opts.ios {
 			w("  # iOS build — requires CGO_ENABLED=1 and the Xcode toolchain.\n")
 			wf("  - id: %s-ios\n", bin.name)
@@ -1375,26 +1375,9 @@ func goreleaserYAML(projectName string, bins []binary, opts buildOptions) string
 			w("    env:\n      - CGO_ENABLED=1\n")
 			w("    goos:\n      - ios\n")
 			w("    goarch:\n      - arm64\n")
-		} else {
-			// Commented-out stub.
-			w("  # iOS requires CGO_ENABLED=1 and the Xcode toolchain.\n")
-			wf("  #- id: %s-ios\n", bin.name)
-			wf("  #  binary: %s\n", bin.name)
-			if bin.mainPath != "." {
-				wf("  #  main: %s\n", bin.mainPath)
-			}
-			if multibin && i == 0 {
-				w("  #  <<: &build_defaults_ios\n")
-				w("  #    env:\n  #      - CGO_ENABLED=1\n")
-			} else if multibin {
-				w("  #  <<: *build_defaults_ios\n")
-			} else {
-				w("  #  env:\n  #    - CGO_ENABLED=1\n")
-			}
-			w("  #  goos:\n  #    - ios\n")
 		}
 
-		// Android build: active when --android-ndk, commented stub otherwise.
+		// Android NDK build — only when --android-ndk is set.
 		if opts.androidNDK {
 			w("  # Android NDK build — requires CGO_ENABLED=1 and the Android NDK.\n")
 			wf("  - id: %s-android\n", bin.name)
@@ -1405,17 +1388,6 @@ func goreleaserYAML(projectName string, bins []binary, opts buildOptions) string
 			w("    env:\n      - CGO_ENABLED=1\n")
 			w("    goos:\n      - android\n")
 			w("    goarch:\n      - arm64\n")
-		} else {
-			// Commented-out stub.
-			w("  # Android CGO_ENABLED=0 builds arm64 only; CGO builds require the NDK.\n")
-			wf("  #- id: %s-android\n", bin.name)
-			wf("  #  binary: %s\n", bin.name)
-			if bin.mainPath != "." {
-				wf("  #  main: %s\n", bin.mainPath)
-			}
-			w("  #  env:\n  #    - CGO_ENABLED=0\n")
-			w("  #  goos:\n  #    - android\n")
-			w("  #  goarch:\n  #    - arm64\n")
 		}
 	}
 
