@@ -44,13 +44,41 @@ import (
 // Adjust this slice if you ever need to search across repository boundaries.
 var stopMarkers = []string{".git"}
 
-// defaultGoos is the CGO_ENABLED=0 build matrix used in generated .goreleaser.yaml files.
-// Platforms requiring CGO or special toolchains (ios, android) are emitted as comments.
+// defaultGoos is the conservative CGO_ENABLED=0 goos list used in generated
+// .goreleaser.yaml files.  Use --almost-all to widen the net.
+// Platforms requiring CGO or special toolchains (ios, android) are handled
+// separately via the --ios and --android-ndk flags.
 var defaultGoos = []string{
+	"darwin", "freebsd", "js", "linux",
+	"netbsd", "openbsd", "wasip1", "windows",
+}
+
+// almostAllGoos extends defaultGoos with less-commonly-targeted CGO_ENABLED=0 platforms.
+var almostAllGoos = []string{
 	"aix", "darwin", "dragonfly", "freebsd", "illumos",
 	"js", "linux", "netbsd", "openbsd", "plan9",
 	"solaris", "wasip1", "windows",
 }
+
+// defaultGoarch is the conservative architecture list for generated builds.
+var defaultGoarch = []string{
+	"amd64", "arm", "arm64", "mips64le", "mipsle", "ppc64le", "riscv64", "wasm",
+}
+
+// almostAllGoarch extends defaultGoarch with less-common architectures.
+var almostAllGoarch = []string{
+	"386",
+	"amd64", "arm", "arm64",
+	"loong64", "mips", "mips64", "mips64le", "mipsle",
+	"ppc64", "ppc64le", "riscv64", "s390x", "wasm",
+}
+
+// defaultGoarm is the ARM sub-architecture list (ARMv6 and ARMv7).
+// Included whenever "arm" appears in the goarch list.
+var defaultGoarm = []string{"6", "7"}
+
+// almostAllGoamd64 is the amd64 micro-architecture level list used with --almost-all.
+var almostAllGoamd64 = []string{"v1", "v2", "v3", "v4"}
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -73,6 +101,14 @@ type releaseStep struct {
 	display []string // command lines shown to the user before the prompt
 	skip    bool     // pre-determined to be skipped (e.g. tag already exists)
 	run     func() error
+}
+
+// buildOptions controls which platforms and features are included in the
+// generated .goreleaser.yaml.
+type buildOptions struct {
+	almostAll  bool // include esoteric goos/goarch targets and goamd64 sub-versions
+	ios        bool // generate active iOS build (requires CGO_ENABLED=1 + Xcode)
+	androidNDK bool // generate active Android NDK build (requires CGO_ENABLED=1 + NDK)
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────
@@ -121,6 +157,7 @@ func usage() {
 func runRelease(args []string) {
 	fs := flag.NewFlagSet("monorel release", flag.ExitOnError)
 	var recursive, all, dryRun, yes, force, draft, prerelease bool
+	var almostAll, ios, androidNDK bool
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.BoolVar(&dryRun, "dry-run", false, "show each step without running it")
@@ -128,6 +165,9 @@ func runRelease(args []string) {
 	fs.BoolVar(&force, "force", false, "overwrite .goreleaser.yaml without prompting even if it has been modified")
 	fs.BoolVar(&draft, "draft", false, "keep the GitHub release in draft state after uploading (default: publish)")
 	fs.BoolVar(&prerelease, "prerelease", false, "keep the GitHub release marked as pre-release even for clean tags (default: promote clean tags to stable)")
+	fs.BoolVar(&almostAll, "almost-all", false, "widen build matrix to include esoteric goos/goarch targets and goamd64 v1-v4")
+	fs.BoolVar(&ios, "ios", false, "generate an active iOS build entry (requires CGO_ENABLED=1 and Xcode; commented stub by default)")
+	fs.BoolVar(&androidNDK, "android-ndk", false, "generate an active Android NDK build entry (requires CGO_ENABLED=1 and NDK; commented stub by default)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel release [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -148,6 +188,8 @@ func runRelease(args []string) {
 		fs.Usage()
 		os.Exit(2)
 	}
+
+	opts := buildOptions{almostAll: almostAll, ios: ios, androidNDK: androidNDK}
 
 	allPaths, err := expandPaths(binPaths, recursive, all)
 	if err != nil {
@@ -170,7 +212,7 @@ func runRelease(args []string) {
 		printGroupHeader(cwd, group)
 		relPath, _ := filepath.Rel(cwd, group.root)
 		relPath = filepath.ToSlash(relPath)
-		processModule(group, relPath, dryRun, yes, force, draft, prerelease)
+		processModule(group, relPath, dryRun, yes, force, draft, prerelease, opts)
 	}
 }
 
@@ -251,10 +293,14 @@ func runBump(args []string) {
 func runInit(args []string) {
 	fs := flag.NewFlagSet("monorel init", flag.ExitOnError)
 	var recursive, all, dryRun, cmd bool
+	var almostAll, ios, androidNDK bool
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.BoolVar(&dryRun, "dry-run", false, "print what would happen without writing files, creating commits, or tags")
 	fs.BoolVar(&cmd, "cmd", false, "for each cmd/ child with package main, run go mod init+tidy (suggests a commit at the end)")
+	fs.BoolVar(&almostAll, "almost-all", false, "widen build matrix to include esoteric goos/goarch targets and goamd64 v1-v4")
+	fs.BoolVar(&ios, "ios", false, "generate an active iOS build entry (requires CGO_ENABLED=1 and Xcode; commented stub by default)")
+	fs.BoolVar(&androidNDK, "android-ndk", false, "generate an active Android NDK build entry (requires CGO_ENABLED=1 and NDK; commented stub by default)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: monorel init [options] <binary-path>...")
 		fmt.Fprintln(os.Stderr, "")
@@ -280,6 +326,8 @@ func runInit(args []string) {
 		os.Exit(2)
 	}
 
+	opts := buildOptions{almostAll: almostAll, ios: ios, androidNDK: androidNDK}
+
 	if cmd {
 		initCmdModules(binPaths, dryRun)
 	}
@@ -301,14 +349,14 @@ func runInit(args []string) {
 			fmt.Fprintln(os.Stderr)
 		}
 		printGroupHeader(cwd, group)
-		initModuleGroup(group, dryRun)
+		initModuleGroup(group, dryRun, opts)
 	}
 }
 
 // initModuleGroup writes .goreleaser.yaml, commits it (if changed), and
 // creates an initial version tag (bump patch) for one module group.
 // When dryRun is true no files are written and no git mutations are made.
-func initModuleGroup(group *moduleGroup, dryRun bool) {
+func initModuleGroup(group *moduleGroup, dryRun bool, opts buildOptions) {
 	modRoot := group.root
 	bins := group.bins
 
@@ -331,7 +379,7 @@ func initModuleGroup(group *moduleGroup, dryRun bool) {
 	projectName := prefixParts[len(prefixParts)-1]
 
 	// 1. Write .goreleaser.yaml only when the content has changed.
-	yamlContent := goreleaserYAML(projectName, bins)
+	yamlContent := goreleaserYAML(projectName, bins, opts)
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
 	existing, readErr := os.ReadFile(yamlPath)
 	isNewFile := readErr != nil
@@ -961,7 +1009,7 @@ func printGroupHeader(cwd string, group *moduleGroup) {
 // for one module group.  relPath is the path from the caller's CWD to the
 // module root; it is used in the script for all paths so that the script can
 // be run from the directory where monorel was invoked.
-func processModule(group *moduleGroup, relPath string, dryRun, yes, force, draft, prerelease bool) {
+func processModule(group *moduleGroup, relPath string, dryRun, yes, force, draft, prerelease bool, opts buildOptions) {
 	modRoot := group.root
 	bins := group.bins
 
@@ -985,7 +1033,7 @@ func processModule(group *moduleGroup, relPath string, dryRun, yes, force, draft
 	// {{ .ProjectName }} template and at least one binary uses the VERSION env
 	// var — local edits that add extra binaries etc. are preserved.
 	// Auto-commit and auto-tag only apply when the file is brand new.
-	yamlContent := goreleaserYAML(projectName, bins)
+	yamlContent := goreleaserYAML(projectName, bins, opts)
 	yamlPath := filepath.Join(modRoot, ".goreleaser.yaml")
 	existing, readErr := os.ReadFile(yamlPath)
 	isNewFile := readErr != nil
@@ -1233,7 +1281,7 @@ func preNum(s string) int {
 //   - Each binary gets its own build (id) and archive (ids) for separate tarballs.
 //   - release.disable: true — we use `gh release` instead (goreleaser Pro
 //     would be needed to publish via a prefixed tag).
-func goreleaserYAML(projectName string, bins []binary) string {
+func goreleaserYAML(projectName string, bins []binary, opts buildOptions) string {
 	var b strings.Builder
 	w := func(s string) { b.WriteString(s) }
 	wf := func(format string, args ...any) { fmt.Fprintf(&b, format, args...) }
@@ -1249,10 +1297,49 @@ func goreleaserYAML(projectName string, bins []binary) string {
 	w("    # you may remove this if you don't need go generate\n")
 	w("    - go generate ./...\n")
 
+	// Select goos/goarch lists based on options.
+	goos := defaultGoos
+	goarch := defaultGoarch
+	if opts.almostAll {
+		goos = almostAllGoos
+		goarch = almostAllGoarch
+	}
+
 	// When multiple binaries share a module, define the common build options
 	// once with a YAML anchor on the first build and merge them into the rest.
 	// Single-binary modules use plain fields (no anchor overhead).
 	multibin := len(bins) > 1
+
+	// writeBuildDefaults emits env, ldflags, goos, goarch, goarm, and (if
+	// --almost-all) goamd64 at the given indent level (2 or 4 spaces of extra
+	// indent relative to the builds list item).
+	writeBuildDefaults := func(indent string) {
+		wf("%senv:\n%s  - CGO_ENABLED=0\n", indent, indent)
+		wf("%sldflags:\n", indent)
+		wf("%s  - -s -w"+
+			" -X main.version={{.Env.VERSION}}"+
+			" -X main.commit={{.Commit}}"+
+			" -X main.date={{.Date}}"+
+			" -X main.builtBy=goreleaser\n", indent)
+		wf("%sgoos:\n", indent)
+		for _, g := range goos {
+			wf("%s  - %s\n", indent, g)
+		}
+		wf("%sgoarch:\n", indent)
+		for _, a := range goarch {
+			wf("%s  - %s\n", indent, a)
+		}
+		wf("%sgoarm:\n", indent)
+		for _, v := range defaultGoarm {
+			wf("%s  - %s\n", indent, v)
+		}
+		if opts.almostAll {
+			wf("%sgoamd64:\n", indent)
+			for _, v := range almostAllGoamd64 {
+				wf("%s  - %s\n", indent, v)
+			}
+		}
+	}
 
 	w("\nbuilds:\n")
 	for i, bin := range bins {
@@ -1266,63 +1353,70 @@ func goreleaserYAML(projectName string, bins []binary) string {
 		switch {
 		case !multibin:
 			// Single binary: plain fields.
-			w("    env:\n      - CGO_ENABLED=0\n")
-			w("    ldflags:\n")
-			w("      - -s -w" +
-				" -X main.version={{.Env.VERSION}}" +
-				" -X main.commit={{.Commit}}" +
-				" -X main.date={{.Date}}" +
-				" -X main.builtBy=goreleaser\n")
-			w("    goos:\n")
-			for _, g := range defaultGoos {
-				wf("      - %s\n", g)
-			}
+			writeBuildDefaults("    ")
 		case i == 0:
-			// First of multiple binaries: define the anchor.
+			// First of multiple binaries: define the anchor, content indented
+			// one extra level so it is nested under the merge key.
 			w("    <<: &build_defaults\n")
-			w("      env:\n        - CGO_ENABLED=0\n")
-			w("      ldflags:\n")
-			w("        - -s -w" +
-				" -X main.version={{.Env.VERSION}}" +
-				" -X main.commit={{.Commit}}" +
-				" -X main.date={{.Date}}" +
-				" -X main.builtBy=goreleaser\n")
-			w("      goos:\n")
-			for _, g := range defaultGoos {
-				wf("        - %s\n", g)
-			}
+			writeBuildDefaults("      ")
 		default:
 			// Subsequent binaries: reference the anchor.
 			w("    <<: *build_defaults\n")
 		}
 
-		// iOS requires CGO and Xcode toolchain — commented out by default.
-		wf("  # iOS requires CGO_ENABLED=1 and the Xcode toolchain.\n")
-		wf("  #- id: %s-ios\n", bin.name)
-		wf("  #  binary: %s\n", bin.name)
-		if bin.mainPath != "." {
-			wf("  #  main: %s\n", bin.mainPath)
-		}
-		if multibin && i == 0 {
-			w("  #  <<: &build_defaults_ios\n")
-			w("  #    env:\n  #      - CGO_ENABLED=1\n")
-		} else if multibin {
-			w("  #  <<: *build_defaults_ios\n")
+		// iOS build: active when --ios, commented stub otherwise.
+		if opts.ios {
+			w("  # iOS build — requires CGO_ENABLED=1 and the Xcode toolchain.\n")
+			wf("  - id: %s-ios\n", bin.name)
+			wf("    binary: %s\n", bin.name)
+			if bin.mainPath != "." {
+				wf("    main: %s\n", bin.mainPath)
+			}
+			w("    env:\n      - CGO_ENABLED=1\n")
+			w("    goos:\n      - ios\n")
+			w("    goarch:\n      - arm64\n")
 		} else {
-			w("  #  env:\n  #    - CGO_ENABLED=1\n")
+			// Commented-out stub.
+			w("  # iOS requires CGO_ENABLED=1 and the Xcode toolchain.\n")
+			wf("  #- id: %s-ios\n", bin.name)
+			wf("  #  binary: %s\n", bin.name)
+			if bin.mainPath != "." {
+				wf("  #  main: %s\n", bin.mainPath)
+			}
+			if multibin && i == 0 {
+				w("  #  <<: &build_defaults_ios\n")
+				w("  #    env:\n  #      - CGO_ENABLED=1\n")
+			} else if multibin {
+				w("  #  <<: *build_defaults_ios\n")
+			} else {
+				w("  #  env:\n  #    - CGO_ENABLED=1\n")
+			}
+			w("  #  goos:\n  #    - ios\n")
 		}
-		w("  #  goos:\n  #    - ios\n")
 
-		// Android: CGO_ENABLED=0 supports arm64 only; full CGO requires the NDK.
-		wf("  # Android CGO_ENABLED=0 builds arm64 only; CGO builds require the NDK.\n")
-		wf("  #- id: %s-android\n", bin.name)
-		wf("  #  binary: %s\n", bin.name)
-		if bin.mainPath != "." {
-			wf("  #  main: %s\n", bin.mainPath)
+		// Android build: active when --android-ndk, commented stub otherwise.
+		if opts.androidNDK {
+			w("  # Android NDK build — requires CGO_ENABLED=1 and the Android NDK.\n")
+			wf("  - id: %s-android\n", bin.name)
+			wf("    binary: %s\n", bin.name)
+			if bin.mainPath != "." {
+				wf("    main: %s\n", bin.mainPath)
+			}
+			w("    env:\n      - CGO_ENABLED=1\n")
+			w("    goos:\n      - android\n")
+			w("    goarch:\n      - arm64\n")
+		} else {
+			// Commented-out stub.
+			w("  # Android CGO_ENABLED=0 builds arm64 only; CGO builds require the NDK.\n")
+			wf("  #- id: %s-android\n", bin.name)
+			wf("  #  binary: %s\n", bin.name)
+			if bin.mainPath != "." {
+				wf("  #  main: %s\n", bin.mainPath)
+			}
+			w("  #  env:\n  #    - CGO_ENABLED=0\n")
+			w("  #  goos:\n  #    - android\n")
+			w("  #  goarch:\n  #    - arm64\n")
 		}
-		w("  #  env:\n  #    - CGO_ENABLED=0\n")
-		w("  #  goos:\n  #    - android\n")
-		w("  #  goarch:\n  #    - arm64\n")
 	}
 
 	w("\narchives:\n")
