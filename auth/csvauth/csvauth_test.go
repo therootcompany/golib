@@ -23,6 +23,8 @@ func TestCredentialCreationAndVerification(t *testing.T) {
 		{"service2", "acme", []string{"plain"}, nil, "token2", false, true},
 		{"service3", "user3", []string{"pbkdf2", "1000", "16", "SHA-256"}, nil, "token3", false, false},
 		{"service4", "user4", []string{"bcrypt"}, []string{"audit", "triage"}, "token4", false, false},
+		// {"token", "api~vkdAIZ2O", []string{"aes-128-gcm"}, nil, "api1", true, true},
+		// {"token", "api~b5ZF2sRQ", []string{"aes-128-gcm"}, nil, "api2", true, true},
 		{"login", "user1", []string{"pbkdf2", "1000", "16", "SHA-256"}, nil, "pass1", true, false},
 		{"login", "user2", []string{"bcrypt"}, nil, "pass2", true, false},
 		{"login", "user3", []string{"aes-128-gcm"}, nil, "pass3", true, true},
