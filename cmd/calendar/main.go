@@ -82,6 +82,43 @@ var FIELDS = Fields{
 	R_LAST:  10,
 }
 
+func GetFieldIndex(header []string, name string) int {
+	name = strings.ToLower(name)
+	for i, h := range header {
+		h = strings.ToLower(h)
+		if strings.EqualFold(strings.TrimSpace(h), name) {
+			return i
+		}
+	}
+	return -1
+}
+
+func GetFieldIndexWithPrefix(header []string, pre string) int {
+	pre = strings.ToLower(pre)
+	for i, h := range header {
+		h = strings.TrimSpace(strings.ToLower(h))
+		if HasPrefixFold(h, pre) {
+			return i
+		}
+	}
+	return -1
+}
+
+func GetFieldLastIndexWithPrefix(header []string, pre string) int {
+	pre = strings.ToLower(pre)
+	for i := len(header) - 1; i >= 0; i-- {
+		h := strings.TrimSpace(strings.ToLower(header[i]))
+		if HasPrefixFold(h, pre) {
+			return i
+		}
+	}
+	return -1
+}
+
+func HasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+}
+
 // ---------- 2. CSV → []Rule ----------
 func LoadRules(csvr *csv.Reader) ([]Rule, error) {
 	// first line is the header
