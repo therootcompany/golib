@@ -25,7 +25,7 @@ var ErrNoCredentials = errors.New("no credentials provided")
 
 // BasicRequestAuthenticator extracts credentials from an HTTP request and delegates
 // verification to a BasicAuthenticator. It supports Basic Auth, Authorization
-// header tokens, custom token headers, and query-parameter tokens.
+// header tokens, custom token headers, query-parameter tokens, and cookies.
 //
 // Use NewBasicRequestAuthenticator for sane defaults.
 type BasicRequestAuthenticator struct {
@@ -62,6 +62,10 @@ type BasicRequestAuthenticator struct {
 	// TokenQueryParams lists query parameter names checked for tokens,
 	// e.g. []string{"access_token", "token"}.
 	TokenQueryParams []string
+
+	// TokenCookies lists cookie names whose values are passed directly as
+	// tokens, e.g. []string{"id_token", "session"}.
+	TokenCookies []string
 }
 
 // NewBasicRequestAuthenticator returns a BasicRequestAuthenticator with sane defaults:
@@ -92,6 +96,7 @@ func NewBasicRequestAuthenticator(auth BasicAuthenticator) *BasicRequestAuthenti
 //  2. Authorization: <scheme> <token> (filtered by AuthorizationSchemes)
 //  3. Token headers (TokenHeaders)
 //  4. Query parameters (TokenQueryParams)
+//  5. Cookies (TokenCookies)
 //
 // Returns ErrNoCredentials if no credential form is present in the request.
 func (ra *BasicRequestAuthenticator) Authenticate(r *http.Request) (BasicPrinciple, error) {
@@ -132,6 +137,13 @@ func (ra *BasicRequestAuthenticator) Authenticate(r *http.Request) (BasicPrincip
 	for _, p := range ra.TokenQueryParams {
 		if token := r.URL.Query().Get(p); token != "" {
 			return a.Authenticate("", token)
+		}
+	}
+
+	// 5. Cookies
+	for _, name := range ra.TokenCookies {
+		if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
+			return a.Authenticate("", cookie.Value)
 		}
 	}
 
