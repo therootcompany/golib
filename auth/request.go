@@ -29,6 +29,10 @@ var ErrNoCredentials = errors.New("no credentials provided")
 //
 // Use NewBasicRequestAuthenticator for sane defaults.
 type BasicRequestAuthenticator struct {
+	// Authenticator is the credential verifier called with the extracted
+	// username/password or token. Must be set before calling Authenticate.
+	Authenticator BasicAuthenticator
+
 	// BasicAuth enables HTTP Basic Auth (Authorization: Basic …).
 	BasicAuth bool
 
@@ -45,10 +49,6 @@ type BasicRequestAuthenticator struct {
 	//		return
 	//	}
 	BasicRealm string
-
-	// Authenticator is the credential verifier called with the extracted
-	// username/password or token. Must be set before calling Authenticate.
-	Authenticator BasicAuthenticator
 
 	// AuthorizationSchemes lists accepted schemes for "Authorization: <scheme> <token>".
 	// nil or an empty slice skips the Authorization header entirely;
@@ -76,8 +76,9 @@ type BasicRequestAuthenticator struct {
 //		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 //		return
 //	}
-func NewBasicRequestAuthenticator() *BasicRequestAuthenticator {
+func NewBasicRequestAuthenticator(auth BasicAuthenticator) *BasicRequestAuthenticator {
 	return &BasicRequestAuthenticator{
+		Authenticator:        auth,
 		BasicAuth:            true,
 		BasicRealm:           "Basic",
 		AuthorizationSchemes: []string{"Bearer", "Token"},
