@@ -574,26 +574,14 @@ func computeBumpTag(prefix, latestStableTag, component string) string {
 // all mirrors the -A flag: include dot/underscore-prefixed directories and
 // warn on errors instead of failing.
 func expandPaths(paths []string, recursive, all bool) ([]string, error) {
+	if !recursive {
+		return paths, nil
+	}
 	var result []string
 	for _, p := range paths {
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			return nil, fmt.Errorf("resolving %s: %w", p, err)
-		}
-		if !recursive && checkPackageMain(abs) == nil {
-			// Explicit path that is itself a main package — use as-is.
-			result = append(result, p)
-			continue
-		}
-		// Either --recursive was set, or the path is not a main package itself
-		// (e.g. a module root like "auth/" that contains main packages below).
-		// In both cases, search for main packages underneath.
 		found, err := findMainPackages(p, all)
 		if err != nil {
 			return nil, fmt.Errorf("searching %s: %w", p, err)
-		}
-		if !recursive && len(found) == 0 {
-			return nil, fmt.Errorf("%s is not a main package and contains no main packages", abs)
 		}
 		result = append(result, found...)
 	}
@@ -932,7 +920,7 @@ func checkPackageMain(dir string) error {
 	if len(names) == 0 {
 		return fmt.Errorf("no non-test Go source files in %s", dir)
 	}
-	return fmt.Errorf("%s is package %q, not a main package", dir, strings.Join(names, ", "))
+	return fmt.Errorf("%s is package %q, not a main package\n\thint: use --recursive to search for main packages inside this directory", dir, strings.Join(names, ", "))
 }
 
 // groupByModule resolves each binary path to an absolute directory, finds its
