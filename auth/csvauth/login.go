@@ -44,9 +44,8 @@ func (a *Auth) CacheCredential(c Credential) error {
 	a.credentials[name] = c
 	if c.Purpose == PurposeToken {
 		a.tokens[c.hashID] = c
-	} else {
-		a.hashedCredentials[nameID] = c
 	}
+	a.hashedCredentials[nameID] = c
 
 	return nil
 }
