@@ -569,21 +569,55 @@ func computeBumpTag(prefix, latestStableTag, component string) string {
 
 // ── Module discovery ───────────────────────────────────────────────────────
 
-// expandPaths returns paths unchanged when recursive is false.  When true, it
-// replaces each path with all main-package directories found beneath it.
+// expandPaths resolves each path to the set of main-package directories that
+// monorel should operate on.
+//
+// When --recursive is set every path is walked recursively.
+//
+// Without --recursive each path is handled as follows:
+//   - A directory that is itself a main package is used as-is.
+//   - A directory that has a go.mod (a module root) is searched for main
+//     packages one level deep — e.g. "auth/csvauth" finds "./cmd/csvauth".
+//   - Anything else is passed through unchanged so that groupByModule can
+//     emit the right error (with the --recursive hint).
+//
 // all mirrors the -A flag: include dot/underscore-prefixed directories and
 // warn on errors instead of failing.
 func expandPaths(paths []string, recursive, all bool) ([]string, error) {
-	if !recursive {
-		return paths, nil
+	if recursive {
+		var result []string
+		for _, p := range paths {
+			found, err := findMainPackages(p, all)
+			if err != nil {
+				return nil, fmt.Errorf("searching %s: %w", p, err)
+			}
+			result = append(result, found...)
+		}
+		return result, nil
 	}
+
 	var result []string
 	for _, p := range paths {
-		found, err := findMainPackages(p, all)
+		abs, err := filepath.Abs(p)
 		if err != nil {
-			return nil, fmt.Errorf("searching %s: %w", p, err)
+			return nil, fmt.Errorf("resolving %s: %w", p, err)
 		}
-		result = append(result, found...)
+		// Already a main package — use as-is.
+		if checkPackageMain(abs) == nil {
+			result = append(result, p)
+			continue
+		}
+		// Module root (has go.mod) — search for main packages within it.
+		if _, err := os.Stat(filepath.Join(abs, "go.mod")); err == nil {
+			found, err := findMainPackages(p, all)
+			if err != nil {
+				return nil, fmt.Errorf("searching %s: %w", p, err)
+			}
+			result = append(result, found...)
+			continue
+		}
+		// Neither — pass through; groupByModule will emit a helpful error.
+		result = append(result, p)
 	}
 	return result, nil
 }
