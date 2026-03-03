@@ -3,14 +3,16 @@ package csvauth
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/therootcompany/golib/auth"
 )
+
+var ErrDecodeFields = errors.New("could not decode credential")
 
 type BasicAuthVerifier interface {
 	Verify(string, string) error
@@ -110,13 +112,13 @@ func FromFields(purpose, name, paramList, saltBase64, derived, roleList, extra s
 	paramList = strings.ReplaceAll(paramList, ",", " ")
 	credential.Params = strings.Split(paramList, " ")
 	if len(credential.Params) == 0 {
-		fmt.Fprintf(os.Stderr, "no algorithm parameters for %q\n", name)
+		return Credential{}, fmt.Errorf("%w: no algorithm parameters for %q", ErrDecodeFields, name)
 	}
 
 	switch credential.Params[0] {
 	case "aes-128-gcm":
 		if len(credential.Params) > 1 {
-			return credential, fmt.Errorf("invalid plain parameters %#v", credential.Params)
+			return credential, fmt.Errorf("%w: invalid plain parameters for %q: %q", ErrDecodeFields, name, strings.Join(credential.Params, `", "`))
 		}
 
 		salt, err := base64.RawURLEncoding.DecodeString(saltBase64)
@@ -143,12 +145,12 @@ func FromFields(purpose, name, paramList, saltBase64, derived, roleList, extra s
 
 		credential.Salt, err = base64.RawURLEncoding.DecodeString(saltBase64)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "could not decode salt %q for %q\n", saltBase64, name)
+			return credential, fmt.Errorf("%w: bad salt for %q: %q", ErrDecodeFields, name, saltBase64)
 		}
 
 		credential.Derived, err = base64.RawURLEncoding.DecodeString(derived)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "could not decode derived data %q for %q\n", derived, name)
+			return credential, fmt.Errorf("%w: bad derived data for %q: %q", ErrDecodeFields, name, derived)
 		}
 
 		iters, err := strconv.Atoi(credential.Params[1])
@@ -156,7 +158,7 @@ func FromFields(purpose, name, paramList, saltBase64, derived, roleList, extra s
 			return credential, err
 		}
 		if iters <= 0 {
-			return credential, fmt.Errorf("invalid iterations %s", credential.Params[1])
+			return credential, fmt.Errorf("%w: invalid iterations for %q: %q", ErrDecodeFields, name, credential.Params[1])
 		}
 
 		size, err := strconv.Atoi(credential.Params[2])
@@ -164,20 +166,20 @@ func FromFields(purpose, name, paramList, saltBase64, derived, roleList, extra s
 			return credential, err
 		}
 		if size < 8 || size > 32 {
-			return credential, fmt.Errorf("invalid size %s", credential.Params[2])
+			return credential, fmt.Errorf("%w: invalid size for %q: %q", ErrDecodeFields, name, credential.Params[2])
 		}
 
 		if !slices.Contains([]string{"SHA-256", "SHA-1"}, credential.Params[3]) {
-			return credential, fmt.Errorf("invalid hash %s", credential.Params[3])
+			return credential, fmt.Errorf("%w: invalid hash for %q: %q", ErrDecodeFields, name, credential.Params[3])
 		}
 	case "bcrypt":
 		if len(credential.Params) > 1 {
-			return credential, fmt.Errorf("invalid bcrypt parameters %#v", credential.Params)
+			return credential, fmt.Errorf("%w: invalid bcrypt parameters for %q: %q", ErrDecodeFields, name, strings.Join(credential.Params, `", "`))
 		}
 
 		credential.Derived = []byte(derived)
 	default:
-		return credential, fmt.Errorf("invalid algorithm %s", credential.Params[0])
+		return credential, fmt.Errorf("%w: invalid algorithm for %q: %q", ErrDecodeFields, name, credential.Params[0])
 	}
 
 	return credential, nil

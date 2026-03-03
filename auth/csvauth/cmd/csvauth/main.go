@@ -387,7 +387,11 @@ func handleSet(args []string, aesKey []byte, csvFile csvauth.NamedReadCloser) {
 		records = append(records, record)
 	}
 	for _, u := range slices.Sorted(auth.CredentialKeys()) {
-		c, _ := auth.LoadCredential(u)
+		c, err := auth.LoadCredential(u)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Sanity fail while loading %s: %v", u, err)
+			continue
+		}
 		record := c.ToRecord()
 		records = append(records, record)
 	}
