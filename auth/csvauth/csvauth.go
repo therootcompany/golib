@@ -363,9 +363,10 @@ func (a *Auth) Authenticate(name, secret string) (auth.BasicPrinciple, error) {
 	}
 
 	a.mux.Lock()
-	defer a.mux.Unlock()
 	nameID := a.nameCacheID(name)
 	c, ok := a.hashedCredentials[nameID]
+	a.mux.Unlock()
+
 	if ok {
 		if err := c.Verify(name, secret); err != nil {
 			return nil, err
