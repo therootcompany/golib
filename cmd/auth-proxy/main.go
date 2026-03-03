@@ -67,8 +67,6 @@ var (
 
 var creds *csvauth.Auth
 
-const basicAPIKeyName = ""
-
 type MainConfig struct {
 	Address                    string
 	Port                       int
@@ -76,6 +74,7 @@ type MainConfig struct {
 	ProxyTarget                string
 	AES128KeyPath              string
 	ShowVersion                bool
+	BasicRealm                 string
 	AuthorizationHeaderSchemes []string
 	TokenHeaderNames           []string
 	QueryParamNames            []string
@@ -84,6 +83,7 @@ type MainConfig struct {
 	tokenSchemeList            string
 	tokenHeaderList            string
 	tokenParamList             string
+	ra                         *auth.BasicRequestAuthenticator
 }
 
 func (c *MainConfig) Addr() string {
@@ -102,6 +102,7 @@ func main() {
 		tokenSchemeList:            "",
 		tokenHeaderList:            "",
 		tokenParamList:             "",
+		BasicRealm:                 "Basic",
 		AuthorizationHeaderSchemes: nil, // []string{"Bearer", "Token"}
 		TokenHeaderNames:           nil, // []string{"X-API-Key", "X-Auth-Token", "X-Access-Token"},
 		QueryParamNames:            nil, // []string{"access_token", "token"},
@@ -282,6 +283,14 @@ func run(cli *MainConfig) {
 		log.Fatalf("Failed to load CSV auth: %v", err)
 	}
 
+	cli.ra = &auth.BasicRequestAuthenticator{
+		Authenticator:        creds,
+		AuthorizationSchemes: cli.AuthorizationHeaderSchemes,
+		TokenHeaders:         cli.TokenHeaderNames,
+		TokenQueryParams:     cli.QueryParamNames,
+		BasicRealm:           cli.BasicRealm,
+	}
+
 	var usableRoles int
 	for key := range creds.CredentialKeys() {
 		u, err := creds.LoadCredential(key)
@@ -391,8 +400,7 @@ func (cli *MainConfig) newAuthProxyHandler(targetURL string) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !cli.authorize(r) {
-			// TODO allow --realm for `WWW-Authenticate: Basic realm="My Application"`
-			w.Header().Set("WWW-Authenticate", `Basic`)
+			w.Header().Set("WWW-Authenticate", cli.ra.BasicRealm)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -593,47 +601,11 @@ func matchPattern(grant, rMethod, rHost, rPath string) bool {
 }
 
 func (cli *MainConfig) authenticate(r *http.Request) (auth.BasicPrinciple, error) {
-	// 1. Try Basic Auth first (cleanest path)
-	username, password, ok := r.BasicAuth()
-	if ok {
-		// Authorization: Basic <Auth> exists
-		return creds.Authenticate(username, password)
+	cred, err := cli.ra.Authenticate(r)
+	if errors.Is(err, auth.ErrNoCredentials) {
+		return nil, ErrNoAuth
 	}
-
-	// 2. Any Authorization: <scheme> <token>
-	if len(cli.AuthorizationHeaderSchemes) > 0 {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" {
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) == 2 {
-				if cli.AuthorizationHeaderSchemes[0] == "*" ||
-					slices.Contains(cli.AuthorizationHeaderSchemes, parts[0]) {
-					token := strings.TrimSpace(parts[1])
-					// Authorization: <Scheme> <Token> exists
-					return creds.Authenticate(basicAPIKeyName, token)
-				}
-			}
-			return nil, errors.New("'Authorization' header is not properly formatted")
-		}
-	}
-
-	// 3. API-Key / X-API-Key headers
-	for _, h := range cli.TokenHeaderNames {
-		if key := r.Header.Get(h); key != "" {
-			// <TokenHeader>: <Token> exists
-			return creds.Authenticate(basicAPIKeyName, key)
-		}
-	}
-
-	// 4. access_token query param
-	for _, h := range cli.QueryParamNames {
-		if token := r.URL.Query().Get(h); token != "" {
-			// <query_param>?=<Token> exists
-			return creds.Authenticate(basicAPIKeyName, token)
-		}
-	}
-
-	return nil, ErrNoAuth
+	return cred, err
 }
 
 // peekOption looks for a flag value without parsing the full set
