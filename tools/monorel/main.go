@@ -263,17 +263,36 @@ func runBump(args []string) {
 		os.Exit(2)
 	}
 
-	allPaths, err := expandPaths(binPaths, recursive, all)
-	if err != nil {
-		fatalf("%v", err)
+	var groups []*moduleGroup
+	if recursive {
+		// Recursive: find every main package under the given paths, then group
+		// by module.  This implicitly discovers all modules that contain at
+		// least one binary, which is the common case.
+		allPaths, err := expandPaths(binPaths, true, all)
+		if err != nil {
+			fatalf("%v", err)
+		}
+		if len(allPaths) == 0 {
+			fatalf("no main packages found under the given paths")
+		}
+		groups, err = groupByModule(allPaths)
+		if err != nil {
+			fatalf("%v", err)
+		}
+	} else {
+		// Non-recursive: bump operates on modules, not binaries, so any path
+		// inside a module (or a module root itself) is accepted — no package
+		// main required.
+		var err error
+		groups, err = groupModuleRoots(binPaths)
+		if err != nil {
+			fatalf("%v", err)
+		}
+		if len(groups) == 0 {
+			fatalf("no modules found under the given paths")
+		}
 	}
-	if len(allPaths) == 0 {
-		fatalf("no main packages found under the given paths")
-	}
-	groups, err := groupByModule(allPaths)
-	if err != nil {
-		fatalf("%v", err)
-	}
+
 	cwd, _ := os.Getwd()
 	for i, group := range groups {
 		if i > 0 {
@@ -577,6 +596,10 @@ func computeBumpTag(prefix, latestStableTag, component string) string {
 // replaces each path with all main-package directories found beneath it.
 // all mirrors the -A flag: include dot/underscore-prefixed directories and
 // warn on errors instead of failing.
+//
+// For the bump subcommand (which operates on modules, not binaries) use
+// groupModuleRoots instead — it accepts any path inside a module without
+// requiring package main.
 func expandPaths(paths []string, recursive, all bool) ([]string, error) {
 	if !recursive {
 		return paths, nil
@@ -912,7 +935,7 @@ func checkPackageMain(dir string) error {
 	if len(names) == 0 {
 		return fmt.Errorf("no non-test Go source files in %s", dir)
 	}
-	return fmt.Errorf("%s is package %q, not a main package", dir, strings.Join(names, ", "))
+	return fmt.Errorf("%s is package %q, not a main package\n\thint: use --recursive to search for main packages inside this directory", dir, strings.Join(names, ", "))
 }
 
 // groupByModule resolves each binary path to an absolute directory, finds its
@@ -963,6 +986,42 @@ func groupByModule(args []string) ([]*moduleGroup, error) {
 			order = append(order, modRoot)
 		}
 		groupMap[modRoot].bins = append(groupMap[modRoot].bins, binary{name: name, mainPath: mainPath})
+	}
+
+	groups := make([]*moduleGroup, len(order))
+	for i, root := range order {
+		groups[i] = groupMap[root]
+	}
+	return groups, nil
+}
+
+// groupModuleRoots resolves each path to its nearest module root (the
+// directory containing go.mod) and returns one moduleGroup per unique root,
+// in first-occurrence order.  Unlike groupByModule it does not require paths
+// to contain package main — any path inside a module (or a module root
+// itself) is accepted.  Used by the bump subcommand, which operates on
+// modules rather than binaries.
+func groupModuleRoots(paths []string) ([]*moduleGroup, error) {
+	groupMap := make(map[string]*moduleGroup)
+	var order []string
+
+	for _, p := range paths {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return nil, fmt.Errorf("resolving %s: %w", p, err)
+		}
+		// If the path is a file, start from its parent directory.
+		if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+			abs = filepath.Dir(abs)
+		}
+		modRoot, err := findModuleRoot(abs)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", p, err)
+		}
+		if _, ok := groupMap[modRoot]; !ok {
+			groupMap[modRoot] = &moduleGroup{root: modRoot}
+			order = append(order, modRoot)
+		}
 	}
 
 	groups := make([]*moduleGroup, len(order))
