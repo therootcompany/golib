@@ -80,8 +80,7 @@ func TestDecode_SMSDataReceived(t *testing.T) {
 		"payload": {
 			"messageId": "abc123",
 			"data": "SGVsbG8gRGF0YSBXb3JsZCE=",
-			"sender": "6505551212",
-			"recipient": "+1234567890",
+			"phoneNumber": "+1234567890",
 			"simNumber": 1,
 			"receivedAt": "2024-06-22T15:46:11.000+07:00"
 		},
@@ -101,11 +100,8 @@ func TestDecode_SMSDataReceived(t *testing.T) {
 	if got.Payload.Data != "SGVsbG8gRGF0YSBXb3JsZCE=" {
 		t.Errorf("Data = %q, want SGVsbG8gRGF0YSBXb3JsZCE=", got.Payload.Data)
 	}
-	if got.Payload.Sender != "6505551212" {
-		t.Errorf("Sender = %q, want 6505551212", got.Payload.Sender)
-	}
-	if got.Payload.Recipient != "+1234567890" {
-		t.Errorf("Recipient = %q, want +1234567890", got.Payload.Recipient)
+	if got.Payload.PhoneNumber != "+1234567890" {
+		t.Errorf("PhoneNumber = %q, want +1234567890", got.Payload.PhoneNumber)
 	}
 	if got.Payload.SimNumber != 1 {
 		t.Errorf("SimNumber = %d, want 1", got.Payload.SimNumber)
@@ -123,8 +119,7 @@ func TestDecode_MMSReceived(t *testing.T) {
 		"id": "Ey6ECgOkVVFjz3CL48B8C",
 		"payload": {
 			"messageId": "mms_12345abcde",
-			"sender": "6505551212",
-			"recipient": "+1234567890",
+			"phoneNumber": "+1234567890",
 			"simNumber": 1,
 			"transactionId": "T1234567890ABC",
 			"subject": "Photo attachment",
@@ -145,11 +140,8 @@ func TestDecode_MMSReceived(t *testing.T) {
 	if got.Payload.MessageID != "mms_12345abcde" {
 		t.Errorf("MessageID = %q, want mms_12345abcde", got.Payload.MessageID)
 	}
-	if got.Payload.Sender != "6505551212" {
-		t.Errorf("Sender = %q, want 6505551212", got.Payload.Sender)
-	}
-	if got.Payload.Recipient != "+1234567890" {
-		t.Errorf("Recipient = %q, want +1234567890", got.Payload.Recipient)
+	if got.Payload.PhoneNumber != "+1234567890" {
+		t.Errorf("PhoneNumber = %q, want +1234567890", got.Payload.PhoneNumber)
 	}
 	if got.Payload.SimNumber != 1 {
 		t.Errorf("SimNumber = %d, want 1", got.Payload.SimNumber)
@@ -179,8 +171,7 @@ func TestDecode_SMSSent(t *testing.T) {
 		"id": "Ey6ECgOkVVFjz3CL48B8C",
 		"payload": {
 			"messageId": "msg-456",
-			"sender": "+1234567890",
-			"recipient": "+9998887777",
+			"phoneNumber": "+9998887777",
 			"simNumber": 1,
 			"partsCount": 1,
 			"sentAt": "2026-02-18T02:05:00.000+07:00"
@@ -198,11 +189,8 @@ func TestDecode_SMSSent(t *testing.T) {
 	if got.Payload.MessageID != "msg-456" {
 		t.Errorf("MessageID = %q, want msg-456", got.Payload.MessageID)
 	}
-	if got.Payload.Sender != "+1234567890" {
-		t.Errorf("Sender = %q, want +1234567890", got.Payload.Sender)
-	}
-	if got.Payload.Recipient != "+9998887777" {
-		t.Errorf("Recipient = %q, want +9998887777", got.Payload.Recipient)
+	if got.Payload.PhoneNumber != "+9998887777" {
+		t.Errorf("PhoneNumber = %q, want +9998887777", got.Payload.PhoneNumber)
 	}
 	if got.Payload.SimNumber != 1 {
 		t.Errorf("SimNumber = %d, want 1", got.Payload.SimNumber)
@@ -223,8 +211,7 @@ func TestDecode_SMSDelivered(t *testing.T) {
 		"id": "Ey6ECgOkVVFjz3CL48B8C",
 		"payload": {
 			"messageId": "msg-789",
-			"sender": "+1234567890",
-			"recipient": "+9998887777",
+			"phoneNumber": "+9998887777",
 			"simNumber": 1,
 			"deliveredAt": "2026-02-18T02:10:00.000+07:00"
 		},
@@ -241,11 +228,8 @@ func TestDecode_SMSDelivered(t *testing.T) {
 	if got.Payload.MessageID != "msg-789" {
 		t.Errorf("MessageID = %q, want msg-789", got.Payload.MessageID)
 	}
-	if got.Payload.Sender != "+1234567890" {
-		t.Errorf("Sender = %q, want +1234567890", got.Payload.Sender)
-	}
-	if got.Payload.Recipient != "+9998887777" {
-		t.Errorf("Recipient = %q, want +9998887777", got.Payload.Recipient)
+	if got.Payload.PhoneNumber != "+9998887777" {
+		t.Errorf("PhoneNumber = %q, want +9998887777", got.Payload.PhoneNumber)
 	}
 	if got.Payload.SimNumber != 1 {
 		t.Errorf("SimNumber = %d, want 1", got.Payload.SimNumber)
@@ -263,8 +247,7 @@ func TestDecode_SMSFailed(t *testing.T) {
 		"id": "Ey6ECgOkVVFjz3CL48B8C",
 		"payload": {
 			"messageId": "msg-000",
-			"sender": "+1234567890",
-			"recipient": "+4445556666",
+			"phoneNumber": "+4445556666",
 			"simNumber": 3,
 			"failedAt": "2026-02-18T02:15:00.000+07:00",
 			"reason": "Network error"
@@ -282,11 +265,8 @@ func TestDecode_SMSFailed(t *testing.T) {
 	if got.Payload.MessageID != "msg-000" {
 		t.Errorf("MessageID = %q, want msg-000", got.Payload.MessageID)
 	}
-	if got.Payload.Sender != "+1234567890" {
-		t.Errorf("Sender = %q, want +1234567890", got.Payload.Sender)
-	}
-	if got.Payload.Recipient != "+4445556666" {
-		t.Errorf("Recipient = %q, want +4445556666", got.Payload.Recipient)
+	if got.Payload.PhoneNumber != "+4445556666" {
+		t.Errorf("PhoneNumber = %q, want +4445556666", got.Payload.PhoneNumber)
 	}
 	if got.Payload.SimNumber != 3 {
 		t.Errorf("SimNumber = %d, want 3", got.Payload.SimNumber)
