@@ -98,8 +98,7 @@ func TestCSV_WebhookSent(t *testing.T) {
 		"id": "Ey6ECgOkVVFjz3CL48B8C",
 		"payload": {
 			"messageId": "msg-456",
-			"sender": "+1234567890",
-			"recipient": "+9998887777",
+			"phoneNumber": "+1234567890",
 			"simNumber": 1,
 			"partsCount": 1,
 			"sentAt": "2026-02-18T02:05:00.000+07:00"
@@ -113,8 +112,8 @@ func TestCSV_WebhookSent(t *testing.T) {
 	}
 
 	const (
-		wantHeader = "deviceId,event,id,messageId,partsCount,recipient,sender,simNumber,sentAt,webhookId"
-		wantRow    = "ffffffffceb0b1db0000018e937c815b,sms:sent,Ey6ECgOkVVFjz3CL48B8C,msg-456,1,+9998887777,+1234567890,1,2026-02-18T02:05:00+07:00,LreFUt-Z3sSq0JufY9uWB"
+		wantHeader = "deviceId,event,id,messageId,partsCount,phoneNumber,simNumber,sentAt,webhookId"
+		wantRow    = "ffffffffceb0b1db0000018e937c815b,sms:sent,Ey6ECgOkVVFjz3CL48B8C,msg-456,1,+1234567890,1,2026-02-18T02:05:00+07:00,LreFUt-Z3sSq0JufY9uWB"
 	)
 
 	header, row := csvLines(t, *got)
@@ -130,11 +129,8 @@ func TestCSV_WebhookSent(t *testing.T) {
 	if parsed.Payload.MessageID != got.Payload.MessageID {
 		t.Errorf("MessageID: got %q, want %q", parsed.Payload.MessageID, got.Payload.MessageID)
 	}
-	if parsed.Payload.Sender != got.Payload.Sender {
-		t.Errorf("Sender: got %q, want %q", parsed.Payload.Sender, got.Payload.Sender)
-	}
-	if parsed.Payload.Recipient != got.Payload.Recipient {
-		t.Errorf("Recipient: got %q, want %q", parsed.Payload.Recipient, got.Payload.Recipient)
+	if parsed.Payload.PhoneNumber != got.Payload.PhoneNumber {
+		t.Errorf("PhoneNumber: got %q, want %q", parsed.Payload.PhoneNumber, got.Payload.PhoneNumber)
 	}
 	if parsed.Payload.PartsCount != got.Payload.PartsCount {
 		t.Errorf("PartsCount: got %d, want %d", parsed.Payload.PartsCount, got.Payload.PartsCount)
@@ -151,8 +147,7 @@ func TestCSV_WebhookDelivered(t *testing.T) {
 		"id": "Ey6ECgOkVVFjz3CL48B8C",
 		"payload": {
 			"messageId": "msg-789",
-			"sender": "+1234567890",
-			"recipient": "+9998887777",
+			"phoneNumber": "+1234567890",
 			"simNumber": 1,
 			"deliveredAt": "2026-02-18T02:10:00.000+07:00"
 		},
@@ -165,8 +160,8 @@ func TestCSV_WebhookDelivered(t *testing.T) {
 	}
 
 	const (
-		wantHeader = "deviceId,event,id,deliveredAt,messageId,recipient,sender,simNumber,webhookId"
-		wantRow    = "ffffffffceb0b1db0000018e937c815b,sms:delivered,Ey6ECgOkVVFjz3CL48B8C,2026-02-18T02:10:00+07:00,msg-789,+9998887777,+1234567890,1,LreFUt-Z3sSq0JufY9uWB"
+		wantHeader = "deviceId,event,id,deliveredAt,messageId,phoneNumber,simNumber,webhookId"
+		wantRow    = "ffffffffceb0b1db0000018e937c815b,sms:delivered,Ey6ECgOkVVFjz3CL48B8C,2026-02-18T02:10:00+07:00,msg-789,+1234567890,1,LreFUt-Z3sSq0JufY9uWB"
 	)
 
 	header, row := csvLines(t, *got)
@@ -182,11 +177,8 @@ func TestCSV_WebhookDelivered(t *testing.T) {
 	if parsed.Payload.MessageID != got.Payload.MessageID {
 		t.Errorf("MessageID: got %q, want %q", parsed.Payload.MessageID, got.Payload.MessageID)
 	}
-	if parsed.Payload.Sender != got.Payload.Sender {
-		t.Errorf("Sender: got %q, want %q", parsed.Payload.Sender, got.Payload.Sender)
-	}
-	if parsed.Payload.Recipient != got.Payload.Recipient {
-		t.Errorf("Recipient: got %q, want %q", parsed.Payload.Recipient, got.Payload.Recipient)
+	if parsed.Payload.PhoneNumber != got.Payload.PhoneNumber {
+		t.Errorf("PhoneNumber: got %q, want %q", parsed.Payload.PhoneNumber, got.Payload.PhoneNumber)
 	}
 	if !parsed.Payload.DeliveredAt.Equal(got.Payload.DeliveredAt) {
 		t.Errorf("DeliveredAt: got %v, want %v", parsed.Payload.DeliveredAt, got.Payload.DeliveredAt)
@@ -200,8 +192,7 @@ func TestCSV_WebhookFailed(t *testing.T) {
 		"id": "Ey6ECgOkVVFjz3CL48B8C",
 		"payload": {
 			"messageId": "msg-000",
-			"sender": "+1234567890",
-			"recipient": "+4445556666",
+			"phoneNumber": "+1234567890",
 			"simNumber": 3,
 			"failedAt": "2026-02-18T02:15:00.000+07:00",
 			"reason": "Network error"
@@ -215,8 +206,8 @@ func TestCSV_WebhookFailed(t *testing.T) {
 	}
 
 	const (
-		wantHeader = "deviceId,event,id,failedAt,messageId,reason,recipient,sender,simNumber,webhookId"
-		wantRow    = "ffffffffceb0b1db0000018e937c815b,sms:failed,Ey6ECgOkVVFjz3CL48B8C,2026-02-18T02:15:00+07:00,msg-000,Network error,+4445556666,+1234567890,3,LreFUt-Z3sSq0JufY9uWB"
+		wantHeader = "deviceId,event,id,failedAt,messageId,reason,phoneNumber,simNumber,webhookId"
+		wantRow    = "ffffffffceb0b1db0000018e937c815b,sms:failed,Ey6ECgOkVVFjz3CL48B8C,2026-02-18T02:15:00+07:00,msg-000,Network error,+1234567890,3,LreFUt-Z3sSq0JufY9uWB"
 	)
 
 	header, row := csvLines(t, *got)

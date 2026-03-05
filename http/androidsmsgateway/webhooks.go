@@ -41,12 +41,11 @@ func (w *WebhookSent) GetEvent() string {
 
 // WebhookSentPayload contains details about the sent SMS.
 type WebhookSentPayload struct {
-	MessageID  string    `json:"messageId"  csv:"messageId"`
-	PartsCount int       `json:"partsCount" csv:"partsCount"`
-	Recipient  string    `json:"recipient"  csv:"recipient"`
-	Sender     string    `json:"sender"     csv:"sender"`
-	SimNumber  int       `json:"simNumber"  csv:"simNumber"`
-	SentAt     time.Time `json:"sentAt"     csv:"sentAt"`
+	MessageID   string    `json:"messageId"  csv:"messageId"`
+	PartsCount  int       `json:"partsCount" csv:"partsCount"`
+	PhoneNumber string    `json:"phoneNumber"     csv:"phoneNumber"`
+	SimNumber   int       `json:"simNumber"  csv:"simNumber"`
+	SentAt      time.Time `json:"sentAt"     csv:"sentAt"`
 }
 
 // WebhookDelivered represents a webhook notification for an SMS delivered event.
@@ -69,8 +68,7 @@ func (w *WebhookDelivered) GetEvent() string {
 type WebhookDeliveredPayload struct {
 	DeliveredAt time.Time `json:"deliveredAt" csv:"deliveredAt"`
 	MessageID   string    `json:"messageId"   csv:"messageId"`
-	Recipient   string    `json:"recipient"   csv:"recipient"`
-	Sender      string    `json:"sender"      csv:"sender"`
+	PhoneNumber string    `json:"phoneNumber"      csv:"phoneNumber"`
 	SimNumber   int       `json:"simNumber"   csv:"simNumber"`
 }
 
@@ -117,12 +115,11 @@ func (w *WebhookDataReceived) GetEvent() string {
 
 // WebhookDataReceivedPayload contains details about the received binary SMS.
 type WebhookDataReceivedPayload struct {
-	Data       string    `json:"data"       csv:"data"`
-	MessageID  string    `json:"messageId"  csv:"messageId"`
-	ReceivedAt time.Time `json:"receivedAt" csv:"receivedAt"`
-	Recipient  string    `json:"recipient"  csv:"recipient"`
-	Sender     string    `json:"sender"     csv:"sender"`
-	SimNumber  int       `json:"simNumber"  csv:"simNumber"`
+	Data        string    `json:"data"       csv:"data"`
+	MessageID   string    `json:"messageId"  csv:"messageId"`
+	ReceivedAt  time.Time `json:"receivedAt" csv:"receivedAt"`
+	PhoneNumber string    `json:"phoneNumber"     csv:"phoneNumber"`
+	SimNumber   int       `json:"simNumber"  csv:"simNumber"`
 }
 
 // WebhookMMSReceived represents a webhook notification for an mms:received event.
@@ -146,8 +143,7 @@ type WebhookMMSReceivedPayload struct {
 	ContentClass  string    `json:"contentClass"  csv:"contentClass"`
 	MessageID     string    `json:"messageId"     csv:"messageId"`
 	ReceivedAt    time.Time `json:"receivedAt"    csv:"receivedAt"`
-	Recipient     string    `json:"recipient"     csv:"recipient"`
-	Sender        string    `json:"sender"        csv:"sender"`
+	PhoneNumber   string    `json:"phoneNumber"        csv:"phoneNumber"`
 	SimNumber     int       `json:"simNumber"     csv:"simNumber"`
 	Size          int       `json:"size"          csv:"size"`
 	Subject       string    `json:"subject"       csv:"subject"`
@@ -172,24 +168,23 @@ func (w *WebhookFailed) GetEvent() string {
 
 // WebhookFailedPayload contains details about the failed SMS.
 type WebhookFailedPayload struct {
-	FailedAt  time.Time `json:"failedAt"   csv:"failedAt"`
-	MessageID string    `json:"messageId"  csv:"messageId"`
-	Reason    string    `json:"reason"     csv:"reason"`
-	Recipient string    `json:"recipient"  csv:"recipient"`
-	Sender    string    `json:"sender"     csv:"sender"`
-	SimNumber int       `json:"simNumber"  csv:"simNumber"`
+	FailedAt    time.Time `json:"failedAt"   csv:"failedAt"`
+	MessageID   string    `json:"messageId"  csv:"messageId"`
+	Reason      string    `json:"reason"     csv:"reason"`
+	PhoneNumber string    `json:"phoneNumber"     csv:"phoneNumber"`
+	SimNumber   int       `json:"simNumber"  csv:"simNumber"`
 }
 
 // WebhookPing represents a system:ping webhook event.
 type WebhookPing struct {
-	DeviceID   string             `json:"deviceId"           csv:"deviceId"`
-	Event      string             `json:"event"              csv:"event"`
-	ID         string             `json:"id"                 csv:"id"`
-	Payload    WebhookPingPayload `json:"payload"            csv:",inline"`
-	WebhookID  string             `json:"webhookId"          csv:"webhookId"`
-	PingedAt   time.Time          `json:"pingedAt,omitempty" csv:"pingedAt"`
-	XSignature string             `json:"x-signature"        csv:"-"`
-	XTimestamp int64              `json:"x-timestamp"        csv:"-"`
+	DeviceID   string             `json:"deviceId"    csv:"deviceId"`
+	Event      string             `json:"event"       csv:"event"`
+	ID         string             `json:"id"          csv:"id"`
+	Payload    WebhookPingPayload `json:"payload"     csv:",inline"`
+	WebhookID  string             `json:"webhookId"   csv:"webhookId"`
+	PingedAt   time.Time          `json:"pingedAt"    csv:"pingedAt"`
+	XSignature string             `json:"x-signature" csv:"-"`
+	XTimestamp int64              `json:"x-timestamp" csv:"-"`
 }
 
 // GetEvent marks WebhookPing as part of the WebhookEvent interface.
