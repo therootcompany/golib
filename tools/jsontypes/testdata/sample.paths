@@ -1,0 +1,14 @@
+[string]{Person}
+[string].active{bool}
+[string].age{int}
+[string].friends[]{Friend}
+[string].friends[].identification{Identification?}
+[string].friends[].identification.id{string?}
+[string].friends[].identification.name{string}
+[string].friends[].identification.number{string?}
+[string].friends[].identification.restrictions{null}
+[string].friends[].identification.restrictions[]{string}
+[string].friends[].identification.type{string}
+[string].friends[].name{string}
+[string].name{string}
+[string].score{float?}
