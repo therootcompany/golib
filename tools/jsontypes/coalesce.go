@@ -40,7 +40,10 @@ func parseRawLines(lines []string) []rawLine {
 }
 
 func parseRawLine(line string) rawLine {
-	idx := strings.LastIndex(line, "{")
+	// Use the first { since paths never contain braces.
+	// This correctly handles sample format where the type value
+	// contains nested JSON braces: {Root0:{"name":"pikachu"}}
+	idx := strings.Index(line, "{")
 	if idx < 0 || !strings.HasSuffix(line, "}") {
 		return rawLine{path: line}
 	}
@@ -52,8 +55,22 @@ func parseRawLine(line string) rawLine {
 
 var namedTypePattern = regexp.MustCompile(`^[A-Z][a-zA-Z0-9-]*\d+$`)
 
-func isNamedType(typeVal string) bool {
-	return namedTypePattern.MatchString(typeVal)
+// extractTypeName returns the type name from a typeVal.
+// Handles both plain format ("Root0") and sample format ("Root0:{...}").
+// Returns ("", false) if the typeVal is not a named type.
+func extractTypeName(typeVal string) (name string, ok bool) {
+	// Check for sample format: "TypeName:..."
+	if idx := strings.Index(typeVal, ":"); idx > 0 {
+		candidate := typeVal[:idx]
+		if namedTypePattern.MatchString(candidate) {
+			return candidate, true
+		}
+	}
+	// Check plain format.
+	if namedTypePattern.MatchString(typeVal) {
+		return typeVal, true
+	}
+	return "", false
 }
 
 // coalesceType is a named type from the streamer output.
@@ -68,14 +85,15 @@ func buildCoalesceTypes(lines []rawLine) []*coalesceType {
 	var types []*coalesceType
 
 	for i, line := range lines {
-		if !isNamedType(line.typeVal) {
+		typeName, ok := extractTypeName(line.typeVal)
+		if !ok {
 			continue
 		}
 
 		// Find the extent: until next type intro at the same path.
 		end := len(lines)
 		for j := i + 1; j < len(lines); j++ {
-			if isNamedType(lines[j].typeVal) && lines[j].path == line.path {
+			if _, jOk := extractTypeName(lines[j].typeVal); jOk && lines[j].path == line.path {
 				end = j
 				break
 			}
@@ -114,7 +132,7 @@ func buildCoalesceTypes(lines []rawLine) []*coalesceType {
 		sort.Strings(keys)
 
 		types = append(types, &coalesceType{
-			name:    line.typeVal,
+			name:    typeName,
 			path:    line.path,
 			keys:    keys,
 			keysSig: strings.Join(keys, ","),
@@ -294,8 +312,8 @@ func emitCoalesced(lines []rawLine, nameMap map[string]string, nullables map[str
 			continue
 		}
 
-		if isNamedType(line.typeVal) {
-			canonicalName := nameMap[line.typeVal]
+		if typeName, ok := extractTypeName(line.typeVal); ok {
+			canonicalName := nameMap[typeName]
 			nullable := ""
 			if nullables[line.path] {
 				nullable = "?"
@@ -312,9 +330,14 @@ func emitCoalesced(lines []rawLine, nameMap map[string]string, nullables map[str
 				continue
 			}
 
-			// First occurrence — emit type intro and let fields be emitted normally.
+			// First occurrence — emit type intro with sample data if present.
 			emittedTypes[canonicalName] = true
-			result = append(result, line.path+"{"+canonicalName+nullable+"}")
+			sample := extractSampleData(line.typeVal)
+			if sample != "" {
+				result = append(result, line.path+"{"+canonicalName+":"+sample+nullable+"}")
+			} else {
+				result = append(result, line.path+"{"+canonicalName+nullable+"}")
+			}
 			i++
 			continue
 		}
@@ -331,6 +354,18 @@ func emitCoalesced(lines []rawLine, nameMap map[string]string, nullables map[str
 	}
 
 	return result
+}
+
+// extractSampleData returns the sample JSON portion from a type value
+// like "Root0:{...}". Returns "" for plain type values like "Root0".
+func extractSampleData(typeVal string) string {
+	if idx := strings.Index(typeVal, ":"); idx > 0 {
+		candidate := typeVal[:idx]
+		if namedTypePattern.MatchString(candidate) {
+			return typeVal[idx+1:]
+		}
+	}
+	return ""
 }
 
 func coalesceFieldPrefix(path string) string {
