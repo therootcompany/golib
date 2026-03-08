@@ -517,9 +517,11 @@ func TestDecideMapOrStructDefault(t *testing.T) {
 		},
 	})
 
+	// Use 2 keys that aren't known field names — ambiguous enough to
+	// trigger the resolver (not confident either way).
 	obj := map[string]any{
-		"errors": []any{},
-		"rooms":  []any{map[string]any{"name": "foo"}},
+		"foo": []any{},
+		"bar": []any{map[string]any{"x": "y"}},
 	}
 	a.Analyze(".", obj)
 

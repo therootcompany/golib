@@ -14,12 +14,8 @@ import (
 func looksLikeMap(obj map[string]any) (isMap bool, confident bool) {
 	keys := sortedKeys(obj)
 	n := len(keys)
-	if n < 3 {
-		// Too few keys to be confident about anything
-		return false, false
-	}
 
-	// All keys are integers?
+	// All keys are integers → always a map, even with 1 key.
 	allInts := true
 	for _, k := range keys {
 		if _, err := strconv.ParseInt(k, 10, 64); err != nil {
@@ -27,33 +23,160 @@ func looksLikeMap(obj map[string]any) (isMap bool, confident bool) {
 			break
 		}
 	}
-	if allInts {
+	if allInts && n > 0 {
 		return true, true
 	}
 
-	// All keys same length and contain mixed letters+digits → likely IDs
-	if allSameLength(keys) && allAlphanumericWithDigits(keys) {
+	// If any key is a well-known struct field name, it's definitely a struct.
+	// This catches 1-2 key objects like {"name": ..., "age": ...}.
+	if hasKnownFieldName(keys) {
+		return false, true
+	}
+
+	// All keys contain mixed letters+digits → likely IDs (e.g., "emp_101").
+	if allContainDigits(keys) {
 		return true, true
 	}
 
-	// All keys same length and look like base64/hex IDs
+	// All keys same length and look like base64/hex IDs.
 	if allSameLength(keys) && allLookLikeIDs(keys) {
 		return true, true
 	}
 
-	// Keys look like typical struct field names (camelCase, snake_case, short words)
+	if n < 3 {
+		// Too few keys and no strong signal either way.
+		return false, false
+	}
+
+	// Keys look like typical struct field names (camelCase, snake_case, short words).
 	// This must be checked before value-shape heuristics: a struct with many
 	// fields whose values happen to share a shape is still a struct.
 	if allLookLikeFieldNames(keys) {
 		return false, true
 	}
 
-	// Large number of keys where most values have the same shape — likely a map
+	// Large number of keys where most values have the same shape → likely a map.
 	if n > 20 && valuesHaveSimilarShape(obj) {
 		return true, true
 	}
 
 	return false, false
+}
+
+// hasKnownFieldName returns true if any key matches a well-known struct field
+// name. A single match is a strong signal — real maps don't have keys named
+// "created_at" or "email".
+func hasKnownFieldName(keys []string) bool {
+	for _, k := range keys {
+		if isKnownFieldName(k) {
+			return true
+		}
+	}
+	return false
+}
+
+// isKnownFieldName checks whether a key is a common struct/object field name.
+// This is deliberately broad — false positives (calling a map key a field)
+// are less harmful than false negatives (treating a struct as a map).
+func isKnownFieldName(k string) bool {
+	lower := strings.ToLower(k)
+
+	// Suffix patterns: timestamps, flags, relations
+	suffixes := []string{
+		"_at", "_on", "_by", "_id", "_ids", "_url", "_uri",
+		"_name", "_type", "_kind", "_key", "_code", "_date",
+		"_count", "_size", "_path", "_hash", "_token",
+		"_enabled", "_disabled", "_active", "_status",
+	}
+	for _, s := range suffixes {
+		if strings.HasSuffix(lower, s) {
+			return true
+		}
+	}
+	// camelCase suffixes
+	camelSuffixes := []string{
+		"At", "On", "By", "Id", "Ids", "Url", "Uri",
+		"Name", "Type", "Kind", "Key", "Code", "Date",
+		"Count", "Size", "Path", "Hash", "Token",
+	}
+	for _, s := range camelSuffixes {
+		if strings.HasSuffix(k, s) && len(k) > len(s) {
+			return true
+		}
+	}
+
+	// Exact matches: common field names across APIs
+	switch lower {
+	case
+		// identity
+		"id", "uid", "uuid", "guid", "slug",
+		// naming
+		"name", "title", "label", "description", "summary",
+		// typing/classification
+		"type", "kind", "category", "class", "role", "status", "state",
+		// content
+		"value", "data", "content", "body", "text", "message", "comment",
+		"url", "uri", "href", "link", "path",
+		"email", "phone", "address",
+		// flags
+		"active", "enabled", "disabled", "visible", "hidden",
+		"required", "optional", "readonly", "deleted", "archived",
+		"public", "private", "verified", "approved", "published",
+		// numbers
+		"count", "total", "size", "length", "width", "height",
+		"amount", "price", "cost", "quantity", "weight",
+		"score", "rating", "level", "priority", "order", "index", "position",
+		"version", "revision",
+		"min", "max", "limit", "offset", "page",
+		"latitude", "longitude", "lat", "lng", "lon",
+		// structure
+		"parent", "children", "items", "entries", "results", "records",
+		"tags", "labels", "groups", "members", "users", "roles",
+		"permissions", "scopes", "features", "options", "settings",
+		"config", "configuration", "preferences", "metadata", "meta",
+		"errors", "warnings",
+		// media
+		"format", "encoding", "charset", "locale", "language", "currency",
+		"color", "icon", "image", "avatar", "thumbnail", "logo",
+		"filename", "extension", "mimetype",
+		// auth
+		"username", "password", "token", "secret", "credential",
+		// time
+		"date", "time", "timestamp", "duration", "interval",
+		"start", "end", "expires":
+		return true
+	}
+
+	// Prefix patterns: is_*, has_*, can_*, should_*, allow_*
+	prefixes := []string{"is_", "has_", "can_", "should_", "allow_", "num_"}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// allContainDigits checks if every key contains at least one digit,
+// suggesting they are IDs rather than field names (e.g., "emp_101", "abc123").
+func allContainDigits(keys []string) bool {
+	if len(keys) == 0 {
+		return false
+	}
+	for _, k := range keys {
+		hasDigit := false
+		for _, r := range k {
+			if unicode.IsDigit(r) {
+				hasDigit = true
+				break
+			}
+		}
+		if !hasDigit {
+			return false
+		}
+	}
+	return true
 }
 
 func allSameLength(keys []string) bool {
@@ -99,25 +222,7 @@ func isAlphanumeric(s string) bool {
 	return true
 }
 
-// allAlphanumericWithDigits checks if all keys are alphanumeric and each
-// contains at least one digit (distinguishing IDs like "abc123" from field
-// names like "name").
-func allAlphanumericWithDigits(keys []string) bool {
-	for _, k := range keys {
-		hasDigit := false
-		for _, r := range k {
-			if unicode.IsDigit(r) {
-				hasDigit = true
-			} else if !unicode.IsLetter(r) {
-				return false
-			}
-		}
-		if !hasDigit {
-			return false
-		}
-	}
-	return true
-}
+
 
 func isBase64(s string) bool {
 	// Try standard and URL-safe base64
