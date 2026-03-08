@@ -16,7 +16,7 @@ import (
 // integers and floats are distinguishable.
 func RawPaths(v any) []string {
 	w := &rawWalker{}
-	w.walk(".", v)
+	w.walk("", v)
 	return w.paths
 }
 
@@ -31,20 +31,6 @@ func (w *rawWalker) emit(path string) {
 
 func (w *rawWalker) nextName(path string) string {
 	name := inferRawTypeName(path)
-
-	// If the inferred name matches a parent type in the path, prefix with
-	// the parent to disambiguate. E.g., a "room" field under {Room1} would
-	// infer "Room" — prefix it to "RoomRoom" so the reader knows it's the
-	// child type, not the parent.
-	parent := parentTypeName(path)
-	if parent != "" {
-		// Strip trailing digits from parent for comparison.
-		parentBase := strings.TrimRight(parent, "0123456789")
-		if parentBase == name {
-			name = parentBase + name
-		}
-	}
-
 	id := w.counter
 	w.counter++
 	return fmt.Sprintf("%s%d", name, id)
@@ -101,11 +87,12 @@ func (w *rawWalker) walkMap(prefix string, obj map[string]any) {
 func (w *rawWalker) walkStruct(prefix string, instances []map[string]any) {
 	merged := mergeObjects(instances)
 	typeName := w.nextName(prefix)
-	typePrefix := prefix + "{" + typeName + "}"
 
-	// Emit type intro.
-	w.emit(typePrefix)
+	// Emit type intro with the type name.
+	w.emit(prefix + "{" + typeName + "}")
 
+	// Fields use the bare prefix (without the type name) since
+	// the type was already declared on the intro line above.
 	keys := sortedKeys(merged)
 	for _, k := range keys {
 		// Collect all values for this field across instances.
@@ -117,7 +104,7 @@ func (w *rawWalker) walkStruct(prefix string, instances []map[string]any) {
 				fieldVals = append(fieldVals, nil)
 			}
 		}
-		w.walkCollection(typePrefix+"."+k, fieldVals)
+		w.walkCollection(joinPath(prefix, k), fieldVals)
 	}
 }
 
@@ -235,7 +222,7 @@ func (w *rawWalker) walkCollection(prefix string, values []any) {
 // Collection elements get "<Name>Item" (e.g., friends[] → FriendsItem).
 // Direct fields use PascalCase as-is (e.g., address → Address).
 func inferRawTypeName(path string) string {
-	if path == "." {
+	if path == "" {
 		return "Root"
 	}
 
@@ -282,3 +269,10 @@ func inferRawTypeName(path string) string {
 	return name
 }
 
+// joinPath appends a field name to a path prefix with a dot separator.
+func joinPath(prefix, field string) string {
+	if prefix == "" {
+		return "." + field
+	}
+	return prefix + "." + field
+}
