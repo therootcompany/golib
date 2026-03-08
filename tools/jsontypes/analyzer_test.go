@@ -94,11 +94,11 @@ func TestAnalyzeSimpleStruct(t *testing.T) {
 
 func TestAnalyzeMapDetection(t *testing.T) {
 	a := testAnalyzer(t)
-	// Keys with digits + same length → detected as map
+	// UUID-like keys → detected as map
 	obj := map[string]any{
-		"abc123": map[string]any{"name": "a"},
-		"def456": map[string]any{"name": "b"},
-		"ghi789": map[string]any{"name": "c"},
+		"a1b2c3d4-e5f6-7890-abcd-ef1234567890": map[string]any{"name": "a"},
+		"b2c3d4e5-f6a7-8901-bcde-f12345678901": map[string]any{"name": "b"},
+		"c3d4e5f6-a7b8-9012-cdef-123456789012": map[string]any{"name": "c"},
 	}
 	paths := sortPaths(a.Analyze(".", obj))
 	want := sortPaths([]string{
@@ -172,9 +172,9 @@ func TestHeuristicsMapDetection(t *testing.T) {
 		wantConf  bool
 	}{
 		{"numeric keys", []string{"1", "2", "3"}, true, true},
-		{"alphanum IDs", []string{"abc123", "def456", "ghi789"}, true, true},
+		{"uuid keys", []string{"a1b2c3d4-e5f6", "b2c3d4e5-f6a7", "c3d4e5f6-a7b8"}, true, true},
 		{"field names", []string{"name", "age", "email"}, false, true},
-		{"two keys", []string{"ab", "cd"}, false, false},
+		{"two keys no words", []string{"ab", "cd"}, true, false},
 		{"hex IDs", []string{"a1b2c3d4", "e5f6a7b8", "c9d0e1f2"}, true, true},
 	}
 	for _, tt := range tests {
@@ -347,7 +347,7 @@ func TestAutoResolveCollision(t *testing.T) {
 
 	// Analyze an object at a path under {Document} that would infer "Room"
 	// but has completely different fields — should auto-resolve to "DocumentRoom"
-	obj := map[string]any{"x": "1", "y": "2"}
+	obj := map[string]any{"width": "1", "height": "2"}
 	paths := a.Analyze(".{Document}.room", obj)
 
 	hasDocumentRoom := false
@@ -391,7 +391,7 @@ func TestAnalyzeFullSample(t *testing.T) {
 	a := testAnalyzer(t)
 
 	data := map[string]any{
-		"abc123": map[string]any{
+		"550e8400-e29b-41d4-a716-446655440000": map[string]any{
 			"name":   "Alice",
 			"age":    jsonNum("30"),
 			"active": true,
@@ -402,10 +402,10 @@ func TestAnalyzeFullSample(t *testing.T) {
 				}},
 			},
 		},
-		"def456": map[string]any{
+		"6ba7b810-9dad-11d1-80b4-00c04fd430c8": map[string]any{
 			"name": "Dave", "age": jsonNum("25"), "active": false, "friends": []any{},
 		},
-		"ghi789": map[string]any{
+		"f47ac10b-58cc-4372-a567-0e02b2c3d479": map[string]any{
 			"name": "Eve", "age": jsonNum("28"), "active": true, "score": jsonNum("95.5"),
 			"friends": []any{
 				map[string]any{"name": "Frank", "identification": map[string]any{
@@ -517,11 +517,11 @@ func TestDecideMapOrStructDefault(t *testing.T) {
 		},
 	})
 
-	// Use 2 keys that aren't known field names — ambiguous enough to
-	// trigger the resolver (not confident either way).
+	// Use 2 short keys that aren't recognized as words — ambiguous enough
+	// to trigger the resolver (map default, not confident).
 	obj := map[string]any{
-		"foo": []any{},
-		"bar": []any{map[string]any{"x": "y"}},
+		"ab": []any{},
+		"cd": []any{map[string]any{"name": "y"}},
 	}
 	a.Analyze(".", obj)
 

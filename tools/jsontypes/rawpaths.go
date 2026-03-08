@@ -3,6 +3,7 @@ package jsontypes
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // RawPaths walks a decoded JSON value depth-first and emits flat paths with
@@ -29,7 +30,21 @@ func (w *rawWalker) emit(path string) {
 }
 
 func (w *rawWalker) nextName(path string) string {
-	name := inferTypeName(path)
+	name := inferRawTypeName(path)
+
+	// If the inferred name matches a parent type in the path, prefix with
+	// the parent to disambiguate. E.g., a "room" field under {Room1} would
+	// infer "Room" — prefix it to "RoomRoom" so the reader knows it's the
+	// child type, not the parent.
+	parent := parentTypeName(path)
+	if parent != "" {
+		// Strip trailing digits from parent for comparison.
+		parentBase := strings.TrimRight(parent, "0123456789")
+		if parentBase == name {
+			name = parentBase + name
+		}
+	}
+
 	id := w.counter
 	w.counter++
 	return fmt.Sprintf("%s%d", name, id)
@@ -214,5 +229,56 @@ func (w *rawWalker) walkCollection(prefix string, values []any) {
 	if !hasNull && len(shapes) == 0 && len(nonObjects) == 0 {
 		w.emit(prefix + "{any}")
 	}
+}
+
+// inferRawTypeName produces a simple type name for raw paths.
+// Collection elements get "<Name>Item" (e.g., friends[] → FriendsItem).
+// Direct fields use PascalCase as-is (e.g., address → Address).
+func inferRawTypeName(path string) string {
+	if path == "." {
+		return "Root"
+	}
+
+	// Detect collection context: path ends with [], [string], [int], etc.
+	isCollection := strings.HasSuffix(path, "[]") ||
+		(strings.Contains(path, "[") && strings.HasSuffix(path, "]"))
+
+	parts := strings.FieldsFunc(path, func(r rune) bool {
+		return r == '.' || r == '[' || r == ']' || r == '{' || r == '}'
+	})
+	if len(parts) == 0 {
+		if isCollection {
+			return "RootItem"
+		}
+		return "Root"
+	}
+
+	last := parts[len(parts)-1]
+	// Skip index-like segments to get the field name.
+	if last == "int" || last == "string" || last == "id" {
+		if len(parts) >= 2 {
+			last = parts[len(parts)-2]
+		} else {
+			return "RootItem"
+		}
+	}
+
+	name := snakeToPascal(last)
+	if isCollection {
+		name += "Item"
+	}
+
+	// If the name is too generic, prepend the parent.
+	if canonical, ok := ambiguousTypeNames[strings.ToLower(name)]; ok {
+		parent := parentTypeName(path)
+		if parent != "" {
+			if isCollection {
+				return parent + canonical + "Item"
+			}
+			return parent + canonical
+		}
+	}
+
+	return name
 }
 

@@ -120,7 +120,7 @@ func TestGoStructRoundTrip(t *testing.T) {
 		},
 		{
 			"all_primitives",
-			`{"s": "hello", "i": 42, "f": 1.5, "b": true, "n": null}`,
+			`{"name": "hello", "count": 42, "ratio": 1.5, "active": true, "extra": null}`,
 		},
 		{
 			"string_array",
@@ -132,7 +132,7 @@ func TestGoStructRoundTrip(t *testing.T) {
 		},
 		{
 			"deeply_nested",
-			`{"a": {"b": {"c": {"d": "leaf"}}}}`,
+			`{"config": {"server": {"host": {"name": "leaf"}}}}`,
 		},
 		{
 			"mixed_optional_struct",
@@ -834,7 +834,7 @@ func TestGoStructRoundTripMixedIntFloat(t *testing.T) {
 // --- Round-trip with maps ---
 
 func TestGoStructRoundTripMap(t *testing.T) {
-	jsonStr := `{"data": {"abc123": {"name": "foo", "active": true}, "def456": {"name": "bar", "active": false}, "ghi789": {"name": "baz", "active": true}, "jkl012": {"name": "qux", "active": false}}}`
+	jsonStr := `{"data": {"550e8400-e29b": {"name": "foo", "active": true}, "6ba7b810-9dad": {"name": "bar", "active": false}, "f47ac10b-58cc": {"name": "baz", "active": true}, "c3d4e5f6-a7b8": {"name": "qux", "active": false}}}`
 	goCode := GenerateGoStructsFromJSON(t, jsonStr)
 	t.Logf("generated:\n%s", goCode)
 

@@ -7,14 +7,25 @@ import (
 	"unicode"
 )
 
-// looksLikeMap uses heuristics to guess whether an object is a map (keyed
-// collection) rather than a struct. Returns true/false and a confidence hint.
-// If confidence is low, the caller should prompt the user.
+// looksLikeMap uses heuristics to decide whether an object is a map (keyed
+// collection) or a struct. Returns (isMap, confident).
+//
+// The logic is deliberately asymmetric: a map misidentified as a struct
+// explodes into hundreds of fields, while a struct misidentified as a map
+// is compact and easy to fix. So when in doubt, default to map.
+//
+// Three rules:
+//  1. All numeric keys → map (certain).
+//  2. Any key is a common word → struct (certain).
+//  3. Everything else → map (safe default).
 func looksLikeMap(obj map[string]any) (isMap bool, confident bool) {
 	keys := sortedKeys(obj)
 	n := len(keys)
+	if n == 0 {
+		return false, false
+	}
 
-	// All keys are integers → always a map, even with 1 key.
+	// Rule 1: All keys are integers → always a map.
 	allInts := true
 	for _, k := range keys {
 		if _, err := strconv.ParseInt(k, 10, 64); err != nil {
@@ -22,247 +33,105 @@ func looksLikeMap(obj map[string]any) (isMap bool, confident bool) {
 			break
 		}
 	}
-	if allInts && n > 0 {
+	if allInts {
 		return true, true
 	}
 
-	// If any key is a well-known struct field name, it's definitely a struct.
-	// This catches 1-2 key objects like {"name": ..., "age": ...}.
-	if hasKnownFieldName(keys) {
+	// Rule 2: Any key is composed of words → struct.
+	if hasWordLikeKey(keys) {
 		return false, true
 	}
 
-	// All keys contain mixed letters+digits → likely IDs (e.g., "emp_101").
-	if allContainDigits(keys) {
-		return true, true
-	}
-
-	// All keys same length and look like base64/hex IDs.
-	if allSameLength(keys) && allLookLikeIDs(keys) {
-		return true, true
-	}
-
-	if n < 3 {
-		// Too few keys and no strong signal either way.
-		return false, false
-	}
-
-	// Keys look like typical struct field names (camelCase, snake_case, short words).
-	// This must be checked before value-shape heuristics: a struct with many
-	// fields whose values happen to share a shape is still a struct.
-	if allLookLikeFieldNames(keys) {
-		return false, true
-	}
-
-	// Large number of keys where most values have the same shape → likely a map.
-	if n > 20 && valuesHaveSimilarShape(obj) {
-		return true, true
-	}
-
-	return false, false
+	// Rule 3: No recognized words → default to map.
+	// Confident when there are enough keys that we'd expect to find a word
+	// if this were really a struct.
+	return true, n >= 3
 }
 
-// hasKnownFieldName returns true if any key matches a well-known struct field
-// name. A single match is a strong signal — real maps don't have keys named
-// "created_at" or "email".
-func hasKnownFieldName(keys []string) bool {
+// hasWordLikeKey returns true if any key looks like it's composed of words
+// (i.e., a struct field name rather than an ID/token). It splits on _ and
+// camelCase boundaries, then checks if the segments are recognizable words.
+func hasWordLikeKey(keys []string) bool {
 	for _, k := range keys {
-		if isKnownFieldName(k) {
+		if isWordLikeKey(k) {
 			return true
 		}
 	}
 	return false
 }
 
-// isKnownFieldName checks whether a key is a common struct/object field name.
-// This is deliberately broad — false positives (calling a map key a field)
-// are less harmful than false negatives (treating a struct as a map).
-func isKnownFieldName(k string) bool {
-	lower := strings.ToLower(k)
-
-	// Suffix patterns: timestamps, flags, relations
-	suffixes := []string{
-		"_at", "_on", "_by", "_id", "_ids", "_url", "_uri",
-		"_name", "_type", "_kind", "_key", "_code", "_date",
-		"_count", "_size", "_path", "_hash", "_token",
-		"_enabled", "_disabled", "_active", "_status",
-	}
-	for _, s := range suffixes {
-		if strings.HasSuffix(lower, s) {
-			return true
-		}
-	}
-	// camelCase suffixes
-	camelSuffixes := []string{
-		"At", "On", "By", "Id", "Ids", "Url", "Uri",
-		"Name", "Type", "Kind", "Key", "Code", "Date",
-		"Count", "Size", "Path", "Hash", "Token",
-	}
-	for _, s := range camelSuffixes {
-		if strings.HasSuffix(k, s) && len(k) > len(s) {
-			return true
-		}
-	}
-
-	// Exact matches: common field names across APIs
-	switch lower {
-	case
-		// identity
-		"id", "uid", "uuid", "guid", "slug",
-		// naming
-		"name", "title", "label", "description", "summary",
-		// typing/classification
-		"type", "kind", "category", "class", "role", "status", "state",
-		// content
-		"value", "data", "content", "body", "text", "message", "comment",
-		"url", "uri", "href", "link", "path",
-		"email", "phone", "address",
-		// flags
-		"active", "enabled", "disabled", "visible", "hidden",
-		"required", "optional", "readonly", "deleted", "archived",
-		"public", "private", "verified", "approved", "published",
-		// numbers
-		"count", "total", "size", "length", "width", "height",
-		"amount", "price", "cost", "quantity", "weight",
-		"score", "rating", "level", "priority", "order", "index", "position",
-		"version", "revision",
-		"min", "max", "limit", "offset", "page",
-		"latitude", "longitude", "lat", "lng", "lon",
-		// structure
-		"parent", "children", "items", "entries", "results", "records",
-		"tags", "labels", "groups", "members", "users", "roles",
-		"permissions", "scopes", "features", "options", "settings",
-		"config", "configuration", "preferences", "metadata", "meta",
-		"errors", "warnings",
-		// media
-		"format", "encoding", "charset", "locale", "language", "currency",
-		"color", "icon", "image", "avatar", "thumbnail", "logo",
-		"filename", "extension", "mimetype",
-		// auth
-		"username", "password", "token", "secret", "credential",
-		// time
-		"date", "time", "timestamp", "duration", "interval",
-		"start", "end", "expires":
-		return true
-	}
-
-	// Prefix patterns: is_*, has_*, can_*, should_*, allow_*
-	prefixes := []string{"is_", "has_", "can_", "should_", "allow_", "num_"}
-	for _, p := range prefixes {
-		if strings.HasPrefix(lower, p) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// allContainDigits checks if every key contains at least one digit,
-// suggesting they are IDs rather than field names (e.g., "emp_101", "abc123").
-func allContainDigits(keys []string) bool {
-	if len(keys) == 0 {
-		return false
-	}
-	for _, k := range keys {
-		hasDigit := false
-		for _, r := range k {
-			if unicode.IsDigit(r) {
-				hasDigit = true
-				break
-			}
-		}
-		if !hasDigit {
-			return false
-		}
-	}
-	return true
-}
-
-func allSameLength(keys []string) bool {
-	if len(keys) == 0 {
-		return true
-	}
-	l := len(keys[0])
-	for _, k := range keys[1:] {
-		if len(k) != l {
-			return false
-		}
-	}
-	return true
-}
-
-// allLookLikeIDs checks if keys look like identifiers/tokens rather than field
-// names. Uses hex detection, pronounceability, and field name checks.
-func allLookLikeIDs(keys []string) bool {
-	for _, k := range keys {
-		if strings.ContainsAny(k, " \t\n") {
-			return false
-		}
-		// Pure hex is always an ID.
-		if len(k) >= 4 && isHex(k) {
-			continue
-		}
-		// Pronounceable strings are field names, not IDs.
-		if isPronounceable(k) {
-			return false
-		}
-		// Non-pronounceable alphanumeric of sufficient length → likely ID.
-		if len(k) >= 4 && isAlphanumeric(k) {
-			continue
-		}
-		// Doesn't match any ID pattern.
-		return false
-	}
-	return len(keys) > 0
-}
-
-func isAlphanumeric(s string) bool {
-	for _, r := range s {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
-}
-
-
-
-// isPronounceable checks whether a string has the vowel/consonant rhythm of
-// natural language. Field names like "metadata", "created_at", "userName" are
-// pronounceable; tokens like "a1b2c3d4", "dGVzdA==", "xK9mP4q" are not.
+// isWordLikeKey checks whether a key is composed of word-like segments,
+// with at least one strong word (3+ chars, pronounceable). Short words
+// like "at", "on", "id" only count when paired with a strong word
+// (e.g., "created_at" has "created" as the strong word).
 //
-// The check splits on underscores and case boundaries (camelCase), then
-// verifies each word-like segment has a reasonable vowel ratio (15-80%) and
-// no long consonant runs (>4). Pure-digit segments are ignored.
-func isPronounceable(s string) bool {
-	// Split on underscores, then on camelCase boundaries.
-	segments := splitWordSegments(s)
+//	"created_at" → ["created", "at"] → "created" is strong → true
+//	"theme"      → ["theme"]        → strong word           → true
+//	"at"         → ["at"]           → no strong word         → false
+//	"usr_2NBv8C" → ["usr", "2NBv8C"] → "2NBv8C" not a word  → false
+func isWordLikeKey(k string) bool {
+	segments := splitWordSegments(k)
 	if len(segments) == 0 {
 		return false
 	}
-
-	pronounceable := 0
-	total := 0
+	hasStrongWord := false
 	for _, seg := range segments {
-		// Skip pure digits and very short segments.
-		if len(seg) < 2 || isAllDigits(seg) {
+		if isAllDigits(seg) {
+			// Pure digit segments are fine (e.g., trailing numbers in "form1065"
+			// which splits to ["form", "1065"] after camelCase split — but
+			// splitWordSegments doesn't split on digit boundaries, so this
+			// mainly catches segments from underscore splits like "line_2").
 			continue
 		}
-		total++
-		if segmentIsPronounceable(seg) {
-			pronounceable++
+		if !isWordSegment(seg) {
+			return false
+		}
+		if len(seg) >= 3 && segmentIsPronounceable(seg) {
+			hasStrongWord = true
 		}
 	}
+	return hasStrongWord
+}
 
-	if total == 0 {
+// commonShortWords are words too short for pronounceability checks but
+// commonly found in struct field names.
+var commonShortWords = map[string]bool{
+	"id": true, "at": true, "on": true, "by": true, "in": true,
+	"to": true, "of": true, "or": true, "is": true, "no": true,
+	"do": true, "up": true, "if": true, "go": true, "ok": true,
+}
+
+// isWordSegment returns true if a segment looks like a word.
+func isWordSegment(s string) bool {
+	if len(s) == 0 {
 		return false
 	}
-	// Most segments should be pronounceable.
-	return pronounceable > total/2
+	// Pure digits are not words (but are ok as parts of a key like "form1065").
+	if isAllDigits(s) {
+		return false
+	}
+	// Short common words.
+	if commonShortWords[strings.ToLower(s)] {
+		return true
+	}
+	// 3+ character pronounceable segments are words.
+	return len(s) >= 3 && segmentIsPronounceable(s)
 }
 
 func segmentIsPronounceable(s string) bool {
-	s = strings.ToLower(s)
+	// Strip trailing digits — "form1065" → "form", "line2" → "line".
+	core := strings.TrimRightFunc(s, unicode.IsDigit)
+	if core == "" {
+		return false // all digits
+	}
+	// If the core still has digits, it's not a word (e.g., "a1b2c3d4" → "a1b2c3d").
+	for _, r := range core {
+		if unicode.IsDigit(r) {
+			return false
+		}
+	}
+
+	s = strings.ToLower(core)
 	vowels := 0
 	consonantRun := 0
 	maxConsonantRun := 0
@@ -345,70 +214,6 @@ func splitCamelCase(s string) []string {
 	}
 	segments = append(segments, string(runes[start:]))
 	return segments
-}
-
-func isHex(s string) bool {
-	for _, r := range s {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
-			return false
-		}
-	}
-	return true
-}
-
-// allLookLikeFieldNames checks if keys look like typical struct field names:
-// camelCase, snake_case, PascalCase, or short lowercase words.
-func allLookLikeFieldNames(keys []string) bool {
-	fieldLike := 0
-	for _, k := range keys {
-		if looksLikeFieldName(k) {
-			fieldLike++
-		}
-	}
-	// If >80% look like field names, probably a struct
-	return fieldLike > len(keys)*4/5
-}
-
-func looksLikeFieldName(k string) bool {
-	if len(k) == 0 || len(k) > 40 {
-		return false
-	}
-	// Must start with a letter
-	runes := []rune(k)
-	if !unicode.IsLetter(runes[0]) {
-		return false
-	}
-	// Only letters, digits, underscores
-	for _, r := range runes {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
-			return false
-		}
-	}
-	return true
-}
-
-// valuesHaveSimilarShape checks if most values in the object are objects with
-// similar key sets.
-func valuesHaveSimilarShape(obj map[string]any) bool {
-	shapes := make(map[string]int)
-	total := 0
-	for _, v := range obj {
-		if m, ok := v.(map[string]any); ok {
-			shapes[shapeSignature(m)]++
-			total++
-		}
-	}
-	if total == 0 {
-		return false
-	}
-	// Find most common shape
-	maxCount := 0
-	for _, count := range shapes {
-		if count > maxCount {
-			maxCount = count
-		}
-	}
-	return maxCount > total/2
 }
 
 // inferKeyName tries to infer a meaningful key name from the map's keys.
@@ -568,6 +373,11 @@ func capitalize(s string) string {
 
 // singularize does a naive singularization for common English plurals.
 func singularize(s string) string {
+	// Uncountable / already-singular words ending in -s.
+	switch strings.ToLower(s) {
+	case "species", "series", "chassis", "status", "alias":
+		return s
+	}
 	if strings.HasSuffix(s, "ies") && len(s) > 4 {
 		return s[:len(s)-3] + "y"
 	}
