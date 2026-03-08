@@ -365,7 +365,9 @@ func isUbiquitousField(name string) bool {
 
 // snakeToPascal converts snake_case or camelCase to PascalCase.
 func snakeToPascal(s string) string {
-	parts := strings.Split(s, "_")
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == '_' || r == '-'
+	})
 	for i, p := range parts {
 		parts[i] = capitalize(p)
 	}
