@@ -172,10 +172,10 @@ func TestHeuristicsMapDetection(t *testing.T) {
 		wantConf  bool
 	}{
 		{"numeric keys", []string{"1", "2", "3"}, true, true},
-		{"uuid keys", []string{"a1b2c3d4-e5f6", "b2c3d4e5-f6a7", "c3d4e5f6-a7b8"}, true, true},
+		{"uuid keys", []string{"a1b2c3d4-e5f6", "b2c3d4e5-f6a7", "c3d4e5f6-a7b8"}, true, false},
 		{"field names", []string{"name", "age", "email"}, false, true},
 		{"two keys no words", []string{"ab", "cd"}, true, false},
-		{"hex IDs", []string{"a1b2c3d4", "e5f6a7b8", "c9d0e1f2"}, true, true},
+		{"hex IDs", []string{"a1b2c3d4", "e5f6a7b8", "c9d0e1f2"}, true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

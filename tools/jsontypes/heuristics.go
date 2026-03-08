@@ -37,27 +37,35 @@ func looksLikeMap(obj map[string]any) (isMap bool, confident bool) {
 		return true, true
 	}
 
-	// Rule 2: Any key is composed of words → struct.
-	if hasWordLikeKey(keys) {
+	// Rule 2: Keys that look like words → struct.
+	// With few keys, one word is enough. With many keys, a majority must
+	// be words — otherwise a few coincidental matches (e.g., "beef" in hex)
+	// could misclassify a map.
+	wordCount := countWordLikeKeys(keys)
+	if n <= 3 {
+		if wordCount >= 1 {
+			return false, true
+		}
+		return true, false
+	}
+	if wordCount > n/2 {
 		return false, true
 	}
 
-	// Rule 3: No recognized words → default to map.
-	// Confident when there are enough keys that we'd expect to find a word
-	// if this were really a struct.
-	return true, n >= 3
+	// Rule 3: No word majority → default to map.
+	return true, true
 }
 
-// hasWordLikeKey returns true if any key looks like it's composed of words
-// (i.e., a struct field name rather than an ID/token). It splits on _ and
-// camelCase boundaries, then checks if the segments are recognizable words.
-func hasWordLikeKey(keys []string) bool {
+// countWordLikeKeys returns how many keys look like they're composed of words
+// (i.e., struct field names rather than IDs/tokens).
+func countWordLikeKeys(keys []string) int {
+	count := 0
 	for _, k := range keys {
 		if isWordLikeKey(k) {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
 }
 
 // isWordLikeKey checks whether a key is composed of word-like segments,
@@ -76,11 +84,11 @@ func isWordLikeKey(k string) bool {
 	}
 	hasStrongWord := false
 	for _, seg := range segments {
-		if isAllDigits(seg) {
-			// Pure digit segments are fine (e.g., trailing numbers in "form1065"
-			// which splits to ["form", "1065"] after camelCase split — but
-			// splitWordSegments doesn't split on digit boundaries, so this
-			// mainly catches segments from underscore splits like "line_2").
+		// Pure digits and short segments (< 3 chars) that aren't known
+		// short words are neutral — skip without failing.
+		// This handles abbreviations like "ms", "db", "ui" in keys
+		// like "account_ms" or "build_db".
+		if isAllDigits(seg) || (len(seg) < 3 && !commonShortWords[strings.ToLower(seg)]) {
 			continue
 		}
 		if !isWordSegment(seg) {
