@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +37,29 @@ import (
 	"strconv"
 	"strings"
 )
+
+const (
+	name         = "monorel"
+	desc         = "Monorepo Release Tool"
+	licenseYear  = "2026"
+	licenseOwner = "AJ ONeal <aj@therootcompany.com> (https://therootcompany.com)"
+	licenseType  = "MPL-2.0"
+)
+
+// replaced by goreleaser / ldflags
+var (
+	version = "0.0.0-dev"
+	commit  = "0000000"
+	date    = "0001-01-01"
+)
+
+// printVersion displays the version, commit, and build date.
+func printVersion(w io.Writer) {
+	_, _ = fmt.Fprintf(w, "%s v%s %s (%s)\n", name, version, commit[:7], date)
+	_, _ = fmt.Fprintf(w, "%s\n", desc)
+	_, _ = fmt.Fprintf(w, "Copyright (C) %s %s\n", licenseYear, licenseOwner)
+	_, _ = fmt.Fprintf(w, "Licensed under %s\n", licenseType)
+}
 
 // stopMarkers are the directory entries that mark the top of a git repository.
 // findModuleRoot stops walking upward when it encounters one of these entries
@@ -122,15 +146,23 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+
+	// Handle version/help before subcommand dispatch.
 	switch os.Args[1] {
+	case "-V", "version", "-version", "--version":
+		printVersion(os.Stdout)
+		os.Exit(0)
+	case "help", "-help", "--help":
+		printVersion(os.Stdout)
+		fmt.Fprintln(os.Stdout, "")
+		usage()
+		os.Exit(0)
 	case "release":
 		runRelease(os.Args[2:])
 	case "bump":
 		runBump(os.Args[2:])
 	case "init":
 		runInit(os.Args[2:])
-	case "help", "--help", "-h":
-		usage()
 	default:
 		fmt.Fprintf(os.Stderr, "monorel: unknown subcommand %q\n", os.Args[1])
 		fmt.Fprintln(os.Stderr, "Run 'monorel help' for usage.")
@@ -139,8 +171,6 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "monorel: Monorepo Release Tool")
-	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintln(os.Stderr, "  monorel <subcommand> [options] <binary-path>...")
 	fmt.Fprintln(os.Stderr, "")
@@ -160,8 +190,10 @@ func usage() {
 
 func runRelease(args []string) {
 	fs := flag.NewFlagSet("monorel release", flag.ExitOnError)
+	var showVersion bool
 	var recursive, all, dryRun, yes, force, draft, prerelease bool
 	var almostAll, ios, androidNDK bool
+	fs.BoolVar(&showVersion, "version", false, "show version and exit")
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.BoolVar(&dryRun, "dry-run", false, "show each step without running it")
@@ -186,7 +218,17 @@ func runRelease(args []string) {
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
+	if len(args) > 0 && args[0] == "-V" {
+		printVersion(os.Stdout)
+		os.Exit(0)
+	}
 	_ = fs.Parse(args)
+	if showVersion {
+		printVersion(os.Stdout)
+		os.Exit(0)
+	}
+	printVersion(os.Stderr)
+	fmt.Fprintln(os.Stderr, "")
 	binPaths := fs.Args()
 	if len(binPaths) == 0 {
 		fs.Usage()
@@ -224,8 +266,10 @@ func runRelease(args []string) {
 
 func runBump(args []string) {
 	fs := flag.NewFlagSet("monorel bump", flag.ExitOnError)
+	var showVersion bool
 	var component string
 	var recursive, all, force, dryRun bool
+	fs.BoolVar(&showVersion, "version", false, "show version and exit")
 	fs.StringVar(&component, "r", "patch", "version component to bump: major, minor, or patch")
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
@@ -247,7 +291,17 @@ func runBump(args []string) {
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
+	if len(args) > 0 && args[0] == "-V" {
+		printVersion(os.Stdout)
+		os.Exit(0)
+	}
 	_ = fs.Parse(args)
+	if showVersion {
+		printVersion(os.Stdout)
+		os.Exit(0)
+	}
+	printVersion(os.Stderr)
+	fmt.Fprintln(os.Stderr, "")
 
 	switch component {
 	case "major", "minor", "patch":
@@ -315,8 +369,10 @@ func runBump(args []string) {
 
 func runInit(args []string) {
 	fs := flag.NewFlagSet("monorel init", flag.ExitOnError)
+	var showVersion bool
 	var recursive, all, dryRun, cmd bool
 	var almostAll, ios, androidNDK bool
+	fs.BoolVar(&showVersion, "version", false, "show version and exit")
 	fs.BoolVar(&recursive, "recursive", false, "find all main packages recursively under each path")
 	fs.BoolVar(&all, "A", false, "include dot/underscore-prefixed directories; warn rather than error on failures")
 	fs.BoolVar(&dryRun, "dry-run", false, "print what would happen without writing files, creating commits, or tags")
@@ -342,7 +398,17 @@ func runInit(args []string) {
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
+	if len(args) > 0 && args[0] == "-V" {
+		printVersion(os.Stdout)
+		os.Exit(0)
+	}
 	_ = fs.Parse(args)
+	if showVersion {
+		printVersion(os.Stdout)
+		os.Exit(0)
+	}
+	printVersion(os.Stderr)
+	fmt.Fprintln(os.Stderr, "")
 	binPaths := fs.Args()
 	if len(binPaths) == 0 {
 		fs.Usage()
