@@ -18,6 +18,8 @@ cmd/sql-migrate/sql-migrate
 io/transform/gsheet2csv/cmd/gsheet2csv/gsheet2csv
 io/transform/gsheet2csv/cmd/gsheet2env/gsheet2env
 io/transform/gsheet2csv/cmd/gsheet2tsv/gsheet2tsv
+tools/jsontypes/cmd/jsonpaths/jsonpaths
+tools/jsontypes/jsonpaths
 
 # Binaries for programs and plugins
 *.exe
