@@ -1,7 +1,6 @@
 package jsontypes
 
 import (
-	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
@@ -193,24 +192,28 @@ func allSameLength(keys []string) bool {
 }
 
 // allLookLikeIDs checks if keys look like identifiers/tokens rather than field
-// names: no spaces, alphanumeric/base64/hex, and not common English field names.
+// names. Uses hex detection, pronounceability, and field name checks.
 func allLookLikeIDs(keys []string) bool {
 	for _, k := range keys {
 		if strings.ContainsAny(k, " \t\n") {
 			return false
 		}
-		// Hex or base64 strings of any length ≥ 4
-		if len(k) >= 4 && (isHex(k) || isAlphanumeric(k) || isBase64(k)) {
+		// Pure hex is always an ID.
+		if len(k) >= 4 && isHex(k) {
 			continue
 		}
+		// Pronounceable strings are field names, not IDs.
+		if isPronounceable(k) {
+			return false
+		}
+		// Non-pronounceable alphanumeric of sufficient length → likely ID.
+		if len(k) >= 4 && isAlphanumeric(k) {
+			continue
+		}
+		// Doesn't match any ID pattern.
 		return false
 	}
-	// Additional check: IDs typically don't look like field names.
-	// If ALL of them look like field names (e.g., camelCase), not IDs.
-	if allLookLikeFieldNames(keys) {
-		return false
-	}
-	return true
+	return len(keys) > 0
 }
 
 func isAlphanumeric(s string) bool {
@@ -224,18 +227,124 @@ func isAlphanumeric(s string) bool {
 
 
 
-func isBase64(s string) bool {
-	// Try standard and URL-safe base64
-	if _, err := base64.StdEncoding.DecodeString(s); err == nil {
-		return true
+// isPronounceable checks whether a string has the vowel/consonant rhythm of
+// natural language. Field names like "metadata", "created_at", "userName" are
+// pronounceable; tokens like "a1b2c3d4", "dGVzdA==", "xK9mP4q" are not.
+//
+// The check splits on underscores and case boundaries (camelCase), then
+// verifies each word-like segment has a reasonable vowel ratio (15-80%) and
+// no long consonant runs (>4). Pure-digit segments are ignored.
+func isPronounceable(s string) bool {
+	// Split on underscores, then on camelCase boundaries.
+	segments := splitWordSegments(s)
+	if len(segments) == 0 {
+		return false
 	}
-	if _, err := base64.URLEncoding.DecodeString(s); err == nil {
-		return true
+
+	pronounceable := 0
+	total := 0
+	for _, seg := range segments {
+		// Skip pure digits and very short segments.
+		if len(seg) < 2 || isAllDigits(seg) {
+			continue
+		}
+		total++
+		if segmentIsPronounceable(seg) {
+			pronounceable++
+		}
 	}
-	if _, err := base64.RawURLEncoding.DecodeString(s); err == nil {
+
+	if total == 0 {
+		return false
+	}
+	// Most segments should be pronounceable.
+	return pronounceable > total/2
+}
+
+func segmentIsPronounceable(s string) bool {
+	s = strings.ToLower(s)
+	vowels := 0
+	consonantRun := 0
+	maxConsonantRun := 0
+	letters := 0
+
+	for _, r := range s {
+		if !unicode.IsLetter(r) {
+			consonantRun = 0
+			continue
+		}
+		letters++
+		if isVowel(r) {
+			vowels++
+			consonantRun = 0
+		} else {
+			consonantRun++
+			if consonantRun > maxConsonantRun {
+				maxConsonantRun = consonantRun
+			}
+		}
+	}
+
+	if letters < 2 {
+		return false
+	}
+
+	ratio := float64(vowels) / float64(letters)
+	// English words typically have 30-50% vowels.
+	// Allow a wide band (15-80%) to cover abbreviations and acronyms.
+	if ratio < 0.15 || ratio > 0.80 {
+		return false
+	}
+	// No natural word has 5+ consonants in a row.
+	if maxConsonantRun > 4 {
+		return false
+	}
+	return true
+}
+
+func isVowel(r rune) bool {
+	switch r {
+	case 'a', 'e', 'i', 'o', 'u', 'y':
 		return true
 	}
 	return false
+}
+
+func isAllDigits(s string) bool {
+	for _, r := range s {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+// splitWordSegments breaks a string into word-like segments by splitting on
+// underscores, hyphens, and camelCase boundaries.
+func splitWordSegments(s string) []string {
+	// First split on underscores and hyphens.
+	var parts []string
+	for _, part := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == '_' || r == '-'
+	}) {
+		// Then split on camelCase boundaries.
+		parts = append(parts, splitCamelCase(part)...)
+	}
+	return parts
+}
+
+func splitCamelCase(s string) []string {
+	var segments []string
+	start := 0
+	runes := []rune(s)
+	for i := 1; i < len(runes); i++ {
+		if unicode.IsUpper(runes[i]) && (i > start) {
+			segments = append(segments, string(runes[start:i]))
+			start = i
+		}
+	}
+	segments = append(segments, string(runes[start:]))
+	return segments
 }
 
 func isHex(s string) bool {
