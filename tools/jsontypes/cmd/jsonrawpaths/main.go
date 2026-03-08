@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 
@@ -9,9 +10,12 @@ import (
 )
 
 func main() {
+	samples := flag.Int("samples", 0, "show sample values truncated to this length (0 = type names)")
+	flag.Parse()
+
 	var input *os.File
-	if len(os.Args) > 1 && os.Args[1] != "-" {
-		f, err := os.Open(os.Args[1])
+	if flag.NArg() > 0 && flag.Arg(0) != "-" {
+		f, err := os.Open(flag.Arg(0))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -30,7 +34,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	for _, path := range jsontypes.RawPaths(data) {
+	cfg := jsontypes.RawPathsConfig{SampleLen: *samples}
+	for _, path := range jsontypes.RawPathsWithConfig(data, cfg) {
 		fmt.Println(path)
 	}
 }

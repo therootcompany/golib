@@ -6,6 +6,14 @@ import (
 	"strings"
 )
 
+// RawPathsConfig controls raw path output.
+type RawPathsConfig struct {
+	// SampleLen, when > 0, emits a truncated sample value instead of a
+	// type name at leaf nodes. E.g., {string} becomes {"Alice Anglerso..."}.
+	// The type is implicit from the value representation.
+	SampleLen int
+}
+
 // RawPaths walks a decoded JSON value depth-first and emits flat paths with
 // monotonically numbered type names. Every struct shape gets a unique name
 // derived from its parent path segment and a global counter (e.g., Root0,
@@ -15,14 +23,20 @@ import (
 // The value must have been decoded with json.Decoder.UseNumber() so that
 // integers and floats are distinguishable.
 func RawPaths(v any) []string {
-	w := &rawWalker{}
+	return RawPathsWithConfig(v, RawPathsConfig{})
+}
+
+// RawPathsWithConfig is like RawPaths but accepts configuration.
+func RawPathsWithConfig(v any, cfg RawPathsConfig) []string {
+	w := &rawWalker{sampleLen: cfg.SampleLen}
 	w.walk("", v)
 	return w.paths
 }
 
 type rawWalker struct {
-	counter int
-	paths   []string
+	counter   int
+	paths     []string
+	sampleLen int
 }
 
 func (w *rawWalker) emit(path string) {
@@ -41,20 +55,38 @@ func (w *rawWalker) walk(prefix string, v any) {
 	case nil:
 		w.emit(prefix + "{null}")
 	case bool:
-		w.emit(prefix + "{bool}")
+		if w.sampleLen > 0 {
+			w.emit(prefix + "{" + fmt.Sprintf("%v", val) + "}")
+		} else {
+			w.emit(prefix + "{bool}")
+		}
 	case json.Number:
-		if _, err := val.Int64(); err == nil {
+		if w.sampleLen > 0 {
+			w.emit(prefix + "{" + val.String() + "}")
+		} else if _, err := val.Int64(); err == nil {
 			w.emit(prefix + "{int}")
 		} else {
 			w.emit(prefix + "{float}")
 		}
 	case string:
-		w.emit(prefix + "{string}")
+		if w.sampleLen > 0 {
+			w.emit(prefix + "{" + truncateQuoted(val, w.sampleLen) + "}")
+		} else {
+			w.emit(prefix + "{string}")
+		}
 	case map[string]any:
 		w.walkObject(prefix, val)
 	case []any:
 		w.walkArray(prefix, val)
 	}
+}
+
+// truncateQuoted returns a JSON-quoted string, truncated with "..." if needed.
+func truncateQuoted(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return fmt.Sprintf("%q", s)
+	}
+	return fmt.Sprintf("%q", s[:maxLen]) + "..."
 }
 
 func (w *rawWalker) walkObject(prefix string, obj map[string]any) {
@@ -84,6 +116,10 @@ func (w *rawWalker) walkMap(prefix string, obj map[string]any) {
 	w.walkCollection(mapPrefix, values)
 }
 
+// absentValue is a sentinel distinct from nil (JSON null) to represent
+// a field that was absent from a struct instance.
+var absentValue = &struct{}{}
+
 func (w *rawWalker) walkStruct(prefix string, instances []map[string]any) {
 	merged := mergeObjects(instances)
 	typeName := w.nextName(prefix)
@@ -101,7 +137,7 @@ func (w *rawWalker) walkStruct(prefix string, instances []map[string]any) {
 			if v, ok := inst[k]; ok {
 				fieldVals = append(fieldVals, v)
 			} else {
-				fieldVals = append(fieldVals, nil)
+				fieldVals = append(fieldVals, absentValue)
 			}
 		}
 		w.walkCollection(joinPath(prefix, k), fieldVals)
@@ -132,7 +168,7 @@ func (w *rawWalker) walkTuple(prefix string, arr []any) {
 // elements, map values, or field values across struct instances). It groups
 // objects by shape and walks each shape separately.
 func (w *rawWalker) walkCollection(prefix string, values []any) {
-	// Separate by kind: objects, primitives/arrays, nulls.
+	// Separate by kind: objects, primitives/arrays, nulls, absent.
 	type shapeInstances struct {
 		sig       string
 		instances []map[string]any
@@ -140,9 +176,14 @@ func (w *rawWalker) walkCollection(prefix string, values []any) {
 	var shapes []shapeInstances
 	shapeIndex := make(map[string]int)
 	hasNull := false
+	hasUndefined := false
 	var nonObjects []any
 
 	for _, v := range values {
+		if v == absentValue {
+			hasUndefined = true
+			continue
+		}
 		switch val := v.(type) {
 		case nil:
 			hasNull = true
@@ -159,7 +200,10 @@ func (w *rawWalker) walkCollection(prefix string, values []any) {
 		}
 	}
 
-	// Emit null if seen.
+	// Emit undefined (field absent) and null (field present with null value).
+	if hasUndefined {
+		w.emit(prefix + "{undefined}")
+	}
 	if hasNull {
 		w.emit(prefix + "{null}")
 	}
@@ -183,25 +227,49 @@ func (w *rawWalker) walkCollection(prefix string, values []any) {
 	for _, v := range nonObjects {
 		switch val := v.(type) {
 		case json.Number:
-			var typ string
-			if _, err := val.Int64(); err == nil {
-				typ = "int"
+			if w.sampleLen > 0 {
+				sample := val.String()
+				if !seen[sample] {
+					seen[sample] = true
+					w.emit(prefix + "{" + sample + "}")
+				}
 			} else {
-				typ = "float"
-			}
-			if !seen[typ] {
-				seen[typ] = true
-				w.emit(prefix + "{" + typ + "}")
+				var typ string
+				if _, err := val.Int64(); err == nil {
+					typ = "int"
+				} else {
+					typ = "float"
+				}
+				if !seen[typ] {
+					seen[typ] = true
+					w.emit(prefix + "{" + typ + "}")
+				}
 			}
 		case string:
-			if !seen["string"] {
-				seen["string"] = true
-				w.emit(prefix + "{string}")
+			if w.sampleLen > 0 {
+				sample := truncateQuoted(val, w.sampleLen)
+				if !seen[sample] {
+					seen[sample] = true
+					w.emit(prefix + "{" + sample + "}")
+				}
+			} else {
+				if !seen["string"] {
+					seen["string"] = true
+					w.emit(prefix + "{string}")
+				}
 			}
 		case bool:
-			if !seen["bool"] {
-				seen["bool"] = true
-				w.emit(prefix + "{bool}")
+			if w.sampleLen > 0 {
+				sample := fmt.Sprintf("%v", val)
+				if !seen[sample] {
+					seen[sample] = true
+					w.emit(prefix + "{" + sample + "}")
+				}
+			} else {
+				if !seen["bool"] {
+					seen["bool"] = true
+					w.emit(prefix + "{bool}")
+				}
 			}
 		case []any:
 			// Nested arrays — walk once.
@@ -212,8 +280,8 @@ func (w *rawWalker) walkCollection(prefix string, values []any) {
 		}
 	}
 
-	// If nothing was emitted (all nils, empty), emit any.
-	if !hasNull && len(shapes) == 0 && len(nonObjects) == 0 {
+	// If nothing was emitted (all absent/nils, empty), emit empty.
+	if !hasNull && !hasUndefined && len(shapes) == 0 && len(nonObjects) == 0 {
 		w.emit(prefix + "{empty}")
 	}
 }
