@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// generateSQL converts formatted flat paths into SQL CREATE TABLE statements.
+// GenerateSQL converts formatted flat paths into SQL CREATE TABLE statements.
 // Nested structs become separate tables with foreign key relationships.
 // Arrays of structs get a join table or FK pointing back to the parent.
 func GenerateSQL(paths []string) string {

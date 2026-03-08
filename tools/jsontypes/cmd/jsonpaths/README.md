@@ -178,14 +178,19 @@ The core logic is available as a Go package:
 ```go
 import "github.com/therootcompany/golib/tools/jsontypes"
 
-a, _ := jsontypes.NewAnalyzer(false, true, false) // anonymous mode
-defer a.Close()
+// One-shot: parse JSON and generate code in one call
+out, err := jsontypes.AutoGenerate(jsonBytes, jsontypes.Options{
+	Format: jsontypes.FormatTypeScript,
+})
+
+// Or step by step:
+a := jsontypes.New(jsontypes.AnalyzerConfig{})
 
 var data any
 // ... json.Decode with UseNumber() ...
 
 paths := jsontypes.FormatPaths(a.Analyze(".", data))
-fmt.Print(jsontypes.GenerateTypeScript(paths))
+out, err = jsontypes.Generate(jsontypes.FormatTypeScript, paths)
 ```
 
 See the [package documentation](https://pkg.go.dev/github.com/therootcompany/golib/tools/jsontypes)

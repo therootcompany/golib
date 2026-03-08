@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// generateZod converts formatted flat paths into Zod schema definitions.
+// GenerateZod converts formatted flat paths into Zod schema definitions.
 func GenerateZod(paths []string) string {
 	types, _ := buildGoTypes(paths)
 	if len(types) == 0 {

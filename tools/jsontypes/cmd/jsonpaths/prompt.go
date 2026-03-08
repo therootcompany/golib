@@ -1,4 +1,4 @@
-package jsontypes
+package main
 
 import (
 	"bufio"
@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-type Prompter struct {
+type prompter struct {
 	reader *bufio.Reader
 	output io.Writer
 	tty    *os.File // non-nil if we opened /dev/tty
@@ -21,20 +21,15 @@ type Prompter struct {
 
 // newPrompter creates a prompter. If the JSON input comes from stdin, we open
 // /dev/tty for interactive prompts so they don't conflict.
-func NewPrompter(inputIsStdin, anonymous bool) (*Prompter, error) {
-	p := &Prompter{output: os.Stderr}
+func newPrompter(inputIsStdin bool) (*prompter, error) {
+	p := &prompter{output: os.Stderr}
 	if inputIsStdin {
-		if anonymous {
-			// No prompts needed — use a closed reader that returns EOF
-			p.reader = bufio.NewReader(strings.NewReader(""))
-		} else {
-			tty, err := os.Open("/dev/tty")
-			if err != nil {
-				return nil, fmt.Errorf("cannot open /dev/tty for prompts (input is stdin): %w", err)
-			}
-			p.tty = tty
-			p.reader = bufio.NewReader(tty)
+		tty, err := os.Open("/dev/tty")
+		if err != nil {
+			return nil, fmt.Errorf("cannot open /dev/tty for prompts (input is stdin): %w", err)
 		}
+		p.tty = tty
+		p.reader = bufio.NewReader(tty)
 	} else {
 		p.reader = bufio.NewReader(os.Stdin)
 	}
@@ -42,7 +37,7 @@ func NewPrompter(inputIsStdin, anonymous bool) (*Prompter, error) {
 }
 
 // loadAnswers reads prior answers from a file to use as defaults.
-func (p *Prompter) LoadAnswers(path string) {
+func (p *prompter) loadAnswers(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return
@@ -59,7 +54,7 @@ func (p *Prompter) LoadAnswers(path string) {
 }
 
 // saveAnswers writes this session's answers to a file.
-func (p *Prompter) SaveAnswers(path string) error {
+func (p *prompter) saveAnswers(path string) error {
 	if len(p.answers) == 0 {
 		return nil
 	}
@@ -67,7 +62,7 @@ func (p *Prompter) SaveAnswers(path string) error {
 }
 
 // nextPrior returns the next prior answer if available, or empty string.
-func (p *Prompter) nextPrior() string {
+func (p *prompter) nextPrior() string {
 	if p.priorIdx < len(p.priorAnswers) {
 		answer := p.priorAnswers[p.priorIdx]
 		p.priorIdx++
@@ -77,11 +72,11 @@ func (p *Prompter) nextPrior() string {
 }
 
 // record saves an answer for later writing.
-func (p *Prompter) record(answer string) {
+func (p *prompter) record(answer string) {
 	p.answers = append(p.answers, answer)
 }
 
-func (p *Prompter) Close() {
+func (p *prompter) close() {
 	if p.tty != nil {
 		p.tty.Close()
 	}
@@ -90,7 +85,7 @@ func (p *Prompter) Close() {
 // ask presents a prompt with a default and valid options. Returns the chosen
 // option (lowercase). Options should be lowercase; the default is shown in
 // uppercase in the hint.
-func (p *Prompter) ask(prompt, defaultOpt string, options []string) string {
+func (p *prompter) ask(prompt, defaultOpt string, options []string) string {
 	// Override default with prior answer if available
 	if prior := p.nextPrior(); prior != "" {
 		for _, o := range options {
@@ -131,21 +126,14 @@ func (p *Prompter) ask(prompt, defaultOpt string, options []string) string {
 	}
 }
 
-// askMapOrName presents a combined map/struct+name prompt. Shows [Default/m].
-// Accepts: 'm' or 'map' → returns "m", a name starting with an uppercase
-// letter → returns the name, empty → returns the default. Anything else
-// re-prompts.
-//
-// Prior answers are interpreted generously: "s" (old struct answer) is treated
-// as "accept the default struct name", "m" as map, and uppercase names as-is.
-func (p *Prompter) askMapOrName(prompt, defaultVal string) string {
+// askMapOrName presents a combined map/struct+name prompt.
+func (p *prompter) askMapOrName(prompt, defaultVal string) string {
 	if prior := p.nextPrior(); prior != "" {
 		if prior == "m" || prior == "map" {
 			defaultVal = prior
 		} else if len(prior) > 0 && prior[0] >= 'A' && prior[0] <= 'Z' {
 			defaultVal = prior
 		}
-		// Old-format answers like "s" → keep the inferred default (treat as "accept")
 	}
 
 	hint := defaultVal + "/m"
@@ -178,16 +166,11 @@ func (p *Prompter) askMapOrName(prompt, defaultVal string) string {
 }
 
 // askTypeName presents a prompt for a type name with a suggested default.
-// Accepts names starting with an uppercase letter.
-//
-// Prior answers are interpreted generously: old-format answers that don't
-// start with uppercase are treated as "accept the default".
-func (p *Prompter) askTypeName(prompt, defaultVal string) string {
+func (p *prompter) askTypeName(prompt, defaultVal string) string {
 	if prior := p.nextPrior(); prior != "" {
 		if len(prior) > 0 && prior[0] >= 'A' && prior[0] <= 'Z' {
 			defaultVal = prior
 		}
-		// Old-format answers → keep the inferred default (treat as "accept")
 	}
 
 	for {
@@ -208,27 +191,4 @@ func (p *Prompter) askTypeName(prompt, defaultVal string) string {
 		}
 		fmt.Fprintf(p.output, "  Enter a TypeName (starting with uppercase)\n")
 	}
-}
-
-// askFreeform presents a prompt with a suggested default. Returns user input
-// or the default if they just press enter.
-func (p *Prompter) askFreeform(prompt, defaultVal string) string {
-	// Override default with prior answer if available
-	if prior := p.nextPrior(); prior != "" {
-		defaultVal = prior
-	}
-
-	fmt.Fprintf(p.output, "%s [%s] ", prompt, defaultVal)
-	line, err := p.reader.ReadString('\n')
-	if err != nil {
-		p.record(defaultVal)
-		return defaultVal
-	}
-	line = strings.TrimSpace(line)
-	if line == "" {
-		p.record(defaultVal)
-		return defaultVal
-	}
-	p.record(line)
-	return line
 }

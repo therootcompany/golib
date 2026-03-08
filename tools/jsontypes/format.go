@@ -57,7 +57,7 @@ func parsePath(path string) []segment {
 	return segments
 }
 
-// formatPaths converts fully-annotated flat paths into the display format where:
+// FormatPaths converts fully-annotated flat paths into the display format where:
 //   - The root type appears alone on the first line (no leading dot)
 //   - Each type introduction gets its own line
 //   - Type annotations only appear on the rightmost (new) segment of each line

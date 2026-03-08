@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// generateJSDoc converts formatted flat paths into JSDoc @typedef annotations.
+// GenerateJSDoc converts formatted flat paths into JSDoc @typedef annotations.
 func GenerateJSDoc(paths []string) string {
 	types, _ := buildGoTypes(paths)
 	if len(types) == 0 {

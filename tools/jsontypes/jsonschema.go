@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// generateJSONSchema converts formatted flat paths into a JSON Schema (draft 2020-12) document.
+// GenerateJSONSchema converts formatted flat paths into a JSON Schema (draft 2020-12) document.
 func GenerateJSONSchema(paths []string) string {
 	types, _ := buildGoTypes(paths)
 

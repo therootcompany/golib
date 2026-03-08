@@ -7,17 +7,34 @@ import (
 	"strings"
 )
 
+// AnalyzerConfig configures an Analyzer.
+type AnalyzerConfig struct {
+	// Resolver handles interactive decisions during analysis.
+	// If nil, heuristic defaults are used (fully autonomous).
+	//
+	// When set, the resolver is called only when the analyzer is
+	// genuinely unsure: ambiguous map/struct, multiple object shapes,
+	// tuple candidates, and unresolvable name collisions. Confident
+	// heuristic decisions are made without calling the resolver.
+	Resolver Resolver
+
+	// AskTypes prompts for every type name, even when heuristics
+	// are confident. Only meaningful when Resolver is set.
+	AskTypes bool
+}
+
+// Analyzer holds state for a single JSON analysis pass. Create a new
+// Analyzer for each JSON document; do not reuse across documents.
 type Analyzer struct {
-	Prompter    *Prompter
-	anonymous   bool
-	askTypes    bool
+	resolver   Resolver
+	autonomous bool
+	askTypes   bool
+
 	typeCounter int
-	// knownTypes maps shape signature → type name
-	knownTypes map[string]*structType
-	// typesByName maps type name → structType for collision detection
+	knownTypes  map[string]*structType
 	typesByName map[string]*structType
-	// pendingTypeName is set by the combined map/struct+name prompt
-	// and consumed by decideTypeName to avoid double-prompting
+	// pendingTypeName is set by decideMapOrStruct and consumed by
+	// decideTypeName to avoid double-prompting.
 	pendingTypeName string
 }
 
@@ -27,30 +44,27 @@ type structType struct {
 }
 
 type shapeGroup struct {
-	sig     string
 	fields  []string
 	members []map[string]any
 }
 
-func NewAnalyzer(inputIsStdin, anonymous, askTypes bool) (*Analyzer, error) {
-	p, err := NewPrompter(inputIsStdin, anonymous)
-	if err != nil {
-		return nil, err
+// New creates an Analyzer with the given configuration.
+func New(cfg AnalyzerConfig) *Analyzer {
+	r := cfg.Resolver
+	autonomous := r == nil
+	if r == nil {
+		r = defaultResolver
 	}
 	return &Analyzer{
-		Prompter:    p,
-		anonymous:   anonymous,
-		askTypes:    askTypes,
+		resolver:    r,
+		autonomous:  autonomous,
+		askTypes:    cfg.AskTypes,
 		knownTypes:  make(map[string]*structType),
 		typesByName: make(map[string]*structType),
-	}, nil
+	}
 }
 
-func (a *Analyzer) Close() {
-	a.Prompter.Close()
-}
-
-// analyze traverses a JSON value depth-first and returns annotated flat paths.
+// Analyze traverses a JSON value depth-first and returns annotated flat paths.
 func (a *Analyzer) Analyze(path string, val any) []string {
 	switch v := val.(type) {
 	case nil:
@@ -86,7 +100,7 @@ func (a *Analyzer) analyzeObject(path string, obj map[string]any) []string {
 }
 
 func (a *Analyzer) analyzeAsMap(path string, obj map[string]any) []string {
-	keyName := a.decideKeyName(path, obj)
+	keyName := inferKeyName(obj)
 
 	// Collect all values and group by shape for type unification
 	values := make([]any, 0, len(obj))
@@ -146,7 +160,7 @@ func (a *Analyzer) analyzeArray(path string, arr []any) []string {
 	}
 
 	// Check for tuple (short array of mixed types)
-	if a.isTupleCandidate(arr) {
+	if isTupleCandidate(arr) {
 		isTuple := a.decideTupleOrList(path, arr)
 		if isTuple {
 			return a.analyzeAsTuple(path, arr)
@@ -245,7 +259,6 @@ func (a *Analyzer) unifyObjects(path string, objects []map[string]any) []string 
 			g.members = append(g.members, obj)
 		} else {
 			g := &shapeGroup{
-				sig:     sig,
 				fields:  sortedKeys(obj),
 				members: []map[string]any{obj},
 			}
@@ -259,8 +272,8 @@ func (a *Analyzer) unifyObjects(path string, objects []map[string]any) []string 
 		return a.analyzeAsStructMulti(path, objects)
 	}
 
-	// Multiple shapes — in anonymous mode default to same type
-	if a.anonymous {
+	// Multiple shapes — in autonomous mode default to same type
+	if a.autonomous {
 		return a.analyzeAsStructMulti(path, objects)
 	}
 	return a.promptTypeUnification(path, groups, groupOrder)
@@ -302,66 +315,26 @@ func (a *Analyzer) tryAnalyzeAsMaps(path string, objects []map[string]any) []str
 	return a.analyzeAsMap(path, combined)
 }
 
-// promptTypeUnification presents shape groups to the user and asks if they
-// are the same type (with optional fields) or different types.
+// promptTypeUnification presents shape groups and asks if they are the same
+// type (with optional fields) or different types.
 func (a *Analyzer) promptTypeUnification(path string, groups map[string]*shapeGroup, groupOrder []string) []string {
-	const maxFields = 8
-
 	// Compute shared and unique fields across all shapes
 	shared, uniquePerShape := shapeFieldBreakdown(groups, groupOrder)
-	totalInstances := 0
-	for _, sig := range groupOrder {
-		totalInstances += len(groups[sig].members)
-	}
 
-	fmt.Fprintf(a.Prompter.output, "\nAt %s — %d shapes (%d instances):\n",
-		shortPath(path), len(groupOrder), totalInstances)
-
-	// Show shared fields
-	if len(shared) > 0 {
-		preview := shared
-		if len(preview) > maxFields {
-			preview = preview[:maxFields]
-		}
-		fmt.Fprintf(a.Prompter.output, "  shared fields (%d): %s", len(shared), strings.Join(preview, ", "))
-		if len(shared) > maxFields {
-			fmt.Fprintf(a.Prompter.output, ", ...")
-		}
-		fmt.Fprintln(a.Prompter.output)
-	} else {
-		fmt.Fprintf(a.Prompter.output, "  no shared fields\n")
-	}
-
-	// Show unique fields per shape (truncated)
-	shownShapes := groupOrder
-	if len(shownShapes) > 5 {
-		shownShapes = shownShapes[:5]
-	}
-	for i, sig := range shownShapes {
+	// Build shape summaries for the resolver
+	shapes := make([]ShapeSummary, len(groupOrder))
+	for i, sig := range groupOrder {
 		g := groups[sig]
-		unique := uniquePerShape[sig]
-		if len(unique) == 0 {
-			fmt.Fprintf(a.Prompter.output, "  shape %d (%d instances): no unique fields\n", i+1, len(g.members))
-			continue
+		shapes[i] = ShapeSummary{
+			Index:        i,
+			Instances:    len(g.members),
+			Fields:       g.fields,
+			UniqueFields: uniquePerShape[sig],
 		}
-		preview := unique
-		if len(preview) > maxFields {
-			preview = preview[:maxFields]
-		}
-		fmt.Fprintf(a.Prompter.output, "  shape %d (%d instances): +%d unique: %s",
-			i+1, len(g.members), len(unique), strings.Join(preview, ", "))
-		if len(unique) > maxFields {
-			fmt.Fprintf(a.Prompter.output, ", ...")
-		}
-		fmt.Fprintln(a.Prompter.output)
-	}
-	if len(groupOrder) > 5 {
-		fmt.Fprintf(a.Prompter.output, "  ... and %d more shapes\n", len(groupOrder)-5)
 	}
 
 	// Decide default: if unique fields heavily outnumber meaningful shared
-	// fields, default to "different". Ubiquitous fields (id, name, *_at, etc.)
-	// don't count as meaningful shared fields.
+	// fields, default to "different".
 	meaningfulShared := 0
 	for _, f := range shared {
 		if !isUbiquitousField(f) {
@@ -372,34 +345,27 @@ func (a *Analyzer) promptTypeUnification(path string, groups map[string]*shapeGr
 	for _, sig := range groupOrder {
 		totalUnique += len(uniquePerShape[sig])
 	}
-	defaultChoice := "s"
-	if totalUnique >= 2*meaningfulShared {
-		defaultChoice = "d"
+	defaultIsNewType := totalUnique >= 2*meaningfulShared
+
+	d := &Decision{
+		Kind:         DecideUnifyShapes,
+		Path:         shortPath(path),
+		Default:      Response{IsNewType: defaultIsNewType},
+		Shapes:       shapes,
+		SharedFields: shared,
 	}
 
-	// Combined prompt: same/different/show full list
-	var choice string
-	for {
-		choice = a.Prompter.ask(
-			"[s]ame type? [d]ifferent? show [f]ull list?",
-			defaultChoice, []string{"s", "d", "f"},
-		)
-		if choice != "f" {
-			break
-		}
-		for i, sig := range groupOrder {
-			g := groups[sig]
-			fmt.Fprintf(a.Prompter.output, "  Shape %d (%d instances): %s\n",
-				i+1, len(g.members), strings.Join(g.fields, ", "))
-		}
+	// Pre-collect all instances for the common "same type" path.
+	var all []map[string]any
+	for _, sig := range groupOrder {
+		all = append(all, groups[sig].members...)
 	}
 
-	if choice == "s" {
-		// Same type — analyze with all instances for field unification
-		var all []map[string]any
-		for _, sig := range groupOrder {
-			all = append(all, groups[sig].members...)
-		}
+	if err := a.resolver(d); err != nil {
+		return a.analyzeAsStructMulti(path, all)
+	}
+
+	if !d.Response.IsNewType {
 		return a.analyzeAsStructMulti(path, all)
 	}
 
@@ -412,20 +378,29 @@ func (a *Analyzer) promptTypeUnification(path string, groups map[string]*shapeGr
 			a.typeCounter++
 			inferred = fmt.Sprintf("Struct%d", a.typeCounter)
 		}
-		// Pre-resolve collision so the suggested name is valid
 		merged := mergeObjects(g.members)
 		newFields := fieldSet(merged)
 		shapeSig := shapeSignature(merged)
-		inferred = a.preResolveCollision(path, inferred, newFields, shapeSig)
+		inferred = a.preResolveCollision(path, inferred, newFields)
 
-		fmt.Fprintf(a.Prompter.output, "  Shape %d (%d instances): %s\n",
-			i+1, len(g.members), strings.Join(g.fields, ", "))
-		name := a.Prompter.askTypeName(
-			fmt.Sprintf("  Name for shape %d?", i+1), inferred)
-		names[i] = name
+		sd := &Decision{
+			Kind:       DecideShapeName,
+			Path:       shortPath(path),
+			Default:    Response{Name: inferred},
+			Fields:     objectToFieldSummaries(merged),
+			ShapeIndex: i,
+		}
+		if err := a.resolver(sd); err != nil {
+			names[i] = inferred
+		} else {
+			names[i] = sd.Response.Name
+			if names[i] == "" {
+				names[i] = inferred
+			}
+		}
 
 		// Register early so subsequent shapes see this name as taken
-		a.registerType(shapeSig, name, newFields)
+		a.registerType(shapeSig, names[i], newFields)
 	}
 
 	// Now analyze each group with its pre-assigned name
@@ -489,7 +464,7 @@ func sortedFieldCount(m map[string]int) []string {
 
 // isTupleCandidate returns true if the array might be a tuple:
 // short (2-5 elements) with mixed types.
-func (a *Analyzer) isTupleCandidate(arr []any) bool {
+func isTupleCandidate(arr []any) bool {
 	if len(arr) < 2 || len(arr) > 5 {
 		return false
 	}

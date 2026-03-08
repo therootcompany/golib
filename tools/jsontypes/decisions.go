@@ -7,29 +7,13 @@ import (
 )
 
 // decideMapOrStruct determines whether an object is a map or struct.
-// In anonymous mode, uses heuristics silently.
-// Otherwise, shows a combined prompt: enter a TypeName or 'm' for map.
-// In default mode, confident heuristic maps skip the prompt.
-// In askTypes mode, the prompt is always shown.
 func (a *Analyzer) decideMapOrStruct(path string, obj map[string]any) bool {
 	isMap, confident := looksLikeMap(obj)
-	if a.anonymous {
+
+	// Skip resolver when heuristics are confident and we're not in askTypes mode
+	if a.autonomous || (!a.askTypes && confident) {
 		return isMap
 	}
-
-	// Default mode: skip prompt when heuristics are confident
-	if !a.askTypes && confident {
-		return isMap
-	}
-
-	return a.promptMapOrStructWithName(path, obj, isMap, confident)
-}
-
-// promptMapOrStructWithName shows the object's fields and asks a combined question.
-// The user can type 'm' or 'map' for a map, a name starting with a capital letter
-// for a struct type, or press Enter to accept the default.
-func (a *Analyzer) promptMapOrStructWithName(path string, obj map[string]any, heuristicMap, confident bool) bool {
-	keys := sortedKeys(obj)
 
 	inferred := inferTypeName(path)
 	if inferred == "" {
@@ -37,33 +21,32 @@ func (a *Analyzer) promptMapOrStructWithName(path string, obj map[string]any, he
 		inferred = fmt.Sprintf("Struct%d", a.typeCounter)
 	}
 
-	defaultVal := inferred
-	if confident && heuristicMap {
-		defaultVal = "m"
+	def := Response{Name: inferred}
+	if confident && isMap {
+		def = Response{IsMap: true}
 	}
 
-	fmt.Fprintf(a.Prompter.output, "\nAt %s\n", shortPath(path))
-	fmt.Fprintf(a.Prompter.output, "  Object with %d keys:\n", len(keys))
-	for _, k := range keys {
-		fmt.Fprintf(a.Prompter.output, "    %s: %s\n", k, valueSummary(obj[k]))
+	d := &Decision{
+		Kind:    DecideMapOrStruct,
+		Path:    shortPath(path),
+		Default: def,
+		Fields:  objectToFieldSummaries(obj),
 	}
 
-	answer := a.Prompter.askMapOrName("Struct name (or 'm' for map)?", defaultVal)
-	if answer == "m" {
+	if err := a.resolver(d); err != nil {
+		return isMap
+	}
+
+	if d.Response.IsMap {
 		a.pendingTypeName = ""
 		return true
 	}
-	a.pendingTypeName = answer
+	a.pendingTypeName = d.Response.Name
 	return false
 }
 
-// decideKeyName infers the map key type from the keys.
-func (a *Analyzer) decideKeyName(_ string, obj map[string]any) string {
-	return inferKeyName(obj)
-}
-
 // decideTypeName determines the struct type name, using inference and optionally
-// prompting the user.
+// asking the resolver.
 func (a *Analyzer) decideTypeName(path string, obj map[string]any) string {
 	// Check if we've already named a type with this exact shape
 	sig := shapeSignature(obj)
@@ -74,7 +57,7 @@ func (a *Analyzer) decideTypeName(path string, obj map[string]any) string {
 
 	newFields := fieldSet(obj)
 
-	// Consume pending name from askTypes combined prompt
+	// Consume pending name from combined map/struct prompt
 	if a.pendingTypeName != "" {
 		name := a.pendingTypeName
 		a.pendingTypeName = ""
@@ -87,26 +70,19 @@ func (a *Analyzer) decideTypeName(path string, obj map[string]any) string {
 		inferred = fmt.Sprintf("Struct%d", a.typeCounter)
 	}
 
-	// Default and anonymous modes: auto-resolve without prompting
+	// Default and autonomous modes: auto-resolve without asking
 	if !a.askTypes {
 		return a.autoResolveTypeName(path, inferred, newFields, sig)
 	}
 
-	// askTypes mode: show fields and prompt for name
-	keys := sortedKeys(obj)
-	fmt.Fprintf(a.Prompter.output, "\nAt %s\n", shortPath(path))
-	fmt.Fprintf(a.Prompter.output, "  Struct with %d fields:\n", len(keys))
-	for _, k := range keys {
-		fmt.Fprintf(a.Prompter.output, "    %s: %s\n", k, valueSummary(obj[k]))
-	}
-
-	name := a.promptName(path, inferred, newFields, sig)
+	// askTypes mode: ask the resolver
+	name := a.resolveNameViaResolver(path, inferred, newFields, sig, obj)
 	return name
 }
 
 // autoResolveTypeName registers or resolves a type name without prompting.
 // On collision, tries the parent-prefix strategy; if that also collides, prompts
-// (unless anonymous, in which case it uses a numbered fallback).
+// (unless autonomous, in which case it uses a numbered fallback).
 func (a *Analyzer) autoResolveTypeName(path, name string, newFields map[string]string, sig string) string {
 	existing, taken := a.typesByName[name]
 	if !taken {
@@ -130,12 +106,12 @@ func (a *Analyzer) autoResolveTypeName(path, name string, newFields map[string]s
 			return a.registerType(sig, alt, newFields)
 		}
 		// Parent strategy also taken
-		if a.anonymous {
+		if a.autonomous {
 			a.typeCounter++
 			return a.registerType(sig, fmt.Sprintf("%s%d", name, a.typeCounter), newFields)
 		}
-		// Last resort: prompt
-		return a.promptName(path, alt, newFields, sig)
+		// Last resort: ask the resolver
+		return a.resolveNameViaResolver(path, alt, newFields, sig, nil)
 	}
 }
 
@@ -158,17 +134,29 @@ func (a *Analyzer) resolveTypeName(path, name string, newFields map[string]strin
 		a.knownTypes[sig] = existing
 		return name
 	default:
-		return a.promptName(path, name, newFields, sig)
+		return a.resolveNameViaResolver(path, name, newFields, sig, nil)
 	}
 }
 
-// promptName asks for a type name and handles collisions with existing types.
-// Pre-resolves the suggested name so the user sees a valid default.
-func (a *Analyzer) promptName(path, suggested string, newFields map[string]string, sig string) string {
-	suggested = a.preResolveCollision(path, suggested, newFields, sig)
+// resolveNameViaResolver asks the resolver for a type name and handles
+// collisions. obj may be nil if field summaries are unavailable.
+func (a *Analyzer) resolveNameViaResolver(path, suggested string, newFields map[string]string, sig string, obj map[string]any) string {
+	suggested = a.preResolveCollision(path, suggested, newFields)
 
 	for {
-		name := a.Prompter.askFreeform("Name for this type?", suggested)
+		d := &Decision{
+			Kind:    DecideTypeName,
+			Path:    shortPath(path),
+			Default: Response{Name: suggested},
+			Fields:  objectToFieldSummaries(obj),
+		}
+		if err := a.resolver(d); err != nil {
+			return a.registerType(sig, suggested, newFields)
+		}
+		name := d.Response.Name
+		if name == "" {
+			name = suggested
+		}
 
 		existing, taken := a.typesByName[name]
 		if !taken {
@@ -181,19 +169,22 @@ func (a *Analyzer) promptName(path, suggested string, newFields map[string]strin
 			a.knownTypes[sig] = existing
 			return name
 		case relSubset, relSuperset:
-			fmt.Fprintf(a.Prompter.output, "  Extending existing type %q (merging fields)\n", name)
 			merged := mergeFieldSets(existing.fields, newFields)
 			existing.fields = merged
 			a.knownTypes[sig] = existing
 			return name
 		case relOverlap:
-			fmt.Fprintf(a.Prompter.output, "  Type %q already exists with overlapping fields: %s\n",
-				name, fieldList(existing.fields))
-			choice := a.Prompter.ask(
-				fmt.Sprintf("  [e]xtend %q with merged fields, or use a [d]ifferent name?", name),
-				"e", []string{"e", "d"},
-			)
-			if choice == "e" {
+			cd := &Decision{
+				Kind:           DecideNameCollision,
+				Path:           shortPath(path),
+				Default:        Response{Name: name, Extend: true},
+				Fields:         objectToFieldSummaries(obj),
+				ExistingFields: fieldListSlice(existing.fields),
+			}
+			if err := a.resolver(cd); err != nil {
+				return a.registerType(sig, suggested, newFields)
+			}
+			if cd.Response.Extend {
 				merged := mergeFieldSets(existing.fields, newFields)
 				existing.fields = merged
 				a.knownTypes[sig] = existing
@@ -202,8 +193,6 @@ func (a *Analyzer) promptName(path, suggested string, newFields map[string]strin
 			suggested = a.suggestAlternativeName(path, name)
 			continue
 		case relDisjoint:
-			fmt.Fprintf(a.Prompter.output, "  Type %q already exists with different fields: %s\n",
-				name, fieldList(existing.fields))
 			suggested = a.suggestAlternativeName(path, name)
 			continue
 		}
@@ -211,9 +200,8 @@ func (a *Analyzer) promptName(path, suggested string, newFields map[string]strin
 }
 
 // preResolveCollision checks if the suggested name collides with an existing
-// type that can't be auto-merged. If so, prints a warning and returns a new
-// suggested name.
-func (a *Analyzer) preResolveCollision(path, suggested string, newFields map[string]string, sig string) string {
+// type that can't be auto-merged. If so, returns an alternative name.
+func (a *Analyzer) preResolveCollision(path, suggested string, newFields map[string]string) string {
 	existing, taken := a.typesByName[suggested]
 	if !taken {
 		return suggested
@@ -224,10 +212,7 @@ func (a *Analyzer) preResolveCollision(path, suggested string, newFields map[str
 	case relEqual, relSubset, relSuperset:
 		return suggested
 	default:
-		alt := a.suggestAlternativeName(path, suggested)
-		fmt.Fprintf(a.Prompter.output, "  (type %q already exists with different fields, suggesting %q)\n",
-			suggested, alt)
-		return alt
+		return a.suggestAlternativeName(path, suggested)
 	}
 }
 
@@ -371,12 +356,6 @@ func kindsCompatible(a, b string) bool {
 	return false
 }
 
-// fieldsOverlap returns true if one field set is a subset or superset of the other.
-func fieldsOverlap(a, b map[string]string) bool {
-	rel := fieldRelation(a, b)
-	return rel == relEqual || rel == relSubset || rel == relSuperset
-}
-
 func mergeFieldSets(a, b map[string]string) map[string]string {
 	merged := make(map[string]string, len(a)+len(b))
 	for k, v := range a {
@@ -392,30 +371,32 @@ func mergeFieldSets(a, b map[string]string) map[string]string {
 	return merged
 }
 
-func fieldList(fields map[string]string) string {
-	keys := make([]string, 0, len(fields))
-	for k := range fields {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return strings.Join(keys, ", ")
-}
-
-// decideTupleOrList asks the user if a short mixed-type array is a tuple or list.
+// decideTupleOrList asks whether a short mixed-type array is a tuple or list.
 func (a *Analyzer) decideTupleOrList(path string, arr []any) bool {
-	if a.anonymous {
+	if a.autonomous {
 		return false // default to list
 	}
-	fmt.Fprintf(a.Prompter.output, "\nAt %s\n", shortPath(path))
-	fmt.Fprintf(a.Prompter.output, "  Short array with %d elements of mixed types:\n", len(arr))
+
+	elems := make([]ElementSummary, len(arr))
 	for i, v := range arr {
-		fmt.Fprintf(a.Prompter.output, "    [%d]: %s\n", i, valueSummary(v))
+		elems[i] = ElementSummary{
+			Index:   i,
+			Kind:    kindOf(v),
+			Preview: valueSummary(v),
+		}
 	}
-	choice := a.Prompter.ask(
-		"Is this a [l]ist or a [t]uple?",
-		"l", []string{"l", "t"},
-	)
-	return choice == "t"
+
+	d := &Decision{
+		Kind:     DecideTupleOrList,
+		Path:     shortPath(path),
+		Default:  Response{IsTuple: false},
+		Elements: elems,
+	}
+
+	if err := a.resolver(d); err != nil {
+		return false
+	}
+	return d.Response.IsTuple
 }
 
 // valueSummary returns a short human-readable summary of a JSON value.
@@ -452,6 +433,33 @@ func valueSummary(v any) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// objectToFieldSummaries builds FieldSummary entries from a JSON object.
+func objectToFieldSummaries(obj map[string]any) []FieldSummary {
+	if obj == nil {
+		return nil
+	}
+	keys := sortedKeys(obj)
+	summaries := make([]FieldSummary, len(keys))
+	for i, k := range keys {
+		summaries[i] = FieldSummary{
+			Name:    k,
+			Kind:    kindOf(obj[k]),
+			Preview: valueSummary(obj[k]),
+		}
+	}
+	return summaries
+}
+
+// fieldListSlice returns sorted field names from a field set.
+func fieldListSlice(fields map[string]string) []string {
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func fieldSet(obj map[string]any) map[string]string {

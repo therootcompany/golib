@@ -35,11 +35,15 @@
 //	dec.UseNumber()
 //	dec.Decode(&data)
 //
-//	a, _ := jsontypes.NewAnalyzer(false, true, false) // anonymous mode
-//	defer a.Close()
-//
+//	a := jsontypes.New(jsontypes.AnalyzerConfig{})
 //	paths := jsontypes.FormatPaths(a.Analyze(".", data))
 //	fmt.Print(jsontypes.GenerateTypeScript(paths))
+//
+// Or use the one-shot API:
+//
+//	out, _ := jsontypes.AutoGenerate(jsonBytes, jsontypes.Options{
+//		Format: jsontypes.FormatTypeScript,
+//	})
 //
 // # AI tool use
 //
