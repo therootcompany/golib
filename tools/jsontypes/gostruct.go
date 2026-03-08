@@ -509,18 +509,37 @@ func primitiveToGo(typ string) string {
 		return "int64"
 	case "float":
 		return "float64"
-	case "bool":
+	case "bool", "true", "false":
 		return "bool"
-	case "null", "unknown":
+	case "null", "unknown", "empty", "undefined":
 		return "any"
 	default:
+		// Sample format: quoted strings → string, numbers → numeric type.
+		if len(typ) > 0 && typ[0] == '"' {
+			return "string"
+		}
+		if len(typ) > 0 && (typ[0] >= '0' && typ[0] <= '9' || typ[0] == '-') {
+			if strings.ContainsAny(typ, ".eE") {
+				return "float64"
+			}
+			return "int64"
+		}
 		return typ
 	}
 }
 
 func isPrimitiveType(typ string) bool {
 	switch typ {
-	case "string", "int", "float", "bool", "null", "unknown", "any":
+	case "string", "int", "float", "bool", "null", "unknown", "any",
+		"empty", "undefined":
+		return true
+	}
+	// Sample format: quoted strings like `"pikachu"`, numbers like `25` or `3.14`,
+	// booleans `true`/`false` are leaf values, not type names.
+	if len(typ) > 0 && typ[0] == '"' {
+		return true
+	}
+	if len(typ) > 0 && (typ[0] >= '0' && typ[0] <= '9' || typ[0] == '-') {
 		return true
 	}
 	return false
@@ -534,7 +553,16 @@ func makePointer(typ string) string {
 }
 
 func cleanTypeName(typ string) string {
-	return strings.TrimSuffix(typ, "?")
+	typ = strings.TrimSuffix(typ, "?")
+	// Strip sample data from type intros like "Root:{...}" → "Root".
+	if idx := strings.Index(typ, ":"); idx > 0 {
+		candidate := typ[:idx]
+		// A type name starts with uppercase.
+		if len(candidate) > 0 && candidate[0] >= 'A' && candidate[0] <= 'Z' {
+			return candidate
+		}
+	}
+	return typ
 }
 
 func sortGoFields(fields []goField) {

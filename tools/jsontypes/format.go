@@ -42,9 +42,9 @@ func parsePath(path string) []segment {
 			i = i + end + 1
 		}
 
-		// Type: read {Type}
+		// Type: read {Type} (handling nested braces in sample data)
 		if i < len(path) && path[i] == '{' {
-			end := strings.IndexByte(path[i:], '}')
+			end := findMatchingBrace(path[i:])
 			if end < 0 {
 				break
 			}
@@ -288,6 +288,24 @@ func buildBareWithParent(segs []segment, parentIdx int) string {
 		}
 	}
 	return buf.String()
+}
+
+// findMatchingBrace returns the index of the closing '}' that matches the
+// opening '{' at s[0], respecting nested braces. Returns -1 if not found.
+func findMatchingBrace(s string) int {
+	depth := 0
+	for i, c := range s {
+		switch c {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // buildBare builds a path string without any type annotations, for sorting.
