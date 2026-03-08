@@ -1,4 +1,15 @@
-// monorel: Monorepo Release Tool
+// monorel - Monorepo Release Tool
+//
+// Copyright 2026 AJ ONeal <aj@therootcompany.com>
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// This Source Code Form is "Incompatible With Secondary Licenses", as
+// defined by the Mozilla Public License, v. 2.0.
+//
+// SPDX-License-Identifier: MPL-2.0
 //
 // Pass any number of paths to Go main packages. monorel walks up from each
 // path to find its go.mod (stopping at .git so it never crosses the repo
