@@ -59,7 +59,7 @@ func (w *rawWalker) walk(prefix string, v any) {
 
 func (w *rawWalker) walkObject(prefix string, obj map[string]any) {
 	if len(obj) == 0 {
-		w.emit(prefix + "{any}")
+		w.emit(prefix + "{empty}")
 		return
 	}
 
@@ -110,7 +110,7 @@ func (w *rawWalker) walkStruct(prefix string, instances []map[string]any) {
 
 func (w *rawWalker) walkArray(prefix string, arr []any) {
 	if len(arr) == 0 {
-		w.emit(prefix + "[]{any}")
+		w.emit(prefix + "[]{empty}")
 		return
 	}
 
@@ -214,7 +214,7 @@ func (w *rawWalker) walkCollection(prefix string, values []any) {
 
 	// If nothing was emitted (all nils, empty), emit any.
 	if !hasNull && len(shapes) == 0 && len(nonObjects) == 0 {
-		w.emit(prefix + "{any}")
+		w.emit(prefix + "{empty}")
 	}
 }
 
