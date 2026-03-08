@@ -140,11 +140,7 @@ func analyzeAndFormat(t *testing.T, jsonStr string) []string {
 	if err := dec.Decode(&data); err != nil {
 		t.Fatalf("invalid test JSON: %v", err)
 	}
-	a, err := NewAnalyzer(false, true, false)
-	if err != nil {
-		t.Fatalf("NewAnalyzer: %v", err)
-	}
-	defer a.Close()
+	a := New(AnalyzerConfig{})
 	rawPaths := a.Analyze(".", data)
 	return FormatPaths(rawPaths)
 }

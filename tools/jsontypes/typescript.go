@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// generateTypeScript converts formatted flat paths into TypeScript interface definitions.
+// GenerateTypeScript converts formatted flat paths into TypeScript interface definitions.
 func GenerateTypeScript(paths []string) string {
 	types, _ := buildGoTypes(paths)
 	if len(types) == 0 {

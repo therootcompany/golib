@@ -49,7 +49,7 @@ func (u *goUnion) wrapperTypeName() string {
 	return u.name
 }
 
-// generateGoStructs converts formatted flat paths into Go struct definitions
+// GenerateGoStructs converts formatted flat paths into Go struct definitions
 // with json tags. When multiple types share an array/map position, it generates
 // a sealed interface, discriminator function, and wrapper type.
 func GenerateGoStructs(paths []string) string {

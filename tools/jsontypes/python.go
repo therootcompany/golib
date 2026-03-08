@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// generatePython converts formatted flat paths into Python TypedDict definitions.
+// GeneratePython converts formatted flat paths into Python TypedDict definitions.
 func GeneratePython(paths []string) string {
 	types, _ := buildGoTypes(paths)
 	if len(types) == 0 {

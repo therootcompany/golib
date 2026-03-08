@@ -1,8 +1,6 @@
 package jsontypes
 
 import (
-	"bufio"
-	"io"
 	"strings"
 	"testing"
 )
@@ -132,18 +130,15 @@ func TestDifferentTypesEndToEnd(t *testing.T) {
 	}
 	obj := map[string]any{"items": arr, "count": jsonNum("4"), "status": "ok"}
 
-	a := &Analyzer{
-		Prompter: &Prompter{
-			reader:       bufio.NewReader(strings.NewReader("")),
-			output:       io.Discard,
-			// Root has 3 field-like keys → confident struct, no prompt needed.
-			// Then items[] has 2 shapes → unification prompt: "d" for different,
-			// then names for each shape.
-			priorAnswers: []string{"d", "FileField", "FeatureField"},
-		},
-		knownTypes:  make(map[string]*structType),
-		typesByName: make(map[string]*structType),
-	}
+	a := New(AnalyzerConfig{
+		// Root has 3 field-like keys → confident struct, no resolver call needed.
+		// Then items[] has 2 shapes → unification: different types, then names.
+		Resolver: scriptedResolver(
+			Response{IsNewType: true},      // different types for shapes
+			Response{Name: "FileField"},    // name for shape 1
+			Response{Name: "FeatureField"}, // name for shape 2
+		),
+	})
 	rawPaths := a.Analyze(".", obj)
 	formatted := FormatPaths(rawPaths)
 

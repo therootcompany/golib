@@ -1,28 +1,39 @@
 package jsontypes
 
 import (
-	"bufio"
 	"encoding/json"
-	"io"
-	"os"
 	"sort"
 	"strings"
 	"testing"
 )
 
-// testAnalyzer creates an analyzer in anonymous mode (no prompts).
+// testAnalyzer creates an analyzer in autonomous mode (no resolver).
 func testAnalyzer(t *testing.T) *Analyzer {
 	t.Helper()
-	a := &Analyzer{
-		Prompter: &Prompter{
-			reader: nil,
-			output: os.Stderr,
-		},
-		anonymous:   true,
-		knownTypes:  make(map[string]*structType),
-		typesByName: make(map[string]*structType),
+	return New(AnalyzerConfig{})
+}
+
+// scriptedResolver creates a Resolver that returns responses in order.
+// After all responses are consumed, it accepts defaults.
+func scriptedResolver(responses ...Response) Resolver {
+	i := 0
+	return func(d *Decision) error {
+		if i >= len(responses) {
+			d.Response = d.Default
+			return nil
+		}
+		d.Response = responses[i]
+		i++
+		return nil
 	}
-	return a
+}
+
+// testInteractiveAnalyzer creates an analyzer with scripted responses.
+func testInteractiveAnalyzer(t *testing.T, responses ...Response) *Analyzer {
+	t.Helper()
+	return New(AnalyzerConfig{
+		Resolver: scriptedResolver(responses...),
+	})
 }
 
 func sortPaths(paths []string) []string {
@@ -36,14 +47,13 @@ func TestAnalyzePrimitive(t *testing.T) {
 	a := testAnalyzer(t)
 	tests := []struct {
 		name string
-		json string
 		want string
 	}{
-		{"null", "", ".{null}"},
-		{"bool", "", ".{bool}"},
-		{"int", "", ".{int}"},
-		{"float", "", ".{float}"},
-		{"string", "", ".{string}"},
+		{"null", ".{null}"},
+		{"bool", ".{bool}"},
+		{"int", ".{int}"},
+		{"float", ".{float}"},
+		{"string", ".{string}"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -427,15 +437,19 @@ func TestAnalyzeFullSample(t *testing.T) {
 	assertPaths(t, paths, want)
 }
 
-// TestDifferentTypesPromptsForNames verifies that when the user chooses
-// "different" for multiple shapes at the same path:
-// 1. They are prompted to name each shape group
-// 2. All names are collected BEFORE recursing into children
-// 3. The named types appear in the final output
-func TestDifferentTypesPromptsForNames(t *testing.T) {
-	// Simulate: a Room has items[] containing two distinct shapes, each with
-	// a nested "meta" object. Names should be asked for both shapes before
-	// the meta objects are analyzed.
+// TestDifferentTypesViaResolver verifies that when the resolver returns
+// IsNewType=true for multiple shapes at the same path:
+// 1. Shape names are requested via DecideShapeName
+// 2. The named types appear in the final output
+func TestDifferentTypesViaResolver(t *testing.T) {
+	a := New(AnalyzerConfig{
+		Resolver: scriptedResolver(
+			Response{IsNewType: true},       // different types for shapes
+			Response{Name: "FileField"},     // name for shape 1
+			Response{Name: "FeatureField"},  // name for shape 2
+		),
+	})
+
 	arr := []any{
 		// Shape 1: has "filename" and "is_required"
 		map[string]any{"slug": "a", "filename": "x.pdf", "is_required": true,
@@ -449,19 +463,8 @@ func TestDifferentTypesPromptsForNames(t *testing.T) {
 			"meta": map[string]any{"version": jsonNum("2")}},
 	}
 
-	var output strings.Builder
-	a := &Analyzer{
-		Prompter: &Prompter{
-			reader:       bufio.NewReader(strings.NewReader("")),
-			output:       &output,
-			priorAnswers: []string{"d", "FileField", "FeatureField"},
-		},
-		knownTypes:  make(map[string]*structType),
-		typesByName: make(map[string]*structType),
-	}
 	paths := sortPaths(a.Analyze(".{Room}.items[]", arr))
 
-	// Verify both named types appear in the paths
 	hasFileField := false
 	hasFeatureField := false
 	for _, p := range paths {
@@ -477,17 +480,6 @@ func TestDifferentTypesPromptsForNames(t *testing.T) {
 	}
 	if !hasFeatureField {
 		t.Errorf("expected {FeatureField} type in paths:\n  %s", strings.Join(paths, "\n  "))
-	}
-
-	// Verify that both "Name for shape" prompts appear before any deeper prompts
-	out := output.String()
-	name1Idx := strings.Index(out, "Name for shape 1?")
-	name2Idx := strings.Index(out, "Name for shape 2?")
-	if name1Idx < 0 || name2Idx < 0 {
-		t.Fatalf("expected both shape name prompts in output:\n%s", out)
-	}
-	if name1Idx > name2Idx {
-		t.Errorf("shape 1 name prompt should appear before shape 2")
 	}
 
 	// Verify the formatted output includes these types
@@ -510,109 +502,64 @@ func TestDifferentTypesPromptsForNames(t *testing.T) {
 	}
 }
 
-// TestCombinedPromptShowsTypeName verifies the default-mode prompt shows
-// [Root/m] (inferred name + map option), not [s/m] or [S/m].
-func TestCombinedPromptShowsTypeName(t *testing.T) {
-	var output strings.Builder
-	a := &Analyzer{
-		Prompter: &Prompter{
-			reader:       bufio.NewReader(strings.NewReader("")),
-			output:       &output,
-			priorAnswers: []string{"Root"}, // accept default
+// TestDecideMapOrStructDefault verifies that the library sends
+// the inferred type name as the default in DecideMapOrStruct decisions.
+func TestDecideMapOrStructDefault(t *testing.T) {
+	var captured *Decision
+	a := New(AnalyzerConfig{
+		Resolver: func(d *Decision) error {
+			if d.Kind == DecideMapOrStruct && captured == nil {
+				cp := *d
+				captured = &cp
+			}
+			d.Response = d.Default
+			return nil
 		},
-		knownTypes:  make(map[string]*structType),
-		typesByName: make(map[string]*structType),
-	}
-
-	obj := map[string]any{
-		"errors": []any{},
-		"rooms":  []any{map[string]any{"name": "foo"}},
-	}
-	a.Analyze(".", obj)
-
-	out := output.String()
-	if !strings.Contains(out, "[Root/m]") {
-		t.Errorf("expected prompt to contain [Root/m], got output:\n%s", out)
-	}
-}
-
-// TestCombinedPromptIgnoresOldPriorAnswer verifies that prior answers like
-// "s" from old answer files don't corrupt the prompt default.
-func TestCombinedPromptIgnoresOldPriorAnswer(t *testing.T) {
-	var output strings.Builder
-	a := &Analyzer{
-		Prompter: &Prompter{
-			reader:       bufio.NewReader(strings.NewReader("")),
-			output:       &output,
-			priorAnswers: []string{"s"}, // old-style answer
-		},
-		knownTypes:  make(map[string]*structType),
-		typesByName: make(map[string]*structType),
-	}
-
-	obj := map[string]any{
-		"errors": []any{},
-		"rooms":  []any{map[string]any{"name": "foo"}},
-	}
-	a.Analyze(".", obj)
-
-	out := output.String()
-	if strings.Contains(out, "[s/m]") {
-		t.Errorf("old prior answer 's' should not appear in prompt, got output:\n%s", out)
-	}
-	if !strings.Contains(out, "[Root/m]") {
-		t.Errorf("expected prompt to contain [Root/m], got output:\n%s", out)
-	}
-}
-
-// TestOldAnswerFileDoesNotDesync verifies that an old-format answer "s" for
-// map/struct is consumed (not skipped), so subsequent answers stay in sync.
-func TestOldAnswerFileDoesNotDesync(t *testing.T) {
-	// Prior answers: "s" (old struct answer for root), then "s" (same type
-	// for a shape unification prompt). The "s" at position 0 should be consumed
-	// by askMapOrName (treated as "accept default"), and "s" at position 1
-	// should be consumed by the ask() for same/different.
-	a := testInteractiveAnalyzer(t, []string{
-		"s",  // old-format: accept struct default → Root
-		"s",  // same type for shapes
 	})
 
-	// An array with two shapes that will trigger unification prompt
-	arr := []any{
-		map[string]any{"name": "Alice", "x": jsonNum("1")},
-		map[string]any{"name": "Bob", "y": jsonNum("2")},
+	obj := map[string]any{
+		"errors": []any{},
+		"rooms":  []any{map[string]any{"name": "foo"}},
 	}
-	obj := map[string]any{"items": arr}
-	paths := sortPaths(a.Analyze(".", obj))
+	a.Analyze(".", obj)
 
-	// Should have Root type (from "s" → accept default) and Item type
-	// unified as same type (from "s" → same)
-	hasRoot := false
-	for _, p := range paths {
-		if strings.Contains(p, "{Root}") {
-			hasRoot = true
-			break
-		}
+	if captured == nil {
+		t.Fatal("expected DecideMapOrStruct decision")
 	}
-	if !hasRoot {
-		t.Errorf("expected {Root} type (old 's' should accept default), got:\n  %s",
-			strings.Join(paths, "\n  "))
+	if captured.Default.Name != "Root" {
+		t.Errorf("expected default name %q, got %q", "Root", captured.Default.Name)
 	}
 }
 
 // TestDefaultDifferentWhenUniqueFieldsDominate verifies that when shapes share
 // only ubiquitous fields (slug, name, etc.) and have many unique fields, the
-// prompt defaults to "d" (different) instead of "s" (same).
+// default response suggests different types (IsNewType=true).
 func TestDefaultDifferentWhenUniqueFieldsDominate(t *testing.T) {
-	// Two shapes sharing only "slug" (ubiquitous) with 2+ unique fields each.
-	// With no prior answer for same/different, the default should be "d".
-	// Then we need type names for each shape.
-	// Shape ordering is insertion order: shape 1 = filename,is_required,slug; shape 2 = archived,feature,slug
-	a := testInteractiveAnalyzer(t, []string{
-		"Root",         // root object has 1 key → not confident, prompts for struct/map
-		"d",            // accept default (should be "d" because unique >> meaningful shared)
-		"FileField",    // name for shape 1 (filename, is_required, slug)
-		"FeatureField", // name for shape 2 (archived, feature, slug)
+	var unifyDecision *Decision
+	a := New(AnalyzerConfig{
+		Resolver: func(d *Decision) error {
+			if d.Kind == DecideUnifyShapes && unifyDecision == nil {
+				cp := *d
+				unifyDecision = &cp
+			}
+			// For shape unification, accept the default; for other decisions
+			// provide the expected responses.
+			switch d.Kind {
+			case DecideMapOrStruct:
+				d.Response = Response{Name: "Root"}
+			case DecideUnifyShapes:
+				d.Response = d.Default
+			case DecideShapeName:
+				if d.ShapeIndex == 0 {
+					d.Response = Response{Name: "FileField"}
+				} else {
+					d.Response = Response{Name: "FeatureField"}
+				}
+			default:
+				d.Response = d.Default
+			}
+			return nil
+		},
 	})
 
 	arr := []any{
@@ -621,6 +568,13 @@ func TestDefaultDifferentWhenUniqueFieldsDominate(t *testing.T) {
 	}
 	obj := map[string]any{"items": arr}
 	paths := sortPaths(a.Analyze(".", obj))
+
+	if unifyDecision == nil {
+		t.Fatal("expected DecideUnifyShapes decision")
+	}
+	if !unifyDecision.Default.IsNewType {
+		t.Error("expected default IsNewType=true when unique fields dominate")
+	}
 
 	// Should have both FileField and FeatureField as separate types
 	hasFile := false
@@ -640,14 +594,23 @@ func TestDefaultDifferentWhenUniqueFieldsDominate(t *testing.T) {
 }
 
 // TestDefaultSameWhenMeaningfulFieldsShared verifies that when shapes share
-// many non-ubiquitous fields, the prompt defaults to "s" (same).
+// many non-ubiquitous fields, the default response suggests same type.
 func TestDefaultSameWhenMeaningfulFieldsShared(t *testing.T) {
-	// Two shapes sharing "email", "phone", "address" (non-ubiquitous) with
-	// only 1 unique field each. unique (2) < 2 * meaningful shared (3), so
-	// default should be "s".
-	a := testInteractiveAnalyzer(t, []string{
-		"Root", // root object has 1 key → not confident, prompts for struct/map
-		"s",    // accept default (should be "s")
+	var unifyDecision *Decision
+	a := New(AnalyzerConfig{
+		Resolver: func(d *Decision) error {
+			if d.Kind == DecideUnifyShapes && unifyDecision == nil {
+				cp := *d
+				unifyDecision = &cp
+			}
+			switch d.Kind {
+			case DecideMapOrStruct:
+				d.Response = Response{Name: "Root"}
+			default:
+				d.Response = d.Default
+			}
+			return nil
+		},
 	})
 
 	arr := []any{
@@ -657,7 +620,14 @@ func TestDefaultSameWhenMeaningfulFieldsShared(t *testing.T) {
 	obj := map[string]any{"people": arr}
 	paths := sortPaths(a.Analyze(".", obj))
 
-	// Should be unified as one type (People → singular People) with optional fields
+	if unifyDecision == nil {
+		t.Fatal("expected DecideUnifyShapes decision")
+	}
+	if unifyDecision.Default.IsNewType {
+		t.Error("expected default IsNewType=false when meaningful fields are shared")
+	}
+
+	// Should be unified as one type with optional fields
 	typeCount := 0
 	for _, p := range paths {
 		if strings.Contains(p, "{People}") {
@@ -698,21 +668,6 @@ func TestIsUbiquitousField(t *testing.T) {
 			t.Errorf("expected %q to NOT be ubiquitous", f)
 		}
 	}
-}
-
-// testInteractiveAnalyzer creates an analyzer with scripted answers (not anonymous).
-func testInteractiveAnalyzer(t *testing.T, answers []string) *Analyzer {
-	t.Helper()
-	a := &Analyzer{
-		Prompter: &Prompter{
-			reader:       bufio.NewReader(strings.NewReader("")),
-			output:       io.Discard,
-			priorAnswers: answers,
-		},
-		knownTypes:  make(map[string]*structType),
-		typesByName: make(map[string]*structType),
-	}
-	return a
 }
 
 // helpers

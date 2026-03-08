@@ -1,10 +1,8 @@
 package jsontypes
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -650,15 +648,13 @@ func TestGoStructUnionEndToEnd(t *testing.T) {
 	}
 	obj := map[string]any{"items": arr, "count": jsonNum("4"), "status": "ok"}
 
-	a := &Analyzer{
-		Prompter: &Prompter{
-			reader:       bufio.NewReader(strings.NewReader("")),
-			output:       io.Discard,
-			priorAnswers: []string{"d", "FileField", "FeatureField"},
-		},
-		knownTypes:  make(map[string]*structType),
-		typesByName: make(map[string]*structType),
-	}
+	a := New(AnalyzerConfig{
+		Resolver: scriptedResolver(
+			Response{IsNewType: true},      // different types for shapes
+			Response{Name: "FileField"},    // name for shape 1
+			Response{Name: "FeatureField"}, // name for shape 2
+		),
+	})
 	rawPaths := a.Analyze(".", obj)
 	formatted := FormatPaths(rawPaths)
 	goCode := GenerateGoStructs(formatted)

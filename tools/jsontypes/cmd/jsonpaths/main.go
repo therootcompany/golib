@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -92,6 +94,12 @@ func main() {
 
 	flag.Parse()
 
+	outFormat, err := jsontypes.ParseFormat(*format)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
 	var input io.Reader
 	var baseName string // base filename for .paths and .answers files
 	inputIsStdin := true
@@ -158,46 +166,34 @@ func main() {
 		os.Exit(1)
 	}
 
-	a, err := jsontypes.NewAnalyzer(inputIsStdin, *anonymous, *askTypes)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	var resolver jsontypes.Resolver
+	var pr *prompter
+	if !*anonymous {
+		pr, err = newPrompter(inputIsStdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		defer pr.close()
+		if baseName != "" {
+			pr.loadAnswers(baseName + ".answers")
+		}
+		resolver = newCLIResolver(pr)
 	}
-	defer a.Close()
-
-	// Load prior answers if available
-	if baseName != "" && !*anonymous {
-		a.Prompter.LoadAnswers(baseName + ".answers")
-	}
+	a := jsontypes.New(jsontypes.AnalyzerConfig{
+		Resolver: resolver,
+		AskTypes: *askTypes,
+	})
 
 	rawPaths := a.Analyze(".", data)
 	formatted := jsontypes.FormatPaths(rawPaths)
 
-	switch *format {
-	case "go":
-		fmt.Print(jsontypes.GenerateGoStructs(formatted))
-	case "json-typedef":
-		fmt.Print(jsontypes.GenerateTypedef(formatted))
-	case "json-schema":
-		fmt.Print(jsontypes.GenerateJSONSchema(formatted))
-	case "typescript", "ts":
-		fmt.Print(jsontypes.GenerateTypeScript(formatted))
-	case "jsdoc":
-		fmt.Print(jsontypes.GenerateJSDoc(formatted))
-	case "zod":
-		fmt.Print(jsontypes.GenerateZod(formatted))
-	case "python", "py":
-		fmt.Print(jsontypes.GeneratePython(formatted))
-	case "sql":
-		fmt.Print(jsontypes.GenerateSQL(formatted))
-	case "json-paths", "paths", "":
-		for _, p := range formatted {
-			fmt.Println(p)
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "error: unknown format %q (use: json-paths, go, json-schema, json-typedef, typescript, jsdoc, zod, python, sql)\n", *format)
+	out, err := jsontypes.Generate(outFormat, formatted)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Print(out)
 
 	// Save outputs
 	if baseName != "" {
@@ -206,9 +202,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", pathsFile, err)
 		}
 
-		if !*anonymous {
+		if !*anonymous && pr != nil {
 			answersFile := baseName + ".answers"
-			if err := a.Prompter.SaveAnswers(answersFile); err != nil {
+			if err := pr.saveAnswers(answersFile); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", answersFile, err)
 			}
 		}
@@ -291,8 +287,9 @@ func isSensitiveParam(name string) bool {
 }
 
 func fetchOrCache(rawURL string, timeout time.Duration, noCache bool, extraHeaders http.Header) (io.ReadCloser, error) {
+	path := slugify(rawURL)
+
 	if !noCache {
-		path := slugify(rawURL)
 		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
 			f, err := os.Open(path)
 			if err == nil {
@@ -311,7 +308,6 @@ func fetchOrCache(rawURL string, timeout time.Duration, noCache bool, extraHeade
 		return body, nil
 	}
 
-	path := slugify(rawURL)
 	data, err := io.ReadAll(body)
 	body.Close()
 	if err != nil {
@@ -324,7 +320,7 @@ func fetchOrCache(rawURL string, timeout time.Duration, noCache bool, extraHeade
 		fmt.Fprintf(os.Stderr, "cached to ./%s\n", path)
 	}
 
-	return io.NopCloser(strings.NewReader(string(data))), nil
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 func fetchURL(url string, timeout time.Duration, extraHeaders http.Header) (io.ReadCloser, error) {
@@ -391,7 +387,8 @@ func fetchURL(url string, timeout time.Duration, extraHeaders http.Header) (io.R
 }
 
 func isTimeout(err error) bool {
-	if netErr, ok := err.(net.Error); ok {
+	var netErr net.Error
+	if errors.As(err, &netErr) {
 		return netErr.Timeout()
 	}
 	return strings.Contains(err.Error(), "deadline exceeded") ||

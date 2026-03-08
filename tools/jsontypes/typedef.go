@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// generateTypedef converts formatted flat paths into a JSON Typedef (RFC 8927) document.
+// GenerateTypedef converts formatted flat paths into a JSON Typedef (RFC 8927) document.
 func GenerateTypedef(paths []string) string {
 	types, _ := buildGoTypes(paths)
 
@@ -92,6 +92,7 @@ func goTypeToJTDInner(goTyp string, typeMap map[string]goType, defs map[string]a
 	case "string":
 		return map[string]any{"type": "string"}
 	case "int64":
+		// JTD (RFC 8927) has no int64 type; int32 is the largest integer type available.
 		return map[string]any{"type": "int32"}
 	case "float64":
 		return map[string]any{"type": "float64"}
