@@ -166,9 +166,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	var resolver jsontypes.Resolver
+	var formatted []string
 	var pr *prompter
-	if !*anonymous {
+	if *anonymous {
+		// Pipeline mode: RawPaths → Coalesce → Generate (deterministic, no prompts).
+		raw := jsontypes.RawPaths(data)
+		formatted = jsontypes.Coalesce(raw)
+	} else {
+		// Interactive mode: use legacy analyzer with resolver.
 		pr, err = newPrompter(inputIsStdin)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -178,15 +183,14 @@ func main() {
 		if baseName != "" {
 			pr.loadAnswers(baseName + ".answers")
 		}
-		resolver = newCLIResolver(pr)
+		resolver := newCLIResolver(pr)
+		a := jsontypes.New(jsontypes.AnalyzerConfig{
+			Resolver: resolver,
+			AskTypes: *askTypes,
+		})
+		rawPaths := a.Analyze(".", data)
+		formatted = jsontypes.FormatPaths(rawPaths)
 	}
-	a := jsontypes.New(jsontypes.AnalyzerConfig{
-		Resolver: resolver,
-		AskTypes: *askTypes,
-	})
-
-	rawPaths := a.Analyze(".", data)
-	formatted := jsontypes.FormatPaths(rawPaths)
 
 	out, err := jsontypes.Generate(outFormat, formatted)
 	if err != nil {
@@ -202,7 +206,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", pathsFile, err)
 		}
 
-		if !*anonymous && pr != nil {
+		if pr != nil {
 			answersFile := baseName + ".answers"
 			if err := pr.saveAnswers(answersFile); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", answersFile, err)
