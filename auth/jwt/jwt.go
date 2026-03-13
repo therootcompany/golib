@@ -9,11 +9,11 @@
 // Package jwt is a lightweight JWT/JWS/JWK library designed from first
 // principles:
 //
-//   - [Issuer] is immutable — constructed with a fixed key set, safe for concurrent use.
-//   - [Signer] manages private keys and returns [*Issuer] for verification.
-//   - [JWKsFetcher] lazily fetches and caches JWKS keys, returning a fresh [*Issuer] on demand.
+//   - [Verifier] is immutable — constructed with a fixed key set, safe for concurrent use.
+//   - [Signer] manages private keys and returns [*Verifier] for verification.
+//   - [KeyFetcher] lazily fetches and caches JWKS keys, returning a fresh [*Verifier] on demand.
 //   - [Validator] and [MultiValidator] validate standard JWT/OIDC claims.
-//   - [JWS] is a parsed structure — use [Issuer.Verify] or [Issuer.UnsafeVerify] to authenticate.
+//   - [JWS] is a parsed structure — use [Verifier.Verify] or [Verifier.UnsafeVerify] to authenticate.
 //   - [JWS.UnmarshalClaims] accepts any type — no Claims interface to implement.
 //   - [StandardClaimsSource] is satisfied for free by embedding [StandardClaims].
 //
@@ -21,7 +21,7 @@
 //
 //	// At startup:
 //	signer, err := jwt.NewSigner([]jwt.PrivateKey{{Signer: privKey}})
-//	iss := signer.Issuer()
+//	iss := signer.Verifier()
 //	v := &jwt.Validator{Iss: "https://example.com", Aud: "my-app"}
 //
 //	// Sign a token:
@@ -42,15 +42,15 @@
 //	errs, err := jwt.ValidateStandardClaims(claims.StandardClaims,
 //	    jwt.Validator{Aud: "myapp"}, time.Now())
 //
-// Typical usage with JWKsFetcher (dynamic keys from remote):
+// Typical usage with KeyFetcher (dynamic keys from remote):
 //
-//	fetcher := &jwt.JWKsFetcher{
+//	fetcher := &jwt.KeyFetcher{
 //	    URL:         "https://accounts.example.com/.well-known/jwks.json",
 //	    MaxAge:      time.Hour,
 //	    StaleAge:    time.Hour,
 //	    KeepOnError: true,
 //	}
-//	iss, err := fetcher.Issuer(ctx)
+//	iss, err := fetcher.Verifier(ctx)
 //	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, v, time.Now())
 package jwt
 
@@ -79,7 +79,7 @@ import (
 //
 // It holds only the parsed structure — header, raw base64url fields, and
 // decoded signature bytes. It carries no Claims interface and no Verified flag;
-// use [Issuer.Verify] or [Issuer.UnsafeVerify] to authenticate the token and
+// use [Verifier.Verify] or [Verifier.UnsafeVerify] to authenticate the token and
 // [JWS.UnmarshalClaims] to decode the payload into a typed struct.
 type JWS struct {
 	Protected string // base64url-encoded header
@@ -179,7 +179,7 @@ type ClaimsValidator interface {
 // Decode parses a compact JWT string (header.payload.signature) into a JWS.
 //
 // It does not unmarshal the claims payload — call [JWS.UnmarshalClaims] after
-// [Issuer.Verify] or [Issuer.UnsafeVerify] to populate a typed claims struct.
+// [Verifier.Verify] or [Verifier.UnsafeVerify] to populate a typed claims struct.
 func Decode(tokenStr string) (*JWS, error) {
 	parts := strings.Split(tokenStr, ".")
 	if len(parts) != 3 {
@@ -208,7 +208,7 @@ func Decode(tokenStr string) (*JWS, error) {
 // UnmarshalClaims decodes the JWT payload into v.
 //
 // v must be a pointer to a struct (e.g. *AppClaims). Always call
-// [Issuer.Verify] or [Issuer.UnsafeVerify] before UnmarshalClaims to ensure
+// [Verifier.Verify] or [Verifier.UnsafeVerify] before UnmarshalClaims to ensure
 // the signature is authenticated before trusting the payload.
 func (jws *JWS) UnmarshalClaims(v any) error {
 	payload, err := base64.RawURLEncoding.DecodeString(jws.Payload)
@@ -354,7 +354,7 @@ func (jws *JWS) Encode() string {
 
 // Validator holds claim validation configuration for single-tenant use.
 //
-// Configure once at startup; pass to [Issuer.VerifyAndValidate] or call
+// Configure once at startup; pass to [Verifier.VerifyAndValidate] or call
 // [Validator.Validate] directly per request.
 //
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
@@ -603,43 +603,43 @@ func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) (
 	return nil, nil
 }
 
-// Issuer holds public keys for a trusted token issuer.
+// Verifier holds public keys for a trusted token issuer.
 //
-// Issuer is immutable after construction — safe for concurrent use with no locking.
-// Use [New] to construct with a fixed key set, or use [Signer.Issuer] or
-// [JWKsFetcher.Issuer] to obtain one from a signer or remote JWKS endpoint.
-type Issuer struct {
+// Verifier is immutable after construction — safe for concurrent use with no locking.
+// Use [New] to construct with a fixed key set, or use [Signer.Verifier] or
+// [KeyFetcher.Verifier] to obtain one from a signer or remote JWKS endpoint.
+type Verifier struct {
 	pubKeys []jwk.Key
 	keys    map[string]jwk.PublicKey // kid → key
 }
 
-// New creates an Issuer with an explicit set of public keys.
+// New creates an Verifier with an explicit set of public keys.
 //
-// The returned Issuer is immutable — keys cannot be added or removed after
-// construction. For dynamic key rotation, see [JWKsFetcher].
-func New(keys []jwk.Key) *Issuer {
+// The returned Verifier is immutable — keys cannot be added or removed after
+// construction. For dynamic key rotation, see [KeyFetcher].
+func New(keys []jwk.Key) *Verifier {
 	m := make(map[string]jwk.PublicKey, len(keys))
 	for _, k := range keys {
 		m[k.KID] = k.Key
 	}
-	return &Issuer{
+	return &Verifier{
 		pubKeys: keys,
 		keys:    m,
 	}
 }
 
-// PublicKeys returns the public keys held by this Issuer.
-func (iss *Issuer) PublicKeys() []jwk.Key {
+// PublicKeys returns the public keys held by this Verifier.
+func (iss *Verifier) PublicKeys() []jwk.Key {
 	return iss.pubKeys
 }
 
-// ToJWKsJSON returns the Issuer's public keys as a [jwk.SetJSON] struct.
-func (iss *Issuer) ToJWKsJSON() (jwk.SetJSON, error) {
+// ToJWKsJSON returns the Verifier's public keys as a [jwk.SetJSON] struct.
+func (iss *Verifier) ToJWKsJSON() (jwk.SetJSON, error) {
 	return jwk.EncodeSet(iss.pubKeys)
 }
 
-// ToJWKs serializes the Issuer's public keys as a JWKS JSON document.
-func (iss *Issuer) ToJWKs() ([]byte, error) {
+// ToJWKs serializes the Verifier's public keys as a JWKS JSON document.
+func (iss *Verifier) ToJWKs() ([]byte, error) {
 	return jwk.Marshal(iss.pubKeys)
 }
 
@@ -647,8 +647,8 @@ func (iss *Issuer) ToJWKs() ([]byte, error) {
 //
 // Returns (nil, err) on any failure — the caller never receives an
 // unauthenticated JWS. For inspecting a JWS despite signature failure
-// (e.g., for multi-issuer routing by kid/iss), use [Issuer.UnsafeVerify].
-func (iss *Issuer) Verify(tokenStr string) (*JWS, error) {
+// (e.g., for multi-issuer routing by kid/iss), use [Verifier.UnsafeVerify].
+func (iss *Verifier) Verify(tokenStr string) (*JWS, error) {
 	jws, err := iss.UnsafeVerify(tokenStr)
 	if err != nil {
 		return nil, err
@@ -658,14 +658,14 @@ func (iss *Issuer) Verify(tokenStr string) (*JWS, error) {
 
 // UnsafeVerify decodes tokenStr and verifies the signature.
 //
-// Unlike [Issuer.Verify], UnsafeVerify returns the parsed [*JWS] even when
+// Unlike [Verifier.Verify], UnsafeVerify returns the parsed [*JWS] even when
 // signature verification fails — the error is non-nil but the JWS is
 // available for inspection (e.g., to read the kid or iss for multi-issuer
 // routing). Returns (nil, err) only when the token cannot be parsed at all.
 //
 // "Unsafe" means exp, aud, iss, and other claim values are NOT checked.
-// Use [Issuer.VerifyAndValidate] for full validation.
-func (iss *Issuer) UnsafeVerify(tokenStr string) (*JWS, error) {
+// Use [Verifier.VerifyAndValidate] for full validation.
+func (iss *Verifier) UnsafeVerify(tokenStr string) (*JWS, error) {
 	jws, err := Decode(tokenStr)
 	if err != nil {
 		return nil, err
@@ -698,7 +698,7 @@ func (iss *Issuer) UnsafeVerify(tokenStr string) (*JWS, error) {
 //
 //	var claims AppClaims
 //	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, v, time.Now())
-func (iss *Issuer) VerifyAndValidate(tokenStr string, claims StandardClaimsSource, v ClaimsValidator, now time.Time) (*JWS, []string, error) {
+func (iss *Verifier) VerifyAndValidate(tokenStr string, claims StandardClaimsSource, v ClaimsValidator, now time.Time) (*JWS, []string, error) {
 	jws, err := iss.Verify(tokenStr)
 	if err != nil {
 		return nil, nil, err

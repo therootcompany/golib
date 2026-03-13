@@ -96,13 +96,13 @@ func (s *Signer) Sign(claims any) (string, error) {
 	return jws.Encode(), nil
 }
 
-// Issuer returns a new [*Issuer] containing the public keys of all signing keys.
+// Verifier returns a new [*Verifier] containing the public keys of all signing keys.
 //
-// Use this to construct an Issuer for verifying tokens signed by this Signer.
+// Use this to construct an Verifier for verifying tokens signed by this Signer.
 // For key rotation, combine with old public keys:
 //
 //	iss := jwt.New(append(signer.PublicKeys(), oldKeys...))
-func (s *Signer) Issuer() *Issuer {
+func (s *Signer) Verifier() *Verifier {
 	return New(s.PublicKeys())
 }
 

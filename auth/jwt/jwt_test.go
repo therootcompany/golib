@@ -69,7 +69,7 @@ func goodClaims() AppClaims {
 }
 
 // goodValidator configures the validator with iss set to "https://example.com".
-// Iss checking is now the Validator's responsibility, not the Issuer's.
+// Iss checking is now the Validator's responsibility, not the Verifier's.
 func goodValidator() *jwt.Validator {
 	return &jwt.Validator{
 		Iss:          "https://example.com",
@@ -82,7 +82,7 @@ func goodValidator() *jwt.Validator {
 	}
 }
 
-func goodIssuer(pub jwk.Key) *jwt.Issuer {
+func goodVerifier(pub jwk.Key) *jwt.Verifier {
 	return jwt.New([]jwk.Key{pub})
 }
 
@@ -111,7 +111,7 @@ func TestRoundTrip(t *testing.T) {
 
 	token := jws.Encode()
 
-	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
+	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
 
 	var decoded AppClaims
 	jws2, errs, err := iss.VerifyAndValidate(token, &decoded, goodValidator(), time.Now())
@@ -152,7 +152,7 @@ func TestRoundTripRS256(t *testing.T) {
 
 	token := jws.Encode()
 
-	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
+	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
 
 	var decoded AppClaims
 	_, errs, err := iss.VerifyAndValidate(token, &decoded, goodValidator(), time.Now())
@@ -186,7 +186,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 
 	token := jws.Encode()
 
-	iss := goodIssuer(jwk.Key{Key: pubKeyBytes, KID: "key-1"})
+	iss := goodVerifier(jwk.Key{Key: pubKeyBytes, KID: "key-1"})
 
 	var decoded AppClaims
 	_, errs, err := iss.VerifyAndValidate(token, &decoded, goodValidator(), time.Now())
@@ -238,7 +238,7 @@ func TestUnsafeVerifyReturnsJWSOnSigFailure(t *testing.T) {
 	_, _ = jws.Sign(signingKey)
 	token := jws.Encode()
 
-	// Issuer has wrong public key — sig verification will fail.
+	// Verifier has wrong public key — sig verification will fail.
 	iss := jwt.New([]jwk.Key{{Key: &wrongKey.PublicKey, KID: "k"}})
 
 	result, err := iss.UnsafeVerify(token)
@@ -266,7 +266,7 @@ func TestCustomValidation(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
 	jws2, err := iss.UnsafeVerify(token)
 	if err != nil {
 		t.Fatalf("UnsafeVerify failed unexpectedly: %v", err)
@@ -317,8 +317,8 @@ func TestVerifyAndValidateNilValidator(t *testing.T) {
 	}
 }
 
-// TestIssuerWrongKey confirms that a different key's public key is rejected.
-func TestIssuerWrongKey(t *testing.T) {
+// TestVerifierWrongKey confirms that a different key's public key is rejected.
+func TestVerifierWrongKey(t *testing.T) {
 	signingKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
@@ -327,15 +327,15 @@ func TestIssuerWrongKey(t *testing.T) {
 	_, _ = jws.Sign(signingKey)
 	token := jws.Encode()
 
-	iss := goodIssuer(jwk.Key{Key: &wrongKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwk.Key{Key: &wrongKey.PublicKey, KID: "k"})
 
 	if _, err := iss.Verify(token); err == nil {
 		t.Fatal("expected Verify to fail with wrong key")
 	}
 }
 
-// TestIssuerUnknownKid confirms that an unknown kid is rejected.
-func TestIssuerUnknownKid(t *testing.T) {
+// TestVerifierUnknownKid confirms that an unknown kid is rejected.
+func TestVerifierUnknownKid(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
@@ -343,17 +343,17 @@ func TestIssuerUnknownKid(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "known-kid"})
+	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "known-kid"})
 
 	if _, err := iss.Verify(token); err == nil {
 		t.Fatal("expected Verify to fail for unknown kid")
 	}
 }
 
-// TestIssuerIssMismatch confirms that a token with a mismatched iss is caught
-// by the Validator, not the Issuer. Signature verification succeeds; the iss
+// TestVerifierIssMismatch confirms that a token with a mismatched iss is caught
+// by the Validator, not the Verifier. Signature verification succeeds; the iss
 // mismatch appears as a soft validation error.
-func TestIssuerIssMismatch(t *testing.T) {
+func TestVerifierIssMismatch(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
@@ -362,9 +362,9 @@ func TestIssuerIssMismatch(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
 
-	// UnsafeVerify succeeds — iss is not checked at the Issuer level.
+	// UnsafeVerify succeeds — iss is not checked at the Verifier level.
 	if _, err := iss.UnsafeVerify(token); err != nil {
 		t.Fatalf("UnsafeVerify should succeed (no iss check): %v", err)
 	}
@@ -400,7 +400,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
 
 	// Replace the protected header with one that has alg:"none".
 	// The original ES256 signature stays — the signing input will mismatch.
@@ -413,7 +413,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	}
 }
 
-// TestSignerRoundTrip verifies the Signer → Sign → Issuer → VerifyAndValidate flow.
+// TestSignerRoundTrip verifies the Signer → Sign → Verifier → VerifyAndValidate flow.
 func TestSignerRoundTrip(t *testing.T) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -431,7 +431,7 @@ func TestSignerRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iss := signer.Issuer()
+	iss := signer.Verifier()
 	var decoded AppClaims
 	_, errs, err := iss.VerifyAndValidate(tokenStr, &decoded, goodValidator(), time.Now())
 	if err != nil {
@@ -464,7 +464,7 @@ func TestSignerAutoKID(t *testing.T) {
 	}
 
 	// Token should verify with the auto-KID issuer.
-	iss := signer.Issuer()
+	iss := signer.Verifier()
 	claims := goodClaims()
 	tokenStr, _ := signer.Sign(&claims)
 
@@ -474,7 +474,7 @@ func TestSignerAutoKID(t *testing.T) {
 }
 
 // TestSignerRoundRobin verifies that signing round-robins across keys and that
-// all resulting tokens verify with the combined Issuer.
+// all resulting tokens verify with the combined Verifier.
 func TestSignerRoundRobin(t *testing.T) {
 	key1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -487,7 +487,7 @@ func TestSignerRoundRobin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iss := signer.Issuer()
+	iss := signer.Verifier()
 	v := goodValidator()
 
 	for i := range 4 {
@@ -503,8 +503,8 @@ func TestSignerRoundRobin(t *testing.T) {
 	}
 }
 
-// TestIssuerToJWKs verifies JWKS serialization and round-trip parsing.
-func TestIssuerToJWKs(t *testing.T) {
+// TestVerifierToJWKs verifies JWKS serialization and round-trip parsing.
+func TestVerifierToJWKs(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "k1", Signer: privKey}})
@@ -512,13 +512,13 @@ func TestIssuerToJWKs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iss := signer.Issuer()
+	iss := signer.Verifier()
 	jwksBytes, err := iss.ToJWKs()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Round-trip: parse the JWKS JSON and verify it produces a working Issuer.
+	// Round-trip: parse the JWKS JSON and verify it produces a working Verifier.
 	keys, err := jwk.Unmarshal(jwksBytes)
 	if err != nil {
 		t.Fatal(err)
