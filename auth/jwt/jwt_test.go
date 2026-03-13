@@ -85,9 +85,7 @@ func goodVerifier(pub jwk.Key) *jwt.Verifier {
 }
 
 // TestRoundTrip is the primary happy path using ES256.
-// It demonstrates the full VerifyAndValidate flow:
-//
-//	New → VerifyAndValidate → custom claim access
+// It demonstrates the full Verify → UnmarshalClaims → Validate flow.
 func TestRoundTrip(t *testing.T) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -111,16 +109,21 @@ func TestRoundTrip(t *testing.T) {
 
 	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
 
-	var decoded AppClaims
-	jws2, errs, err := iss.VerifyAndValidate(token, &decoded, goodValidator(), time.Now())
+	jws2, err := iss.Verify(token)
 	if err != nil {
-		t.Fatalf("VerifyAndValidate failed: %v", err)
-	}
-	if len(errs) > 0 {
-		t.Fatalf("claim validation failed: %v", errs)
+		t.Fatalf("Verify failed: %v", err)
 	}
 	if jws2.Header.Alg != "ES256" {
 		t.Errorf("expected ES256 alg in jws, got %s", jws2.Header.Alg)
+	}
+
+	var decoded AppClaims
+	if err := jws2.UnmarshalClaims(&decoded); err != nil {
+		t.Fatalf("UnmarshalClaims failed: %v", err)
+	}
+	errs, _ := goodValidator().Validate(&decoded, time.Now())
+	if len(errs) > 0 {
+		t.Fatalf("claim validation failed: %v", errs)
 	}
 	// Direct field access — no type assertion needed.
 	if decoded.Email != claims.Email {
@@ -152,11 +155,15 @@ func TestRoundTripRS256(t *testing.T) {
 
 	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
 
-	var decoded AppClaims
-	_, errs, err := iss.VerifyAndValidate(token, &decoded, goodValidator(), time.Now())
+	jws2, err := iss.Verify(token)
 	if err != nil {
-		t.Fatalf("VerifyAndValidate failed: %v", err)
+		t.Fatalf("Verify failed: %v", err)
 	}
+	var decoded AppClaims
+	if err := jws2.UnmarshalClaims(&decoded); err != nil {
+		t.Fatalf("UnmarshalClaims failed: %v", err)
+	}
+	errs, _ := goodValidator().Validate(&decoded, time.Now())
 	if len(errs) > 0 {
 		t.Fatalf("claim validation failed: %v", errs)
 	}
@@ -186,11 +193,15 @@ func TestRoundTripEdDSA(t *testing.T) {
 
 	iss := goodVerifier(jwk.Key{Key: pubKeyBytes, KID: "key-1"})
 
-	var decoded AppClaims
-	_, errs, err := iss.VerifyAndValidate(token, &decoded, goodValidator(), time.Now())
+	jws2, err := iss.Verify(token)
 	if err != nil {
-		t.Fatalf("VerifyAndValidate failed: %v", err)
+		t.Fatalf("Verify failed: %v", err)
 	}
+	var decoded AppClaims
+	if err := jws2.UnmarshalClaims(&decoded); err != nil {
+		t.Fatalf("UnmarshalClaims failed: %v", err)
+	}
+	errs, _ := goodValidator().Validate(&decoded, time.Now())
 	if len(errs) > 0 {
 		t.Fatalf("claim validation failed: %v", errs)
 	}
@@ -288,9 +299,9 @@ func TestCustomValidation(t *testing.T) {
 	}
 }
 
-// TestVerifyAndValidateNilValidator confirms that passing a nil ClaimsValidator
-// skips validation but still returns the verified JWS and unmarshalled claims.
-func TestVerifyAndValidateNilValidator(t *testing.T) {
+// TestVerifyWithoutValidation confirms that Verify + UnmarshalClaims succeeds
+// independently of claim validation — the caller decides whether to validate.
+func TestVerifyWithoutValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	c := goodClaims()
 	jws, _ := jwt.NewJWSFromClaims(&c, "k")
@@ -299,16 +310,13 @@ func TestVerifyAndValidateNilValidator(t *testing.T) {
 
 	iss := jwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
 
-	var claims AppClaims
-	jws2, errs, err := iss.VerifyAndValidate(token, &claims, nil, time.Now())
+	jws2, err := iss.Verify(token)
 	if err != nil {
-		t.Fatalf("expected success with nil validator: %v", err)
+		t.Fatalf("Verify failed: %v", err)
 	}
-	if len(errs) > 0 {
-		t.Fatalf("expected no validation errors with nil validator: %v", errs)
-	}
-	if jws2 == nil {
-		t.Fatal("expected non-nil JWS")
+	var claims AppClaims
+	if err := jws2.UnmarshalClaims(&claims); err != nil {
+		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 	if claims.Email != c.Email {
 		t.Errorf("claims not unmarshalled: email got %q, want %q", claims.Email, c.Email)
@@ -367,12 +375,16 @@ func TestVerifierIssMismatch(t *testing.T) {
 		t.Fatalf("UnsafeVerify should succeed (no iss check): %v", err)
 	}
 
-	// VerifyAndValidate with a Validator that enforces iss catches the mismatch.
-	var decoded AppClaims
-	_, errs, err := iss.VerifyAndValidate(token, &decoded, goodValidator(), time.Now())
+	// Verify + Validate: signature passes but iss validation catches the mismatch.
+	jws2, err := iss.Verify(token)
 	if err != nil {
-		t.Fatalf("unexpected hard error: %v", err)
+		t.Fatalf("unexpected hard error from Verify: %v", err)
 	}
+	var decoded AppClaims
+	if err := jws2.UnmarshalClaims(&decoded); err != nil {
+		t.Fatalf("UnmarshalClaims failed: %v", err)
+	}
+	errs, _ := goodValidator().Validate(&decoded, time.Now())
 	if len(errs) == 0 {
 		t.Fatal("expected validation errors for iss mismatch")
 	}
@@ -411,7 +423,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	}
 }
 
-// TestSignerRoundTrip verifies the Signer → Sign → Verifier → VerifyAndValidate flow.
+// TestSignerRoundTrip verifies the Signer → Sign → Verifier → Verify → Validate flow.
 func TestSignerRoundTrip(t *testing.T) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -430,11 +442,15 @@ func TestSignerRoundTrip(t *testing.T) {
 	}
 
 	iss := signer.Verifier()
-	var decoded AppClaims
-	_, errs, err := iss.VerifyAndValidate(tokenStr, &decoded, goodValidator(), time.Now())
+	jws, err := iss.Verify(tokenStr)
 	if err != nil {
-		t.Fatalf("VerifyAndValidate failed: %v", err)
+		t.Fatalf("Verify failed: %v", err)
 	}
+	var decoded AppClaims
+	if err := jws.UnmarshalClaims(&decoded); err != nil {
+		t.Fatalf("UnmarshalClaims failed: %v", err)
+	}
+	errs, _ := goodValidator().Validate(&decoded, time.Now())
 	if len(errs) > 0 {
 		t.Fatalf("claim validation failed: %v", errs)
 	}
@@ -494,9 +510,16 @@ func TestSignerRoundRobin(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Sign[%d] failed: %v", i, err)
 		}
+		jws, err := iss.Verify(tokenStr)
+		if err != nil {
+			t.Fatalf("Verify[%d] failed: %v", i, err)
+		}
 		var decoded AppClaims
-		if _, _, err := iss.VerifyAndValidate(tokenStr, &decoded, v, time.Now()); err != nil {
-			t.Fatalf("VerifyAndValidate[%d] failed: %v", i, err)
+		if err := jws.UnmarshalClaims(&decoded); err != nil {
+			t.Fatalf("UnmarshalClaims[%d] failed: %v", i, err)
+		}
+		if errs, _ := v.Validate(&decoded, time.Now()); len(errs) > 0 {
+			t.Fatalf("Validate[%d] failed: %v", i, errs)
 		}
 	}
 }

@@ -17,7 +17,12 @@
 //   - [JWS.UnmarshalClaims] accepts any type — no Claims interface to implement.
 //   - [Claims] is satisfied for free by embedding [StandardClaims].
 //
-// Typical usage with VerifyAndValidate:
+// Signature verification and claim validation are intentionally separate steps.
+// Verify authenticates the cryptographic signature; Validate checks registered
+// claim values (iss, aud, exp, etc.). This lets you route tokens by kid or iss
+// before deciding which validator to apply.
+//
+// Typical usage (configured signer/verifier):
 //
 //	// At startup:
 //	signer, err := jwt.NewSigner([]jwt.PrivateKey{{Signer: privKey}})
@@ -27,20 +32,13 @@
 //	// Sign a token:
 //	tokenStr, err := signer.Sign(claims)
 //
-//	// Per request:
+//	// Per request — verify signature, then validate claims:
+//	jws, err := iss.Verify(tokenStr)
+//	if err != nil { /* bad sig, malformed token, unknown kid */ }
 //	var claims AppClaims
-//	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, v, time.Now())
-//	if err != nil { /* hard error: bad sig, malformed token */ }
-//	if len(errs) > 0 { /* soft errors: wrong aud, expired, etc. */ }
-//
-// Typical usage with UnsafeVerify (custom validation):
-//
-//	iss := jwt.New(keys)
-//	jws, err := iss.UnsafeVerify(tokenStr)
-//	var claims AppClaims
-//	jws.UnmarshalClaims(&claims)
-//	errs, err := jwt.ValidateStandardClaims(claims.StandardClaims,
-//	    jwt.Validator{Aud: []string{"myapp"}}, time.Now())
+//	if err := jws.UnmarshalClaims(&claims); err != nil { /* bad JSON */ }
+//	errs, _ := v.Validate(&claims, time.Now())
+//	if len(errs) > 0 { /* wrong aud, expired, etc. */ }
 //
 // Typical usage with KeyFetcher (dynamic keys from remote):
 //
@@ -51,7 +49,20 @@
 //	    KeepOnError: true,
 //	}
 //	iss, err := fetcher.Verifier(ctx)
-//	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, v, time.Now())
+//	jws, err := iss.Verify(tokenStr)
+//	if err != nil { /* bad sig, malformed token, unknown kid */ }
+//	var claims AppClaims
+//	if err := jws.UnmarshalClaims(&claims); err != nil { /* bad JSON */ }
+//	errs, _ := v.Validate(&claims, time.Now())
+//	if len(errs) > 0 { /* wrong aud, expired, etc. */ }
+//
+// Custom validation (UnsafeVerify for multi-issuer routing):
+//
+//	jws, err := iss.UnsafeVerify(tokenStr) // returns JWS even on sig failure
+//	var claims AppClaims
+//	jws.UnmarshalClaims(&claims)
+//	errs, _ := jwt.ValidateStandardClaims(claims.StandardClaims,
+//	    jwt.Validator{Aud: []string{"myapp"}}, time.Now())
 package jwt
 
 import (
@@ -168,12 +179,6 @@ func (sc StandardClaims) GetStandardClaims() StandardClaims { return sc }
 //	}
 type Claims interface {
 	GetStandardClaims() StandardClaims
-}
-
-// ClaimsValidator validates the standard JWT/OIDC claims in a token.
-// Implemented by [*Validator].
-type ClaimsValidator interface {
-	Validate(claims Claims, now time.Time) ([]string, error)
 }
 
 // Decode parses a compact JWT string (header.payload.signature) into a JWS.
@@ -352,10 +357,10 @@ func (jws *JWS) Encode() string {
 	return jws.Protected + "." + jws.Payload + "." + base64.RawURLEncoding.EncodeToString(jws.Signature)
 }
 
-// DefaultClockSkew is the tolerance applied to exp, iat, and auth_time checks
-// when Validator.ClockSkew is zero. It covers common sub-second clock drift
+// DefaultMaxClockSkew is the tolerance applied to exp, iat, and auth_time checks
+// when Validator.MaxClockSkew is zero. It covers common sub-second clock drift
 // between distributed systems.
-const DefaultClockSkew = 5 * time.Second
+const DefaultMaxClockSkew = 5 * time.Second
 
 // Validator holds claim validation configuration.
 //
@@ -365,8 +370,8 @@ const DefaultClockSkew = 5 * time.Second
 // must be non-empty, but its value is not matched (those are per-token and
 // per-user; value matching must be done by the application).
 //
-// ClockSkew is applied to exp, iat, and auth_time to tolerate minor clock
-// differences between systems. If zero, [DefaultClockSkew] (5s) is used.
+// MaxClockSkew is applied to exp, iat, and auth_time to tolerate minor clock
+// differences between systems. If zero, [DefaultMaxClockSkew] (5s) is used.
 // Set to a negative value (e.g. -1) to disable skew tolerance entirely.
 //
 // Pass to [Verifier.VerifyAndValidate] or call [Validator.Validate] directly.
@@ -382,7 +387,7 @@ type Validator struct {
 	IgnoreIat      bool
 	IgnoreJti      bool          // if false, jti must be present (non-empty)
 	IgnoreAuthTime bool
-	ClockSkew      time.Duration // tolerance for exp/iat/auth_time; 0 = DefaultClockSkew (5s); negative = no tolerance
+	MaxClockSkew      time.Duration // tolerance for exp/iat/auth_time; 0 = DefaultMaxClockSkew (5s); negative = no tolerance
 	MaxAge         time.Duration
 	IgnoreNonce    bool
 	Nonce          string        // if set, token's nonce must match exactly
@@ -392,7 +397,7 @@ type Validator struct {
 	Azp            []string      // token's azp must appear in list (if set)
 }
 
-// Validate implements [ClaimsValidator].
+// Validate checks the standard JWT/OIDC claims and returns soft errors.
 func (v *Validator) Validate(claims Claims, now time.Time) ([]string, error) {
 	return ValidateStandardClaims(claims.GetStandardClaims(), *v, now)
 }
@@ -405,9 +410,9 @@ func (v *Validator) Validate(claims Claims, now time.Time) ([]string, error) {
 func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) ([]string, error) {
 	var errs []string
 
-	skew := v.ClockSkew
+	skew := v.MaxClockSkew
 	if skew == 0 {
-		skew = DefaultClockSkew
+		skew = DefaultMaxClockSkew
 	} else if skew < 0 {
 		skew = 0
 	}
@@ -560,8 +565,17 @@ func (iss *Verifier) ToJWKs() ([]byte, error) {
 // Verify decodes tokenStr and verifies its signature.
 //
 // Returns (nil, err) on any failure — the caller never receives an
-// unauthenticated JWS. For inspecting a JWS despite signature failure
-// (e.g., for multi-issuer routing by kid/iss), use [Verifier.UnsafeVerify].
+// unauthenticated JWS. Claim values (iss, aud, exp, etc.) are NOT checked;
+// call [Validator.Validate] on the unmarshalled claims after Verify:
+//
+//	jws, err := iss.Verify(tokenStr)
+//	if err != nil { /* bad sig, malformed token, unknown kid */ }
+//	var claims AppClaims
+//	if err := jws.UnmarshalClaims(&claims); err != nil { /* ... */ }
+//	errs, _ := v.Validate(&claims, time.Now())
+//
+// For inspecting a JWS despite signature failure (e.g., multi-issuer routing
+// by kid/iss), use [Verifier.UnsafeVerify].
 func (iss *Verifier) Verify(tokenStr string) (*JWS, error) {
 	jws, err := iss.UnsafeVerify(tokenStr)
 	if err != nil {
@@ -577,8 +591,14 @@ func (iss *Verifier) Verify(tokenStr string) (*JWS, error) {
 // available for inspection (e.g., to read the kid or iss for multi-issuer
 // routing). Returns (nil, err) only when the token cannot be parsed at all.
 //
-// "Unsafe" means exp, aud, iss, and other claim values are NOT checked.
-// Use [Verifier.VerifyAndValidate] for full validation.
+// Claim values (iss, aud, exp, etc.) are NOT checked — call
+// [Validator.Validate] on the unmarshalled claims after verifying:
+//
+//	jws, err := iss.UnsafeVerify(tokenStr)
+//	// inspect jws.Header.Kid or jws.Header.Alg for routing even on err
+//	var claims AppClaims
+//	jws.UnmarshalClaims(&claims)
+//	errs, _ := v.Validate(&claims, time.Now())
 func (iss *Verifier) UnsafeVerify(tokenStr string) (*JWS, error) {
 	jws, err := Decode(tokenStr)
 	if err != nil {
@@ -599,35 +619,6 @@ func (iss *Verifier) UnsafeVerify(tokenStr string) (*JWS, error) {
 	}
 
 	return jws, nil
-}
-
-// VerifyAndValidate verifies the token signature, unmarshals the claims
-// into claims, and runs v.
-//
-// Returns a hard error (err != nil) for signature failures and decoding errors.
-// Returns soft errors (errs != nil) for claim validation failures (wrong aud,
-// expired token, etc.). If v is nil, claims are unmarshalled but not validated.
-//
-// claims must be a pointer whose underlying type embeds [StandardClaims]:
-//
-//	var claims AppClaims
-//	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, v, time.Now())
-func (iss *Verifier) VerifyAndValidate(tokenStr string, claims Claims, v ClaimsValidator, now time.Time) (*JWS, []string, error) {
-	jws, err := iss.Verify(tokenStr)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if err := jws.UnmarshalClaims(claims); err != nil {
-		return nil, nil, err
-	}
-
-	if v == nil {
-		return jws, nil, nil
-	}
-
-	errs, _ := v.Validate(claims, now) // discard sentinel; callers check len(errs) > 0
-	return jws, errs, nil
 }
 
 // verifyWith checks a JWS signature using the given algorithm and public key.
