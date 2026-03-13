@@ -15,6 +15,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -655,8 +656,8 @@ func TestSignerRoundRobin(t *testing.T) {
 	}
 }
 
-// TestVerifierToJWKs verifies JWKS serialization and round-trip parsing.
-func TestVerifierToJWKs(t *testing.T) {
+// TestJWKsRoundTrip verifies JWKS serialization and round-trip parsing.
+func TestJWKsRoundTrip(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "k1", Signer: privKey}})
@@ -664,8 +665,7 @@ func TestVerifierToJWKs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iss := signer.Verifier()
-	jwksBytes, err := iss.ToJWKs()
+	jwksBytes, err := json.Marshal(jwk.JWKs{Keys: signer.PublicKeys()})
 	if err != nil {
 		t.Fatal(err)
 	}

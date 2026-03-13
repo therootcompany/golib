@@ -694,13 +694,12 @@ func New(keys []jwk.PublicKey) *Verifier {
 }
 
 // PublicKeys returns the public keys held by this Verifier.
+//
+// To serialize as a JWKS JSON document:
+//
+//	json.Marshal(jwk.JWKs{Keys: verifier.PublicKeys()})
 func (iss *Verifier) PublicKeys() []jwk.PublicKey {
 	return iss.pubKeys
-}
-
-// ToJWKs serializes the Verifier's public keys as a JWKS JSON document.
-func (iss *Verifier) ToJWKs() ([]byte, error) {
-	return json.Marshal(jwk.JWKs{Keys: iss.pubKeys})
 }
 
 // Verify checks the signature of an already-decoded [JWS].

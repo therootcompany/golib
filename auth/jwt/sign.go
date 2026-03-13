@@ -9,7 +9,6 @@
 package jwt
 
 import (
-	"encoding/json"
 	"fmt"
 	"sync/atomic"
 
@@ -115,13 +114,12 @@ func (s *Signer) Verifier() *Verifier {
 	return New(s.PublicKeys())
 }
 
-// ToJWKs serializes the Signer's public keys as a JWKS JSON document.
-func (s *Signer) ToJWKs() ([]byte, error) {
-	return json.Marshal(jwk.JWKs{Keys: s.PublicKeys()})
-}
-
 // PublicKeys returns the public-key side of each signing key, in the same order
 // as the keys were provided to [NewSigner].
+//
+// To serialize as a JWKS JSON document:
+//
+//	json.Marshal(jwk.JWKs{Keys: signer.PublicKeys()})
 func (s *Signer) PublicKeys() []jwk.PublicKey {
 	keys := make([]jwk.PublicKey, len(s.keys))
 	for i, k := range s.keys {
