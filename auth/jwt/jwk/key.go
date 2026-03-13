@@ -48,9 +48,11 @@ type CryptoPublicKey interface {
 // [Key.ECDSA], [Key.RSA], and [Key.EdDSA] to assert the underlying type
 // without a raw type switch.
 type Key struct {
-	Key CryptoPublicKey
-	KID string
-	Use string
+	Key    CryptoPublicKey
+	KID    string
+	Use    string
+	Alg    string
+	KeyOps []string
 }
 
 // ECDSA returns the key as *ecdsa.PublicKey if it is one, else (nil, false).
@@ -101,11 +103,11 @@ func (k Key) Thumbprint() (string, error) {
 
 	switch key := k.Key.(type) {
 	case *ecdsa.PublicKey:
+		b, err := key.Bytes() // uncompressed: 0x04 || X || Y
+		if err != nil {
+			return "", fmt.Errorf("Thumbprint: encode EC key: %w", err)
+		}
 		byteLen := (key.Curve.Params().BitSize + 7) / 8
-		xBytes := make([]byte, byteLen)
-		yBytes := make([]byte, byteLen)
-		key.X.FillBytes(xBytes)
-		key.Y.FillBytes(yBytes)
 
 		var crv string
 		switch key.Curve {
@@ -128,8 +130,8 @@ func (k Key) Thumbprint() (string, error) {
 		}{
 			Crv: crv,
 			Kty: "EC",
-			X:   base64.RawURLEncoding.EncodeToString(xBytes),
-			Y:   base64.RawURLEncoding.EncodeToString(yBytes),
+			X:   base64.RawURLEncoding.EncodeToString(b[1 : 1+byteLen]),
+			Y:   base64.RawURLEncoding.EncodeToString(b[1+byteLen:]),
 		})
 
 	case *rsa.PublicKey:
@@ -171,14 +173,16 @@ func (k Key) Thumbprint() (string, error) {
 
 // PublicKey is the JSON representation of a single key in a JWKS document.
 type PublicKey struct {
-	Kty string `json:"kty"`
-	KID string `json:"kid"`
-	Crv string `json:"crv,omitempty"` // EC / OKP curve
-	X   string `json:"x,omitempty"`   // EC / OKP public key x (or Ed25519 key bytes)
-	Y   string `json:"y,omitempty"`   // EC public key y
-	N   string `json:"n,omitempty"`   // RSA modulus
-	E   string `json:"e,omitempty"`   // RSA exponent
-	Use string `json:"use,omitempty"`
+	Kty    string   `json:"kty"`
+	KID    string   `json:"kid"`
+	Crv    string   `json:"crv,omitempty"`     // EC / OKP curve
+	X      string   `json:"x,omitempty"`       // EC / OKP public key x (or Ed25519 key bytes)
+	Y      string   `json:"y,omitempty"`       // EC public key y
+	N      string   `json:"n,omitempty"`       // RSA modulus
+	E      string   `json:"e,omitempty"`       // RSA exponent
+	Use    string   `json:"use,omitempty"`     // intended use: "sig" or "enc"
+	Alg    string   `json:"alg,omitempty"`     // algorithm hint, e.g. "RS256", "ES256", "EdDSA"
+	KeyOps []string `json:"key_ops,omitempty"` // allowed operations, e.g. ["sign"], ["verify"]
 }
 
 // KeySetJSON is the JSON representation of a JWKS document (a set of keys).
@@ -234,37 +238,43 @@ func Encode(k Key) (PublicKey, error) {
 		default:
 			return PublicKey{}, fmt.Errorf("Encode: unsupported EC curve %s", key.Curve.Params().Name)
 		}
+		b, err := key.Bytes() // uncompressed: 0x04 || X || Y
+		if err != nil {
+			return PublicKey{}, fmt.Errorf("Encode: encode EC key: %w", err)
+		}
 		byteLen := (key.Curve.Params().BitSize + 7) / 8
-		xBytes := make([]byte, byteLen)
-		yBytes := make([]byte, byteLen)
-		key.X.FillBytes(xBytes)
-		key.Y.FillBytes(yBytes)
 		return PublicKey{
-			Kty: "EC",
-			KID: k.KID,
-			Crv: crv,
-			X:   base64.RawURLEncoding.EncodeToString(xBytes),
-			Y:   base64.RawURLEncoding.EncodeToString(yBytes),
-			Use: k.Use,
+			Kty:    "EC",
+			KID:    k.KID,
+			Crv:    crv,
+			X:      base64.RawURLEncoding.EncodeToString(b[1 : 1+byteLen]),
+			Y:      base64.RawURLEncoding.EncodeToString(b[1+byteLen:]),
+			Use:    k.Use,
+			Alg:    k.Alg,
+			KeyOps: k.KeyOps,
 		}, nil
 
 	case *rsa.PublicKey:
 		eInt := big.NewInt(int64(key.E))
 		return PublicKey{
-			Kty: "RSA",
-			KID: k.KID,
-			N:   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
-			E:   base64.RawURLEncoding.EncodeToString(eInt.Bytes()),
-			Use: k.Use,
+			Kty:    "RSA",
+			KID:    k.KID,
+			N:      base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+			E:      base64.RawURLEncoding.EncodeToString(eInt.Bytes()),
+			Use:    k.Use,
+			Alg:    k.Alg,
+			KeyOps: k.KeyOps,
 		}, nil
 
 	case ed25519.PublicKey:
 		return PublicKey{
-			Kty: "OKP",
-			KID: k.KID,
-			Crv: "Ed25519",
-			X:   base64.RawURLEncoding.EncodeToString([]byte(key)),
-			Use: k.Use,
+			Kty:    "OKP",
+			KID:    k.KID,
+			Crv:    "Ed25519",
+			X:      base64.RawURLEncoding.EncodeToString([]byte(key)),
+			Use:    k.Use,
+			Alg:    k.Alg,
+			KeyOps: k.KeyOps,
 		}, nil
 
 	default:
@@ -355,21 +365,21 @@ func DecodeOne(kj PublicKey) (*Key, error) {
 		if key.Size() < 128 { // 1024 bits minimum
 			return nil, fmt.Errorf("RSA key %q too small: %d bytes", kj.KID, key.Size())
 		}
-		return &Key{Key: key, KID: kj.KID, Use: kj.Use}, nil
+		return &Key{Key: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
 
 	case "EC":
 		key, err := decodeEC(kj)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse EC key %q: %w", kj.KID, err)
 		}
-		return &Key{Key: key, KID: kj.KID, Use: kj.Use}, nil
+		return &Key{Key: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
 
 	case "OKP":
 		key, err := decodeOKP(kj)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse OKP key %q: %w", kj.KID, err)
 		}
-		return &Key{Key: key, KID: kj.KID, Use: kj.Use}, nil
+		return &Key{Key: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported key type %q for kid %q", kj.Kty, kj.KID)
