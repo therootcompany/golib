@@ -9,27 +9,12 @@
 package jwt
 
 import (
-	"crypto"
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
 
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
-
-// PrivateKey pairs a [crypto.Signer] with a key ID (KID).
-//
-// Pass *PrivateKey to [StandardJWS.Sign], which auto-applies the KID to the
-// JOSE header.
-//
-// If KID is empty, it is auto-computed from the RFC 7638 thumbprint of the
-// public key when passed to [NewSigner].
-//
-// https://www.rfc-editor.org/rfc/rfc7638.html
-type PrivateKey struct {
-	KID    string
-	Signer crypto.Signer
-}
 
 // Signer manages one or more private signing keys and issues JWTs by
 // round-robining across them. It is the issuing side of a JWT issuer —
@@ -38,39 +23,47 @@ type PrivateKey struct {
 //
 // Do not copy a Signer after first use — it contains an atomic counter.
 type Signer struct {
-	signers   []PrivateKey
+	keys      []jwk.Key
 	signerIdx atomic.Uint64
 }
 
 // NewSigner creates a Signer from the provided signing keys.
 //
-// If a PrivateKey's KID is empty, it is auto-computed from the RFC 7638
-// thumbprint of the public key. Returns an error if the slice is empty or
-// a thumbprint cannot be computed.
+// Each key must have a non-nil Signer field. If a key's KID is empty it is
+// auto-computed from the RFC 7638 thumbprint of the public key. If Key (the
+// public side) is not set, it is derived from key.Signer.Public().
+//
+// Returns an error if the slice is empty, any key has no Signer, or a
+// thumbprint cannot be computed.
 //
 // https://www.rfc-editor.org/rfc/rfc7638.html
-func NewSigner(signers []PrivateKey) (*Signer, error) {
-	if len(signers) == 0 {
-		return nil, fmt.Errorf("NewSigner: at least one signer is required")
+func NewSigner(keys []jwk.Key) (*Signer, error) {
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("NewSigner: at least one key is required")
 	}
 	// Copy so the caller can't mutate after construction.
-	ss := make([]PrivateKey, len(signers))
-	copy(ss, signers)
-	for i, ns := range ss {
-		if ns.KID == "" {
-			pub, ok := ns.Signer.Public().(jwk.CryptoPublicKey)
-			if !ok {
-				return nil, fmt.Errorf("NewSigner: signer[%d] public key type %T does not implement jwk.CryptoPublicKey", i, ns.Signer.Public())
-			}
-			k := jwk.Key{Key: pub}
-			thumb, err := k.Thumbprint()
+	ss := make([]jwk.Key, len(keys))
+	copy(ss, keys)
+	for i, k := range ss {
+		if k.Signer == nil {
+			return nil, fmt.Errorf("NewSigner: key[%d] (kid=%q) has no Signer", i, k.KID)
+		}
+		pub, ok := k.Signer.Public().(jwk.CryptoPublicKey)
+		if !ok {
+			return nil, fmt.Errorf("NewSigner: key[%d] public key type %T does not implement jwk.CryptoPublicKey", i, k.Signer.Public())
+		}
+		if ss[i].Key == nil {
+			ss[i].Key = pub
+		}
+		if ss[i].KID == "" {
+			thumb, err := jwk.Key{Key: pub}.Thumbprint()
 			if err != nil {
-				return nil, fmt.Errorf("NewSigner: compute thumbprint for signer[%d]: %w", i, err)
+				return nil, fmt.Errorf("NewSigner: compute thumbprint for key[%d]: %w", i, err)
 			}
 			ss[i].KID = thumb
 		}
 	}
-	return &Signer{signers: ss}, nil
+	return &Signer{keys: ss}, nil
 }
 
 // SignJWS signs jws in-place using the next signing key in round-robin order
@@ -82,7 +75,7 @@ func NewSigner(signers []PrivateKey) (*Signer, error) {
 // prefer [Signer.Sign] or [Signer.SignToString].
 func (s *Signer) SignJWS(jws *StandardJWS) ([]byte, error) {
 	idx := s.signerIdx.Add(1) - 1
-	pk := &s.signers[idx%uint64(len(s.signers))]
+	pk := &s.keys[idx%uint64(len(s.keys))]
 	return jws.Sign(pk)
 }
 
@@ -133,14 +126,16 @@ func (s *Signer) ToJWKs() ([]byte, error) {
 }
 
 // PublicKeys returns the public-key side of each signing key, in the same order
-// as the signers were provided to [NewSigner].
+// as the keys were provided to [NewSigner]. The returned keys have no Signer set.
 func (s *Signer) PublicKeys() []jwk.Key {
-	keys := make([]jwk.Key, len(s.signers))
-	for i, ns := range s.signers {
-		pub, _ := ns.Signer.Public().(jwk.CryptoPublicKey)
+	keys := make([]jwk.Key, len(s.keys))
+	for i, k := range s.keys {
 		keys[i] = jwk.Key{
-			Key: pub,
-			KID: ns.KID,
+			Key:    k.Key,
+			KID:    k.KID,
+			Use:    k.Use,
+			Alg:    k.Alg,
+			KeyOps: k.KeyOps,
 		}
 	}
 	return keys

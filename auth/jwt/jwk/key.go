@@ -50,8 +50,14 @@ type CryptoPublicKey interface {
 // Key is the in-memory representation of a JWK. Use the typed accessor methods
 // [Key.ECDSA], [Key.RSA], and [Key.EdDSA] to assert the underlying type
 // without a raw type switch.
+//
+// For signing keys, set Signer to the [crypto.Signer] for the private key.
+// Signer is never serialized to JSON — it is a runtime-only capability.
+// If Key (the public side) is not set, it is derived from Signer.Public()
+// on demand (e.g. by [Key.Thumbprint]).
 type Key struct {
 	Key    CryptoPublicKey
+	Signer crypto.Signer // non-nil for signing keys; never serialized
 	KID    string
 	Use    string
 	Alg    string
@@ -136,7 +142,16 @@ func (k Key) Thumbprint() (string, error) {
 	var canonical []byte
 	var err error
 
-	switch key := k.Key.(type) {
+	pub := k.Key
+	if pub == nil && k.Signer != nil {
+		var ok bool
+		pub, ok = k.Signer.Public().(CryptoPublicKey)
+		if !ok {
+			return "", fmt.Errorf("Thumbprint: signer public key type %T does not implement CryptoPublicKey", k.Signer.Public())
+		}
+	}
+
+	switch key := pub.(type) {
 	case *ecdsa.PublicKey:
 		b, err := key.Bytes() // uncompressed: 0x04 || X || Y
 		if err != nil {

@@ -22,7 +22,7 @@
 // # Design choices
 //
 // You'll almost never need a custom JOSE header. The algorithm is inferred
-// automatically from the key type; KID comes from [PrivateKey.KID]; typ is
+// automatically from the key type; KID comes from [jwk.Key.KID]; typ is
 // always "JWT". [StandardJWS.Sign] handles all of this — you do not configure alg.
 //
 // You'll almost always need custom claims. [StandardJWS.UnmarshalClaims] accepts any
@@ -299,8 +299,9 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 
 // Sign signs the JWS in-place using pk.
 //
-// The KID is taken from pk.KID: if jws.Header.KID is empty it is set
-// automatically; if it is already set to a different value, Sign returns an error.
+// pk must be a [jwk.Key] with a non-nil Signer. The KID is taken from pk.KID:
+// if jws.Header.KID is empty it is set automatically; if it is already set to a
+// different value, Sign returns an error.
 //
 // If jws.Header.Alg is already set to a value that is incompatible with the
 // key type, Sign returns an error.
@@ -312,12 +313,15 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 //   - *rsa.PrivateKey           → RS256 (PKCS#1 v1.5 + SHA-256)
 //   - ed25519.PrivateKey         → EdDSA (Ed25519, RFC 8037)
 //     https://www.rfc-editor.org/rfc/rfc8037.html
-func (jws *StandardJWS) Sign(pk *PrivateKey) ([]byte, error) {
+func (jws *StandardJWS) Sign(pk *jwk.Key) ([]byte, error) {
+	if pk.Signer == nil {
+		return nil, fmt.Errorf("Sign: key %q has no Signer (public key only)", pk.KID)
+	}
 	switch {
 	case jws.header.KID == "":
 		jws.header.KID = pk.KID
 	case jws.header.KID != pk.KID:
-		return nil, fmt.Errorf("Sign: header kid %q conflicts with PrivateKey KID %q", jws.header.KID, pk.KID)
+		return nil, fmt.Errorf("Sign: header kid %q conflicts with key KID %q", jws.header.KID, pk.KID)
 	}
 
 	switch pub := pk.Signer.Public().(type) {

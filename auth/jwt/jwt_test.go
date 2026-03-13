@@ -94,7 +94,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	pk := &jwt.PrivateKey{KID: "key-1", Signer: privKey}
+	pk := &jwk.Key{KID: "key-1", Signer: privKey}
 	jws, err := jwt.NewJWS(&claims)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestRoundTripRS256(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	pk := &jwt.PrivateKey{KID: "key-1", Signer: privKey}
+	pk := &jwk.Key{KID: "key-1", Signer: privKey}
 	jws, err := jwt.NewJWS(&claims)
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +180,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	pk := &jwt.PrivateKey{KID: "key-1", Signer: privKey}
+	pk := &jwk.Key{KID: "key-1", Signer: privKey}
 	jws, err := jwt.NewJWS(&claims)
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +217,7 @@ func TestDecodeVerifyFlow(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	pk := &jwt.PrivateKey{KID: "k", Signer: privKey}
+	pk := &jwk.Key{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
@@ -251,7 +251,7 @@ func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	pk := &jwt.PrivateKey{KID: "k", Signer: signingKey}
+	pk := &jwk.Key{KID: "k", Signer: signingKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
@@ -285,7 +285,7 @@ func TestCustomValidation(t *testing.T) {
 	// Token with empty Email — our custom validator should reject it.
 	claims := goodClaims()
 	claims.Email = ""
-	pk := &jwt.PrivateKey{KID: "k", Signer: privKey}
+	pk := &jwk.Key{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
@@ -410,7 +410,7 @@ func TestValidatorLax(t *testing.T) {
 func TestVerifyWithoutValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	c := goodClaims()
-	pk := &jwt.PrivateKey{KID: "k", Signer: privKey}
+	pk := &jwk.Key{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&c)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
@@ -436,7 +436,7 @@ func TestVerifierWrongKey(t *testing.T) {
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	pk := &jwt.PrivateKey{KID: "k", Signer: signingKey}
+	pk := &jwk.Key{KID: "k", Signer: signingKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
@@ -457,7 +457,7 @@ func TestVerifierUnknownKid(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	pk := &jwt.PrivateKey{KID: "unknown-kid", Signer: privKey}
+	pk := &jwk.Key{KID: "unknown-kid", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
@@ -481,7 +481,7 @@ func TestVerifierIssMismatch(t *testing.T) {
 
 	claims := goodClaims()
 	claims.Iss = "https://evil.example.com"
-	pk := &jwt.PrivateKey{KID: "k", Signer: privKey}
+	pk := &jwk.Key{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
@@ -528,7 +528,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	pk := &jwt.PrivateKey{KID: "k", Signer: privKey}
+	pk := &jwk.Key{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
@@ -557,7 +557,7 @@ func TestSignerRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "k1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwk.Key{{KID: "k1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +591,7 @@ func TestSignerRoundTrip(t *testing.T) {
 func TestSignerAutoKID(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := jwt.NewSigner([]jwt.PrivateKey{{Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwk.Key{{Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,7 +624,7 @@ func TestSignerRoundRobin(t *testing.T) {
 	key1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := jwt.NewSigner([]jwt.PrivateKey{
+	signer, err := jwt.NewSigner([]jwk.Key{
 		{KID: "k1", Signer: key1},
 		{KID: "k2", Signer: key2},
 	})
@@ -659,7 +659,7 @@ func TestSignerRoundRobin(t *testing.T) {
 func TestVerifierToJWKs(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "k1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwk.Key{{KID: "k1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
