@@ -101,20 +101,20 @@ func TestRoundTrip(t *testing.T) {
 	if _, err = jws.Sign(privKey); err != nil {
 		t.Fatal(err)
 	}
-	if jws.Header.Alg != "ES256" {
-		t.Fatalf("expected ES256, got %s", jws.Header.Alg)
+	if jws.StandardHeader().Alg != "ES256" {
+		t.Fatalf("expected ES256, got %s", jws.StandardHeader().Alg)
 	}
 
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
 
-	jws2, err := iss.Verify(token)
+	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
-		t.Fatalf("Verify failed: %v", err)
+		t.Fatalf("VerifyJWT failed: %v", err)
 	}
-	if jws2.Header.Alg != "ES256" {
-		t.Errorf("expected ES256 alg in jws, got %s", jws2.Header.Alg)
+	if jws2.StandardHeader().Alg != "ES256" {
+		t.Errorf("expected ES256 alg in jws, got %s", jws2.StandardHeader().Alg)
 	}
 
 	var decoded AppClaims
@@ -147,17 +147,17 @@ func TestRoundTripRS256(t *testing.T) {
 	if _, err = jws.Sign(privKey); err != nil {
 		t.Fatal(err)
 	}
-	if jws.Header.Alg != "RS256" {
-		t.Fatalf("expected RS256, got %s", jws.Header.Alg)
+	if jws.StandardHeader().Alg != "RS256" {
+		t.Fatalf("expected RS256, got %s", jws.StandardHeader().Alg)
 	}
 
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
 
-	jws2, err := iss.Verify(token)
+	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
-		t.Fatalf("Verify failed: %v", err)
+		t.Fatalf("VerifyJWT failed: %v", err)
 	}
 	var decoded AppClaims
 	if err := jws2.UnmarshalClaims(&decoded); err != nil {
@@ -185,17 +185,17 @@ func TestRoundTripEdDSA(t *testing.T) {
 	if _, err = jws.Sign(privKey); err != nil {
 		t.Fatal(err)
 	}
-	if jws.Header.Alg != "EdDSA" {
-		t.Fatalf("expected EdDSA, got %s", jws.Header.Alg)
+	if jws.StandardHeader().Alg != "EdDSA" {
+		t.Fatalf("expected EdDSA, got %s", jws.StandardHeader().Alg)
 	}
 
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.Key{Key: pubKeyBytes, KID: "key-1"})
 
-	jws2, err := iss.Verify(token)
+	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
-		t.Fatalf("Verify failed: %v", err)
+		t.Fatalf("VerifyJWT failed: %v", err)
 	}
 	var decoded AppClaims
 	if err := jws2.UnmarshalClaims(&decoded); err != nil {
@@ -236,7 +236,7 @@ func TestUnsafeVerifyFlow(t *testing.T) {
 }
 
 // TestUnsafeVerifyReturnsJWSOnSigFailure verifies that UnsafeVerify returns a
-// non-nil *JWS even when signature verification fails, so callers can inspect
+// non-nil *StandardJWS even when signature verification fails, so callers can inspect
 // the header (kid, iss) for routing.
 func TestUnsafeVerifyReturnsJWSOnSigFailure(t *testing.T) {
 	signingKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -256,10 +256,10 @@ func TestUnsafeVerifyReturnsJWSOnSigFailure(t *testing.T) {
 	}
 	// UnsafeVerify must return the JWS despite sig failure.
 	if result == nil {
-		t.Fatal("UnsafeVerify should return non-nil JWS on sig failure")
+		t.Fatal("UnsafeVerify should return non-nil StandardJWS on sig failure")
 	}
-	if result.Header.Kid != "k" {
-		t.Errorf("expected kid %q, got %q", "k", result.Header.Kid)
+	if result.StandardHeader().Kid != "k" {
+		t.Errorf("expected kid %q, got %q", "k", result.StandardHeader().Kid)
 	}
 }
 
@@ -310,9 +310,9 @@ func TestVerifyWithoutValidation(t *testing.T) {
 
 	iss := jwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
 
-	jws2, err := iss.Verify(token)
+	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
-		t.Fatalf("Verify failed: %v", err)
+		t.Fatalf("VerifyJWT failed: %v", err)
 	}
 	var claims AppClaims
 	if err := jws2.UnmarshalClaims(&claims); err != nil {
@@ -375,10 +375,10 @@ func TestVerifierIssMismatch(t *testing.T) {
 		t.Fatalf("UnsafeVerify should succeed (no iss check): %v", err)
 	}
 
-	// Verify + Validate: signature passes but iss validation catches the mismatch.
-	jws2, err := iss.Verify(token)
+	// VerifyJWT + Validate: signature passes but iss validation catches the mismatch.
+	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
-		t.Fatalf("unexpected hard error from Verify: %v", err)
+		t.Fatalf("unexpected hard error from VerifyJWT: %v", err)
 	}
 	var decoded AppClaims
 	if err := jws2.UnmarshalClaims(&decoded); err != nil {
@@ -442,9 +442,9 @@ func TestSignerRoundTrip(t *testing.T) {
 	}
 
 	iss := signer.Verifier()
-	jws, err := iss.Verify(tokenStr)
+	jws, err := iss.VerifyJWT(tokenStr)
 	if err != nil {
-		t.Fatalf("Verify failed: %v", err)
+		t.Fatalf("VerifyJWT failed: %v", err)
 	}
 	var decoded AppClaims
 	if err := jws.UnmarshalClaims(&decoded); err != nil {
@@ -510,9 +510,9 @@ func TestSignerRoundRobin(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Sign[%d] failed: %v", i, err)
 		}
-		jws, err := iss.Verify(tokenStr)
+		jws, err := iss.VerifyJWT(tokenStr)
 		if err != nil {
-			t.Fatalf("Verify[%d] failed: %v", i, err)
+			t.Fatalf("VerifyJWT[%d] failed: %v", i, err)
 		}
 		var decoded AppClaims
 		if err := jws.UnmarshalClaims(&decoded); err != nil {

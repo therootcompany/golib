@@ -10,13 +10,13 @@
 // encoding, decoding, and key management utilities.
 //
 // The [Key] type is the primary in-memory representation of a public key with
-// its JWKS metadata (KID, Use). Encoding converts [Key] to [PublicPublicKeyJSON] or
+// its JWKS metadata (KID, Use). Encoding converts [Key] to [PublicKeyJSON] or
 // JSON bytes; decoding parses them back. Fetching retrieves JWKS documents from
 // remote endpoints.
 //
-// [PublicPublicKeyJSON] and [PrivatePublicKeyJSON] are kept separate so that private keys
+// [PublicKeyJSON] and [PrivateKeyJSON] are kept separate so that private keys
 // can never be accidentally marshalled where a public key is expected. Use
-// [PrivatePublicKeyJSON.PublicJWK] to explicitly extract the public portion.
+// [PrivateKeyJSON.PublicJWK] to explicitly extract the public portion.
 package jwk
 
 import (
