@@ -12,7 +12,7 @@
 //   - [Verifier] is immutable — constructed with a fixed key set, safe for concurrent use.
 //   - [Signer] manages private keys and returns [*Verifier] for verification.
 //   - [KeyFetcher] lazily fetches and caches JWKS keys, returning a fresh [*Verifier] on demand.
-//   - [Validator] and [MultiValidator] validate standard JWT/OIDC claims.
+//   - [Validator] validates standard JWT/OIDC claims.
 //   - [JWS] is a parsed structure — use [Verifier.Verify] or [Verifier.UnsafeVerify] to authenticate.
 //   - [JWS.UnmarshalClaims] accepts any type — no Claims interface to implement.
 //   - [Claims] is satisfied for free by embedding [StandardClaims].
@@ -22,7 +22,7 @@
 //	// At startup:
 //	signer, err := jwt.NewSigner([]jwt.PrivateKey{{Signer: privKey}})
 //	iss := signer.Verifier()
-//	v := &jwt.Validator{Iss: "https://example.com", Aud: "my-app"}
+//	v := &jwt.Validator{Iss: []string{"https://example.com"}, Aud: []string{"my-app"}}
 //
 //	// Sign a token:
 //	tokenStr, err := signer.Sign(claims)
@@ -40,7 +40,7 @@
 //	var claims AppClaims
 //	jws.UnmarshalClaims(&claims)
 //	errs, err := jwt.ValidateStandardClaims(claims.StandardClaims,
-//	    jwt.Validator{Aud: "myapp"}, time.Now())
+//	    jwt.Validator{Aud: []string{"myapp"}}, time.Now())
 //
 // Typical usage with KeyFetcher (dynamic keys from remote):
 //
@@ -171,7 +171,7 @@ type Claims interface {
 }
 
 // ClaimsValidator validates the standard JWT/OIDC claims in a token.
-// Implemented by [*Validator] and [*MultiValidator].
+// Implemented by [*Validator].
 type ClaimsValidator interface {
 	Validate(claims Claims, now time.Time) ([]string, error)
 }
@@ -352,133 +352,49 @@ func (jws *JWS) Encode() string {
 	return jws.Protected + "." + jws.Payload + "." + base64.RawURLEncoding.EncodeToString(jws.Signature)
 }
 
-// Validator holds claim validation configuration for single-tenant use.
+// DefaultClockSkew is the tolerance applied to exp, iat, and auth_time checks
+// when Validator.ClockSkew is zero. It covers common sub-second clock drift
+// between distributed systems.
+const DefaultClockSkew = 5 * time.Second
+
+// Validator holds claim validation configuration.
 //
-// Configure once at startup; pass to [Verifier.VerifyAndValidate] or call
-// [Validator.Validate] directly per request.
+// Configure once at startup and reuse across requests. Iss, Aud, and Azp are
+// slices — the claim value must appear in the configured list if the list is
+// non-empty. Sub and Jti are presence-only checks: if not ignored, the claim
+// must be non-empty, but its value is not matched (those are per-token and
+// per-user; value matching must be done by the application).
+//
+// ClockSkew is applied to exp, iat, and auth_time to tolerate minor clock
+// differences between systems. If zero, [DefaultClockSkew] (5s) is used.
+// Set to a negative value (e.g. -1) to disable skew tolerance entirely.
+//
+// Pass to [Verifier.VerifyAndValidate] or call [Validator.Validate] directly.
 //
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 type Validator struct {
 	IgnoreIss      bool
-	Iss            string
-	IgnoreSub      bool
-	Sub            string
+	Iss            []string      // token's iss must appear in list (if set)
+	IgnoreSub      bool          // if false, sub must be present (non-empty)
 	IgnoreAud      bool
-	Aud            string
+	Aud            []string      // token's aud must intersect list (if set)
 	IgnoreExp      bool
-	IgnoreJti      bool
-	Jti            string
 	IgnoreIat      bool
+	IgnoreJti      bool          // if false, jti must be present (non-empty)
 	IgnoreAuthTime bool
+	ClockSkew      time.Duration // tolerance for exp/iat/auth_time; 0 = DefaultClockSkew (5s); negative = no tolerance
 	MaxAge         time.Duration
 	IgnoreNonce    bool
-	Nonce          string
+	Nonce          string        // if set, token's nonce must match exactly
 	IgnoreAmr      bool
 	RequiredAmrs   []string
 	IgnoreAzp      bool
-	Azp            string
+	Azp            []string      // token's azp must appear in list (if set)
 }
 
 // Validate implements [ClaimsValidator].
 func (v *Validator) Validate(claims Claims, now time.Time) ([]string, error) {
 	return ValidateStandardClaims(claims.GetStandardClaims(), *v, now)
-}
-
-// MultiValidator holds claim validation configuration for multi-tenant use.
-// Iss, Aud, and Azp accept slices — the claim value must appear in the slice.
-type MultiValidator struct {
-	Iss            []string
-	IgnoreIss      bool
-	IgnoreSub      bool
-	Aud            []string
-	IgnoreAud      bool
-	IgnoreExp      bool
-	IgnoreIat      bool
-	IgnoreAuthTime bool
-	MaxAge         time.Duration
-	IgnoreNonce    bool
-	IgnoreAmr      bool
-	RequiredAmrs   []string
-	IgnoreAzp      bool
-	Azp            []string
-	IgnoreJti      bool
-}
-
-// Validate implements [ClaimsValidator].
-func (v *MultiValidator) Validate(claims Claims, now time.Time) ([]string, error) {
-	sc := claims.GetStandardClaims()
-	var errs []string
-
-	if !v.IgnoreIss {
-		if sc.Iss == "" {
-			errs = append(errs, "missing or malformed 'iss' (token issuer)")
-		} else if len(v.Iss) > 0 && !slices.Contains(v.Iss, sc.Iss) {
-			errs = append(errs, fmt.Sprintf("'iss' %q not in allowed list", sc.Iss))
-		}
-	}
-
-	if !v.IgnoreAud {
-		if len(sc.Aud) == 0 {
-			errs = append(errs, "missing or malformed 'aud' (audience)")
-		} else if len(v.Aud) > 0 && !slices.ContainsFunc([]string(sc.Aud), func(a string) bool {
-			return slices.Contains(v.Aud, a)
-		}) {
-			errs = append(errs, fmt.Sprintf("'aud' not in allowed list: %v", sc.Aud))
-		}
-	}
-
-	if !v.IgnoreExp {
-		if sc.Exp <= 0 {
-			errs = append(errs, "missing or malformed 'exp' (expiration)")
-		} else if sc.Exp < now.Unix() {
-			duration := now.Sub(time.Unix(sc.Exp, 0))
-			errs = append(errs, fmt.Sprintf("token expired %s ago", formatDuration(duration)))
-		}
-	}
-
-	if !v.IgnoreIat {
-		if sc.Iat <= 0 {
-			errs = append(errs, "missing or malformed 'iat' (issued at)")
-		} else if sc.Iat > now.Unix() {
-			errs = append(errs, "'iat' is in the future")
-		}
-	}
-
-	if !v.IgnoreAuthTime {
-		if sc.AuthTime == 0 {
-			errs = append(errs, "missing or malformed 'auth_time'")
-		} else if sc.AuthTime > now.Unix() {
-			errs = append(errs, "'auth_time' is in the future")
-		} else if v.MaxAge > 0 {
-			age := now.Sub(time.Unix(sc.AuthTime, 0))
-			if age > v.MaxAge {
-				errs = append(errs, fmt.Sprintf("'auth_time' exceeds max age %s by %s", formatDuration(v.MaxAge), formatDuration(age-v.MaxAge)))
-			}
-		}
-	}
-
-	if !v.IgnoreAmr {
-		if len(sc.Amr) == 0 {
-			errs = append(errs, "missing or malformed 'amr'")
-		} else {
-			for _, req := range v.RequiredAmrs {
-				if !slices.Contains(sc.Amr, req) {
-					errs = append(errs, fmt.Sprintf("missing required %q from 'amr'", req))
-				}
-			}
-		}
-	}
-
-	if !v.IgnoreAzp {
-		if len(v.Azp) > 0 && !slices.Contains(v.Azp, sc.Azp) {
-			errs = append(errs, fmt.Sprintf("'azp' %q not in allowed list", sc.Azp))
-		}
-	}
-
-	if len(errs) > 0 {
-		return errs, fmt.Errorf("has errors")
-	}
-	return nil, nil
 }
 
 // ValidateStandardClaims checks the registered JWT/OIDC claim fields against v.
@@ -489,58 +405,59 @@ func (v *MultiValidator) Validate(claims Claims, now time.Time) ([]string, error
 func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) ([]string, error) {
 	var errs []string
 
-	// Required to exist and match
-	if len(v.Iss) > 0 || !v.IgnoreIss {
-		if len(claims.Iss) == 0 {
-			errs = append(errs, "missing or malformed 'iss' (token issuer, identifier for public key)")
-		} else if len(v.Iss) > 0 && claims.Iss != v.Iss {
-			errs = append(errs, fmt.Sprintf("'iss' (token issuer) mismatch: got %s, expected %s", claims.Iss, v.Iss))
+	skew := v.ClockSkew
+	if skew == 0 {
+		skew = DefaultClockSkew
+	} else if skew < 0 {
+		skew = 0
+	}
+
+	if !v.IgnoreIss {
+		if claims.Iss == "" {
+			errs = append(errs, "missing or malformed 'iss' (token issuer)")
+		} else if len(v.Iss) > 0 && !slices.Contains(v.Iss, claims.Iss) {
+			errs = append(errs, fmt.Sprintf("'iss' %q not in allowed list", claims.Iss))
 		}
 	}
 
-	// Required to exist, optional match
-	if len(claims.Sub) == 0 {
-		if !v.IgnoreSub {
-			errs = append(errs, "missing or malformed 'sub' (subject, typically pairwise user id)")
-		}
-	} else if len(v.Sub) > 0 {
-		if v.Sub != claims.Sub {
-			errs = append(errs, fmt.Sprintf("'sub' (subject) mismatch: got %s, expected %s", claims.Sub, v.Sub))
-		}
+	if !v.IgnoreSub && claims.Sub == "" {
+		errs = append(errs, "missing or malformed 'sub' (subject, typically pairwise user id)")
 	}
 
-	// Required to exist and match
-	if len(v.Aud) > 0 || !v.IgnoreAud {
+	if !v.IgnoreAud {
 		if len(claims.Aud) == 0 {
 			errs = append(errs, "missing or malformed 'aud' (audience receiving token)")
-		} else if len(v.Aud) > 0 && !claims.Aud.Contains(v.Aud) {
-			errs = append(errs, fmt.Sprintf("'aud' (audience) mismatch: got %v, expected %s", claims.Aud, v.Aud))
+		} else if len(v.Aud) > 0 && !slices.ContainsFunc([]string(claims.Aud), func(a string) bool {
+			return slices.Contains(v.Aud, a)
+		}) {
+			errs = append(errs, fmt.Sprintf("'aud' not in allowed list: %v", claims.Aud))
 		}
 	}
 
-	// Required to exist and not be in the past
 	if !v.IgnoreExp {
 		if claims.Exp <= 0 {
 			errs = append(errs, "missing or malformed 'exp' (expiration date in seconds)")
-		} else if claims.Exp < now.Unix() {
+		} else if now.After(time.Unix(claims.Exp, 0).Add(skew)) {
 			duration := now.Sub(time.Unix(claims.Exp, 0))
 			expTime := time.Unix(claims.Exp, 0).Format("2006-01-02 15:04:05 MST")
 			errs = append(errs, fmt.Sprintf("token expired %s ago (%s)", formatDuration(duration), expTime))
 		}
 	}
 
-	// Required to exist and not be in the future
 	if !v.IgnoreIat {
 		if claims.Iat <= 0 {
 			errs = append(errs, "missing or malformed 'iat' (issued at, when token was signed)")
-		} else if claims.Iat > now.Unix() {
+		} else if time.Unix(claims.Iat, 0).After(now.Add(skew)) {
 			duration := time.Unix(claims.Iat, 0).Sub(now)
 			iatTime := time.Unix(claims.Iat, 0).Format("2006-01-02 15:04:05 MST")
 			errs = append(errs, fmt.Sprintf("'iat' (issued at) is %s in the future (%s)", formatDuration(duration), iatTime))
 		}
 	}
 
-	// Should exist, in the past, with optional max age
+	if !v.IgnoreJti && claims.Jti == "" {
+		errs = append(errs, "missing or malformed 'jti' (JWT ID)")
+	}
+
 	if !v.IgnoreAuthTime {
 		if claims.AuthTime == 0 {
 			errs = append(errs, "missing or malformed 'auth_time' (time of real-world user authentication, in seconds)")
@@ -549,8 +466,8 @@ func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) (
 			authTimeStr := authTime.Format("2006-01-02 15:04:05 MST")
 			age := now.Sub(authTime)
 			diff := age - v.MaxAge
-			if claims.AuthTime > now.Unix() {
-				fromNow := time.Unix(claims.AuthTime, 0).Sub(now)
+			if authTime.After(now.Add(skew)) {
+				fromNow := authTime.Sub(now)
 				errs = append(errs, fmt.Sprintf(
 					"'auth_time' of %s is %s in the future (server time %s)",
 					authTimeStr, formatDuration(fromNow), now.Format("2006-01-02 15:04:05 MST")),
@@ -564,17 +481,10 @@ func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) (
 		}
 	}
 
-	// Optional exact match (only checked when v.Jti is set)
-	if len(v.Jti) > 0 && v.Jti != claims.Jti {
-		errs = append(errs, fmt.Sprintf("'jti' (jwt id) mismatch: got %s, expected %s", claims.Jti, v.Jti))
-	}
-
-	// Optional exact match (only checked when v.Nonce is set)
-	if len(v.Nonce) > 0 && v.Nonce != claims.Nonce {
+	if !v.IgnoreNonce && len(v.Nonce) > 0 && v.Nonce != claims.Nonce {
 		errs = append(errs, fmt.Sprintf("'nonce' mismatch: got %s, expected %s", claims.Nonce, v.Nonce))
 	}
 
-	// Should exist, optional required-set check
 	if !v.IgnoreAmr {
 		if len(claims.Amr) == 0 {
 			errs = append(errs, "missing or malformed 'amr' (authorization methods, as json list)")
@@ -587,9 +497,8 @@ func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) (
 		}
 	}
 
-	// Optional, match if present (only checked when v.Azp is set)
-	if len(v.Azp) > 0 && v.Azp != claims.Azp {
-		errs = append(errs, fmt.Sprintf("'azp' (authorized party) mismatch: got %s, expected %s", claims.Azp, v.Azp))
+	if !v.IgnoreAzp && len(v.Azp) > 0 && !slices.Contains(v.Azp, claims.Azp) {
+		errs = append(errs, fmt.Sprintf("'azp' %q not in allowed list", claims.Azp))
 	}
 
 	if len(errs) > 0 {

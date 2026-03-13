@@ -72,12 +72,10 @@ func goodClaims() AppClaims {
 // Iss checking is now the Validator's responsibility, not the Verifier's.
 func goodValidator() *jwt.Validator {
 	return &jwt.Validator{
-		Iss:          "https://example.com",
-		Sub:          "user123",
-		Aud:          "myapp",
-		Jti:          "abc123",
+		Iss:          []string{"https://example.com"},
+		Aud:          []string{"myapp"},
 		Nonce:        "nonce1",
-		Azp:          "myapp",
+		Azp:          []string{"myapp"},
 		RequiredAmrs: []string{"pwd"},
 	}
 }
