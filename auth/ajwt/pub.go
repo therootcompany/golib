@@ -158,6 +158,74 @@ type JWKsJSON struct {
 	Keys []PublicJWKJSON `json:"keys"`
 }
 
+// EncodePublicJWK converts a [PublicJWK] to its JSON representation.
+//
+// Supported key types: *ecdsa.PublicKey (EC), *rsa.PublicKey (RSA), ed25519.PublicKey (OKP).
+func EncodePublicJWK(k PublicJWK) (PublicJWKJSON, error) {
+	switch key := k.Key.(type) {
+	case *ecdsa.PublicKey:
+		var crv string
+		switch key.Curve {
+		case elliptic.P256():
+			crv = "P-256"
+		case elliptic.P384():
+			crv = "P-384"
+		case elliptic.P521():
+			crv = "P-521"
+		default:
+			return PublicJWKJSON{}, fmt.Errorf("EncodePublicJWK: unsupported EC curve %s", key.Curve.Params().Name)
+		}
+		byteLen := (key.Curve.Params().BitSize + 7) / 8
+		xBytes := make([]byte, byteLen)
+		yBytes := make([]byte, byteLen)
+		key.X.FillBytes(xBytes)
+		key.Y.FillBytes(yBytes)
+		return PublicJWKJSON{
+			Kty: "EC",
+			KID: k.KID,
+			Crv: crv,
+			X:   base64.RawURLEncoding.EncodeToString(xBytes),
+			Y:   base64.RawURLEncoding.EncodeToString(yBytes),
+			Use: k.Use,
+		}, nil
+
+	case *rsa.PublicKey:
+		eInt := big.NewInt(int64(key.E))
+		return PublicJWKJSON{
+			Kty: "RSA",
+			KID: k.KID,
+			N:   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+			E:   base64.RawURLEncoding.EncodeToString(eInt.Bytes()),
+			Use: k.Use,
+		}, nil
+
+	case ed25519.PublicKey:
+		return PublicJWKJSON{
+			Kty: "OKP",
+			KID: k.KID,
+			Crv: "Ed25519",
+			X:   base64.RawURLEncoding.EncodeToString([]byte(key)),
+			Use: k.Use,
+		}, nil
+
+	default:
+		return PublicJWKJSON{}, fmt.Errorf("EncodePublicJWK: unsupported key type %T", k.Key)
+	}
+}
+
+// MarshalPublicJWKs serializes a slice of [PublicJWK] as a JWKS JSON document.
+func MarshalPublicJWKs(keys []PublicJWK) ([]byte, error) {
+	jsonKeys := make([]PublicJWKJSON, 0, len(keys))
+	for _, k := range keys {
+		jk, err := EncodePublicJWK(k)
+		if err != nil {
+			return nil, err
+		}
+		jsonKeys = append(jsonKeys, jk)
+	}
+	return json.Marshal(JWKsJSON{Keys: jsonKeys})
+}
+
 // FetchJWKs retrieves and parses a JWKS document from jwksURL.
 //
 // ctx is used for the HTTP request timeout and cancellation.

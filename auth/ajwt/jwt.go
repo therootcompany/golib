@@ -9,40 +9,52 @@
 // Package ajwt is a lightweight JWT/JWS/JWK library designed from first
 // principles:
 //
-//   - [JWS] is a parsed structure only — no Claims interface, no Verified flag.
-//   - [Issuer] owns key management and signature verification, centralizing
-//     the key lookup → sig verify → iss check sequence.
-//   - [Validator] is a stable config object; time is passed at the call site
-//     so the same validator can be reused across requests.
-//   - [StandardClaimsSource] is implemented for free by embedding [StandardClaims].
-//   - [JWS.UnmarshalClaims] accepts any type — no interface to implement.
-//   - [JWS.Sign] uses [crypto.Signer] for ES256 (P-256), ES384 (P-384),
-//     ES512 (P-521), RS256 (RSA PKCS#1 v1.5), and EdDSA (Ed25519/RFC 8037).
+//   - [Issuer] is immutable — constructed with a fixed key set, safe for concurrent use.
+//   - [Signer] manages private keys and returns [*Issuer] for verification.
+//   - [JWKsFetcher] lazily fetches and caches JWKS keys, returning a fresh [*Issuer] on demand.
+//   - [Validator] and [MultiValidator] validate standard JWT/OIDC claims.
+//   - [JWS] is a parsed structure — use [Issuer.Verify] or [Issuer.UnsafeVerify] to authenticate.
+//   - [JWS.UnmarshalClaims] accepts any type — no Claims interface to implement.
+//   - [StandardClaimsSource] is satisfied for free by embedding [StandardClaims].
 //
 // Typical usage with VerifyAndValidate:
 //
 //	// At startup:
-//	iss, err := ajwt.NewWithOIDC(ctx, "https://accounts.example.com",
-//	    &ajwt.Validator{Aud: "my-app", IgnoreIss: true})
+//	signer, err := ajwt.NewSigner([]ajwt.NamedSigner{{Signer: privKey}})
+//	iss := signer.Issuer()
+//	v := &ajwt.Validator{Iss: "https://example.com", Aud: "my-app"}
+//
+//	// Sign a token:
+//	tokenStr, err := signer.Sign(claims)
 //
 //	// Per request:
 //	var claims AppClaims
-//	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, time.Now())
-//	if err != nil { /* hard error: bad sig, expired, etc. */ }
-//	if len(errs) > 0 { /* soft errors: wrong aud, missing amr, etc. */ }
+//	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, v, time.Now())
+//	if err != nil { /* hard error: bad sig, malformed token */ }
+//	if len(errs) > 0 { /* soft errors: wrong aud, expired, etc. */ }
 //
-// Typical usage with UnsafeVerify (custom validation only):
+// Typical usage with UnsafeVerify (custom validation):
 //
-//	iss := ajwt.New("https://example.com", keys, nil)
+//	iss := ajwt.New(keys)
 //	jws, err := iss.UnsafeVerify(tokenStr)
 //	var claims AppClaims
 //	jws.UnmarshalClaims(&claims)
 //	errs, err := ajwt.ValidateStandardClaims(claims.StandardClaims,
 //	    ajwt.Validator{Aud: "myapp"}, time.Now())
+//
+// Typical usage with JWKsFetcher (dynamic keys from remote):
+//
+//	fetcher := &ajwt.JWKsFetcher{
+//	    URL:         "https://accounts.example.com/.well-known/jwks.json",
+//	    MaxAge:      time.Hour,
+//	    StaleAge:    time.Hour,
+//	    KeepOnError: true,
+//	}
+//	iss, err := fetcher.Issuer(ctx)
+//	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, v, time.Now())
 package ajwt
 
 import (
-	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -65,8 +77,8 @@ import (
 //
 // It holds only the parsed structure — header, raw base64url fields, and
 // decoded signature bytes. It carries no Claims interface and no Verified flag;
-// use [Issuer.UnsafeVerify] or [Issuer.VerifyAndValidate] to authenticate the
-// token and [JWS.UnmarshalClaims] to decode the payload into a typed struct.
+// use [Issuer.Verify] or [Issuer.UnsafeVerify] to authenticate the token and
+// [JWS.UnmarshalClaims] to decode the payload into a typed struct.
 type JWS struct {
 	Protected string // base64url-encoded header
 	Header    StandardHeader
@@ -120,10 +132,16 @@ type StandardClaimsSource interface {
 	GetStandardClaims() StandardClaims
 }
 
+// ClaimsValidator validates the standard JWT/OIDC claims in a token.
+// Implemented by [*Validator] and [*MultiValidator].
+type ClaimsValidator interface {
+	Validate(claims StandardClaimsSource, now time.Time) ([]string, error)
+}
+
 // Decode parses a compact JWT string (header.payload.signature) into a JWS.
 //
 // It does not unmarshal the claims payload — call [JWS.UnmarshalClaims] after
-// [Issuer.UnsafeVerify] to safely populate a typed claims struct.
+// [Issuer.Verify] or [Issuer.UnsafeVerify] to populate a typed claims struct.
 func Decode(tokenStr string) (*JWS, error) {
 	parts := strings.Split(tokenStr, ".")
 	if len(parts) != 3 {
@@ -152,8 +170,8 @@ func Decode(tokenStr string) (*JWS, error) {
 // UnmarshalClaims decodes the JWT payload into v.
 //
 // v must be a pointer to a struct (e.g. *AppClaims). Always call
-// [Issuer.UnsafeVerify] before UnmarshalClaims to ensure the signature is
-// authenticated before trusting the payload.
+// [Issuer.Verify] or [Issuer.UnsafeVerify] before UnmarshalClaims to ensure
+// the signature is authenticated before trusting the payload.
 func (jws *JWS) UnmarshalClaims(v any) error {
 	payload, err := base64.RawURLEncoding.DecodeString(jws.Payload)
 	if err != nil {
@@ -256,16 +274,15 @@ func (jws *JWS) Encode() string {
 	return jws.Protected + "." + jws.Payload + "." + base64.RawURLEncoding.EncodeToString(jws.Signature)
 }
 
-// Validator holds claim validation configuration.
+// Validator holds claim validation configuration for single-tenant use.
 //
-// Configure once at startup; call [Validator.Validate] per request, passing
-// the current time. This keeps the config stable and makes the time dependency
-// explicit at the call site.
+// Configure once at startup; pass to [Issuer.VerifyAndValidate] or call
+// [Validator.Validate] directly per request.
 //
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 type Validator struct {
 	IgnoreIss      bool
-	Iss            string // rarely needed — Issuer.UnsafeVerify already checks iss
+	Iss            string
 	IgnoreSub      bool
 	Sub            string
 	IgnoreAud      bool
@@ -284,12 +301,104 @@ type Validator struct {
 	Azp            string
 }
 
-// Validate checks the standard JWT/OIDC claim fields in claims against this config.
-//
-// now is typically time.Now() — passing it explicitly keeps the config stable
-// across requests and avoids hidden time dependencies in the validator struct.
-func (v Validator) Validate(claims StandardClaimsSource, now time.Time) ([]string, error) {
-	return ValidateStandardClaims(claims.GetStandardClaims(), v, now)
+// Validate implements [ClaimsValidator].
+func (v *Validator) Validate(claims StandardClaimsSource, now time.Time) ([]string, error) {
+	return ValidateStandardClaims(claims.GetStandardClaims(), *v, now)
+}
+
+// MultiValidator holds claim validation configuration for multi-tenant use.
+// Iss, Aud, and Azp accept slices — the claim value must appear in the slice.
+type MultiValidator struct {
+	Iss            []string
+	IgnoreIss      bool
+	IgnoreSub      bool
+	Aud            []string
+	IgnoreAud      bool
+	IgnoreExp      bool
+	IgnoreIat      bool
+	IgnoreAuthTime bool
+	MaxAge         time.Duration
+	IgnoreNonce    bool
+	IgnoreAmr      bool
+	RequiredAmrs   []string
+	IgnoreAzp      bool
+	Azp            []string
+	IgnoreJti      bool
+}
+
+// Validate implements [ClaimsValidator].
+func (v *MultiValidator) Validate(claims StandardClaimsSource, now time.Time) ([]string, error) {
+	sc := claims.GetStandardClaims()
+	var errs []string
+
+	if !v.IgnoreIss {
+		if sc.Iss == "" {
+			errs = append(errs, "missing or malformed 'iss' (token issuer)")
+		} else if len(v.Iss) > 0 && !slices.Contains(v.Iss, sc.Iss) {
+			errs = append(errs, fmt.Sprintf("'iss' %q not in allowed list", sc.Iss))
+		}
+	}
+
+	if !v.IgnoreAud {
+		if sc.Aud == "" {
+			errs = append(errs, "missing or malformed 'aud' (audience)")
+		} else if len(v.Aud) > 0 && !slices.Contains(v.Aud, sc.Aud) {
+			errs = append(errs, fmt.Sprintf("'aud' %q not in allowed list", sc.Aud))
+		}
+	}
+
+	if !v.IgnoreExp {
+		if sc.Exp <= 0 {
+			errs = append(errs, "missing or malformed 'exp' (expiration)")
+		} else if sc.Exp < now.Unix() {
+			duration := now.Sub(time.Unix(sc.Exp, 0))
+			errs = append(errs, fmt.Sprintf("token expired %s ago", formatDuration(duration)))
+		}
+	}
+
+	if !v.IgnoreIat {
+		if sc.Iat <= 0 {
+			errs = append(errs, "missing or malformed 'iat' (issued at)")
+		} else if sc.Iat > now.Unix() {
+			errs = append(errs, "'iat' is in the future")
+		}
+	}
+
+	if v.MaxAge > 0 || !v.IgnoreAuthTime {
+		if sc.AuthTime == 0 {
+			errs = append(errs, "missing or malformed 'auth_time'")
+		} else if sc.AuthTime > now.Unix() {
+			errs = append(errs, "'auth_time' is in the future")
+		} else if v.MaxAge > 0 {
+			age := now.Sub(time.Unix(sc.AuthTime, 0))
+			if age > v.MaxAge {
+				errs = append(errs, fmt.Sprintf("'auth_time' exceeds max age %s by %s", formatDuration(v.MaxAge), formatDuration(age-v.MaxAge)))
+			}
+		}
+	}
+
+	if !v.IgnoreAmr {
+		if len(sc.Amr) == 0 {
+			errs = append(errs, "missing or malformed 'amr'")
+		} else {
+			for _, req := range v.RequiredAmrs {
+				if !slices.Contains(sc.Amr, req) {
+					errs = append(errs, fmt.Sprintf("missing required %q from 'amr'", req))
+				}
+			}
+		}
+	}
+
+	if !v.IgnoreAzp {
+		if len(v.Azp) > 0 && !slices.Contains(v.Azp, sc.Azp) {
+			errs = append(errs, fmt.Sprintf("'azp' %q not in allowed list", sc.Azp))
+		}
+	}
+
+	if len(errs) > 0 {
+		return errs, fmt.Errorf("has errors")
+	}
+	return nil, nil
 }
 
 // ValidateStandardClaims checks the registered JWT/OIDC claim fields against v.
@@ -304,7 +413,7 @@ func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) (
 	if len(v.Iss) > 0 || !v.IgnoreIss {
 		if len(claims.Iss) == 0 {
 			errs = append(errs, "missing or malformed 'iss' (token issuer, identifier for public key)")
-		} else if claims.Iss != v.Iss {
+		} else if len(v.Iss) > 0 && claims.Iss != v.Iss {
 			errs = append(errs, fmt.Sprintf("'iss' (token issuer) mismatch: got %s, expected %s", claims.Iss, v.Iss))
 		}
 	}
@@ -324,7 +433,7 @@ func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) (
 	if len(v.Aud) > 0 || !v.IgnoreAud {
 		if len(claims.Aud) == 0 {
 			errs = append(errs, "missing or malformed 'aud' (audience receiving token)")
-		} else if claims.Aud != v.Aud {
+		} else if len(v.Aud) > 0 && claims.Aud != v.Aud {
 			errs = append(errs, fmt.Sprintf("'aud' (audience) mismatch: got %s, expected %s", claims.Aud, v.Aud))
 		}
 	}
@@ -426,87 +535,63 @@ func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) (
 	return nil, nil
 }
 
-// Issuer holds public keys and optional validation config for a trusted token issuer.
+// Issuer holds public keys for a trusted token issuer.
 //
-// Create with [New], [NewWithJWKs], [NewWithOIDC], or [NewWithOAuth2].
-// After construction, Issuer is immutable.
-//
-// [Issuer.UnsafeVerify] authenticates the token: Decode + key lookup + sig verify + iss check.
-// [Issuer.VerifyAndValidate] additionally unmarshals claims and runs the Validator.
+// Issuer is immutable after construction — safe for concurrent use with no locking.
+// Use [New] to construct with a fixed key set, or use [Signer.Issuer] or
+// [JWKsFetcher.Issuer] to obtain one from a signer or remote JWKS endpoint.
 type Issuer struct {
-	URL       string // issuer URL for iss claim enforcement; empty skips the check
-	validator *Validator
-	keys      map[string]crypto.PublicKey // kid → key
+	pubKeys []PublicJWK
+	keys    map[string]crypto.PublicKey // kid → key
 }
 
-// New creates an Issuer with explicit keys.
+// New creates an Issuer with an explicit set of public keys.
 //
-// v is optional — pass nil to use [Issuer.UnsafeVerify] only.
-// [Issuer.VerifyAndValidate] requires a non-nil Validator.
-func New(issURL string, keys []PublicJWK, v *Validator) *Issuer {
+// The returned Issuer is immutable — keys cannot be added or removed after
+// construction. For dynamic key rotation, see [JWKsFetcher].
+func New(keys []PublicJWK) *Issuer {
 	m := make(map[string]crypto.PublicKey, len(keys))
 	for _, k := range keys {
 		m[k.KID] = k.Key
 	}
 	return &Issuer{
-		URL:       issURL,
-		validator: v,
-		keys:      m,
+		pubKeys: keys,
+		keys:    m,
 	}
 }
 
-// NewWithJWKs creates an Issuer by fetching keys from jwksURL.
+// PublicKeys returns the public keys held by this Issuer.
+func (iss *Issuer) PublicKeys() []PublicJWK {
+	return iss.pubKeys
+}
+
+// ToJWKs serializes the Issuer's public keys as a JWKS JSON document.
+func (iss *Issuer) ToJWKs() ([]byte, error) {
+	return MarshalPublicJWKs(iss.pubKeys)
+}
+
+// Verify decodes tokenStr and verifies its signature.
 //
-// The issuer URL (used for iss claim enforcement in [Issuer.UnsafeVerify]) is
-// not set; use [New] or [NewWithOIDC]/[NewWithOAuth2] if you need iss enforcement.
-//
-// v is optional — pass nil to use [Issuer.UnsafeVerify] only.
-func NewWithJWKs(ctx context.Context, jwksURL string, v *Validator) (*Issuer, error) {
-	keys, err := FetchJWKs(ctx, jwksURL)
+// Returns (nil, err) on any failure — the caller never receives an
+// unauthenticated JWS. For inspecting a JWS despite signature failure
+// (e.g., for multi-issuer routing by kid/iss), use [Issuer.UnsafeVerify].
+func (iss *Issuer) Verify(tokenStr string) (*JWS, error) {
+	jws, err := iss.UnsafeVerify(tokenStr)
 	if err != nil {
 		return nil, err
 	}
-	return New("", keys, v), nil
+	return jws, nil
 }
 
-// NewWithOIDC creates an Issuer using OIDC discovery.
+// UnsafeVerify decodes tokenStr and verifies the signature.
 //
-// It fetches {baseURL}/.well-known/openid-configuration and reads the
-// jwks_uri and issuer fields. The Issuer URL is set from the discovery
-// document's issuer field (not baseURL) because OIDC requires them to match.
+// Unlike [Issuer.Verify], UnsafeVerify returns the parsed [*JWS] even when
+// signature verification fails — the error is non-nil but the JWS is
+// available for inspection (e.g., to read the kid or iss for multi-issuer
+// routing). Returns (nil, err) only when the token cannot be parsed at all.
 //
-// v is optional — pass nil to use [Issuer.UnsafeVerify] only.
-func NewWithOIDC(ctx context.Context, baseURL string, v *Validator) (*Issuer, error) {
-	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/openid-configuration"
-	keys, issURL, err := fetchJWKsFromDiscovery(ctx, discoveryURL)
-	if err != nil {
-		return nil, err
-	}
-	return New(issURL, keys, v), nil
-}
-
-// NewWithOAuth2 creates an Issuer using OAuth 2.0 authorization server metadata (RFC 8414).
-//
-// It fetches {baseURL}/.well-known/oauth-authorization-server and reads the
-// jwks_uri and issuer fields. The Issuer URL is set from the discovery
-// document's issuer field.
-//
-// v is optional — pass nil to use [Issuer.UnsafeVerify] only.
-func NewWithOAuth2(ctx context.Context, baseURL string, v *Validator) (*Issuer, error) {
-	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/oauth-authorization-server"
-	keys, issURL, err := fetchJWKsFromDiscovery(ctx, discoveryURL)
-	if err != nil {
-		return nil, err
-	}
-	return New(issURL, keys, v), nil
-}
-
-// UnsafeVerify decodes tokenStr, verifies the signature, and (if [Issuer.URL]
-// is set) checks the iss claim.
-//
-// "Unsafe" means exp, aud, and other claim values are NOT checked — the token
-// is forgery-safe but not semantically validated. Callers are responsible for
-// validating claim values, or use [Issuer.VerifyAndValidate].
+// "Unsafe" means exp, aud, iss, and other claim values are NOT checked.
+// Use [Issuer.VerifyAndValidate] for full validation.
 func (iss *Issuer) UnsafeVerify(tokenStr string) (*JWS, error) {
 	jws, err := Decode(tokenStr)
 	if err != nil {
@@ -514,56 +599,34 @@ func (iss *Issuer) UnsafeVerify(tokenStr string) (*JWS, error) {
 	}
 
 	if jws.Header.Kid == "" {
-		return nil, fmt.Errorf("missing 'kid' header")
+		return jws, fmt.Errorf("missing 'kid' header")
 	}
 	key, ok := iss.keys[jws.Header.Kid]
 	if !ok {
-		return nil, fmt.Errorf("unknown kid: %q", jws.Header.Kid)
+		return jws, fmt.Errorf("unknown kid: %q", jws.Header.Kid)
 	}
 
 	signingInput := jws.Protected + "." + jws.Payload
 	if err := verifyWith(signingInput, jws.Signature, jws.Header.Alg, key); err != nil {
-		return nil, fmt.Errorf("signature verification failed: %w", err)
-	}
-
-	// Signature verified — now safe to inspect the payload for iss check.
-	if iss.URL != "" {
-		payload, err := base64.RawURLEncoding.DecodeString(jws.Payload)
-		if err != nil {
-			return nil, fmt.Errorf("invalid claims encoding: %w", err)
-		}
-		var partial struct {
-			Iss string `json:"iss"`
-		}
-		if err := json.Unmarshal(payload, &partial); err != nil {
-			return nil, fmt.Errorf("invalid claims JSON: %w", err)
-		}
-		if partial.Iss != iss.URL {
-			return nil, fmt.Errorf("iss mismatch: got %q, want %q", partial.Iss, iss.URL)
-		}
+		return jws, fmt.Errorf("signature verification failed: %w", err)
 	}
 
 	return jws, nil
 }
 
-// VerifyAndValidate verifies the token signature and iss, unmarshals the claims
-// into claims, and runs the [Validator].
+// VerifyAndValidate verifies the token signature, unmarshals the claims
+// into claims, and runs v.
 //
-// Returns a hard error (err != nil) for signature failures, decoding errors,
-// and nil Validator. Returns soft errors (errs != nil) for claim validation
-// failures (wrong aud, expired token, etc.).
+// Returns a hard error (err != nil) for signature failures and decoding errors.
+// Returns soft errors (errs != nil) for claim validation failures (wrong aud,
+// expired token, etc.). If v is nil, claims are unmarshalled but not validated.
 //
-// claims must be a pointer whose underlying type embeds [StandardClaims] (or
-// otherwise implements [StandardClaimsSource]):
+// claims must be a pointer whose underlying type embeds [StandardClaims]:
 //
 //	var claims AppClaims
-//	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, time.Now())
-func (iss *Issuer) VerifyAndValidate(tokenStr string, claims StandardClaimsSource, now time.Time) (*JWS, []string, error) {
-	if iss.validator == nil {
-		return nil, nil, fmt.Errorf("VerifyAndValidate requires a non-nil Validator; use UnsafeVerify for signature-only verification")
-	}
-
-	jws, err := iss.UnsafeVerify(tokenStr)
+//	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, v, time.Now())
+func (iss *Issuer) VerifyAndValidate(tokenStr string, claims StandardClaimsSource, v ClaimsValidator, now time.Time) (*JWS, []string, error) {
+	jws, err := iss.Verify(tokenStr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -572,8 +635,12 @@ func (iss *Issuer) VerifyAndValidate(tokenStr string, claims StandardClaimsSourc
 		return nil, nil, err
 	}
 
-	errs, err := iss.validator.Validate(claims, now)
-	return jws, errs, err
+	if v == nil {
+		return jws, nil, nil
+	}
+
+	errs, _ := v.Validate(claims, now) // discard sentinel; callers check len(errs) > 0
+	return jws, errs, nil
 }
 
 // verifyWith checks a JWS signature using the given algorithm and public key.
