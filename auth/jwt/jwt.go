@@ -31,8 +31,8 @@
 // Go method promotion, with zero boilerplate.
 //
 // Your custom claims validation logic is your own. [Verifier.VerifyJWT] authenticates the
-// signature; [StandardJWS.UnmarshalClaims] decodes the payload; [Validator.Validate]
-// checks the registered claim values (iss, aud, exp, etc.). These are three
+// signature; [StandardJWS.UnmarshalClaims] decodes the payload; [ValidatorStrict.Validate]
+// or [ValidatorLax.Validate] checks the registered claim values (iss, aud, exp, etc.). These are three
 // separate calls — you compose them in whatever order your application needs.
 //
 // [Decode] always succeeds for a well-formed token — inspect the header (kid,
@@ -416,78 +416,150 @@ func (jws *StandardJWS) signingInput() []byte {
 // between distributed systems.
 const DefaultGracePeriod = 5 * time.Second
 
-// Validator holds claim validation configuration.
+// ValidatorCore holds configuration shared by [ValidatorStrict] and [ValidatorLax].
 //
-// Configure once at startup and reuse across requests. Iss, Aud, and Azp are
-// slices — the claim value must appear in the configured list if the list is
-// non-empty. Sub and JTI are presence-only checks: if not ignored, the claim
-// must be non-empty, but its value is not matched (those are per-token and
-// per-user; value matching must be done by the application).
+// Iss, Aud, and Azp are allowlists — when non-empty the token's claim value
+// must appear in the list. RequiredAMRs and MinAMRCount constrain the amr claim.
 //
 // GracePeriod is applied to exp, iat, and auth_time to tolerate minor clock
-// differences between systems. If zero, [DefaultGracePeriod] (5s) is used.
-// Set to a negative value (e.g. -1) to disable skew tolerance entirely.
+// differences between distributed systems. If zero, [DefaultGracePeriod] (5s)
+// is used. Set to a negative value to disable skew tolerance entirely.
 //
-// Call [Validator.Validate] to check all standard fields.
+// MaxAge applies to auth_time: when set, authentication must have occurred
+// within MaxAge of now.
+type ValidatorCore struct {
+	GracePeriod  time.Duration // 0 = DefaultGracePeriod (5s); negative = no tolerance
+	MaxAge       time.Duration
+	Iss          []string // token's iss must appear in list (if set and iss is checked)
+	Aud          []string // token's aud must intersect list (if set and aud is checked)
+	Azp          []string // token's azp must appear in list (if set and azp is checked)
+	RequiredAMRs []string // all of these must appear in the token's amr list
+	MinAMRCount  int      // token's amr must have at least this many values; 0 = no minimum
+}
+
+// ValidatorStrict checks all standard JWT/OIDC claims by default.
+//
+// Configure once at startup and reuse across requests. Use Ignore* fields to
+// opt out of individual checks. Sub and JTI are presence-only: if not ignored,
+// the claim must be non-empty, but its value is not matched — that is
+// per-token/per-user logic and belongs in the application.
+//
+// Call [ValidatorStrict.Validate] to check all standard fields.
 //
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
-type Validator struct {
+type ValidatorStrict struct {
+	ValidatorCore
 	IgnoreIss      bool
-	Iss            []string      // token's iss must appear in list (if set)
-	IgnoreSub      bool          // if false, sub must be present (non-empty)
+	IgnoreSub      bool // if false, sub must be present (non-empty)
 	IgnoreAud      bool
-	Aud            []string      // token's aud must intersect list (if set)
 	IgnoreExp      bool
 	IgnoreIat      bool
-	IgnoreJTI      bool          // if false, jti must be present (non-empty)
+	IgnoreJTI      bool // if false, jti must be present (non-empty)
 	IgnoreAuthTime bool
-	GracePeriod    time.Duration // tolerance for exp/iat/auth_time; 0 = DefaultGracePeriod (5s); negative = no tolerance
-	MaxAge         time.Duration
 	IgnoreAMR      bool
-	RequiredAMRs   []string // all of these must appear in the token's amr list
-	MinAMRCount    int      // token's amr must have at least this many values; 0 = no minimum
 	IgnoreAzp      bool
-	Azp            []string      // token's azp must appear in list (if set)
 }
 
 // Validate checks the standard JWT/OIDC claims and returns soft errors.
-func (v *Validator) Validate(claims Claims, now time.Time) ([]string, error) {
-	return validateClaims(*claims.GetStandardClaims(), *v, now)
+func (v *ValidatorStrict) Validate(claims Claims, now time.Time) ([]string, error) {
+	return validateClaims(*claims.GetStandardClaims(), v.ValidatorCore, claimChecks{
+		checkIss:      !v.IgnoreIss,
+		checkSub:      !v.IgnoreSub,
+		checkAud:      !v.IgnoreAud,
+		checkExp:      !v.IgnoreExp,
+		checkIat:      !v.IgnoreIat,
+		checkJTI:      !v.IgnoreJTI,
+		checkAuthTime: !v.IgnoreAuthTime,
+		checkAMR:      !v.IgnoreAMR,
+		checkAzp:      !v.IgnoreAzp,
+	}, now)
 }
 
-func validateClaims(claims StandardClaims, v Validator, now time.Time) ([]string, error) {
+// ValidatorLax checks only the most critical claims by default.
+//
+// Exp and Iat are always validated — expired or future-dated tokens are always
+// rejected. Iss, Aud, and Azp are checked automatically when their value lists
+// are configured. Everything else (Sub, JTI, AuthTime, AMR) requires explicit
+// opt-in via Check* fields.
+//
+// Use ValidatorLax when many tokens legitimately omit optional claims such as
+// amr, jti, or auth_time. Prefer [ValidatorStrict] when you control token
+// issuance and want full OIDC compliance enforced.
+//
+// Call [ValidatorLax.Validate] to check claims.
+type ValidatorLax struct {
+	ValidatorCore
+	CheckSub      bool   // if true, sub must be present (non-empty)
+	CheckJTI      bool   // if true, jti must be present (non-empty)
+	CheckAuthTime bool   // if true (or MaxAge > 0), auth_time is validated
+	CheckAMR      bool   // if true (or RequiredAMRs/MinAMRCount set), amr is validated
+	CheckNonce    string // if non-empty, token's nonce must equal this value
+}
+
+// Validate checks the standard JWT/OIDC claims and returns soft errors.
+func (v *ValidatorLax) Validate(claims Claims, now time.Time) ([]string, error) {
+	return validateClaims(*claims.GetStandardClaims(), v.ValidatorCore, claimChecks{
+		checkIss:      len(v.Iss) > 0,
+		checkSub:      v.CheckSub,
+		checkAud:      len(v.Aud) > 0,
+		checkExp:      true, // always validate expiry
+		checkIat:      true, // always validate issued-at
+		checkJTI:      v.CheckJTI,
+		checkAuthTime: v.CheckAuthTime || v.MaxAge > 0,
+		checkAMR:      v.CheckAMR || len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
+		checkAzp:      len(v.Azp) > 0,
+		checkNonce:    v.CheckNonce,
+	}, now)
+}
+
+// claimChecks holds the resolved per-check flags computed from a [ValidatorStrict]
+// or [ValidatorLax] before passing to [validateClaims].
+type claimChecks struct {
+	checkIss      bool
+	checkSub      bool
+	checkAud      bool
+	checkExp      bool
+	checkIat      bool
+	checkJTI      bool
+	checkAuthTime bool
+	checkAMR      bool
+	checkAzp      bool
+	checkNonce    string
+}
+
+func validateClaims(claims StandardClaims, core ValidatorCore, checks claimChecks, now time.Time) ([]string, error) {
 	var errs []string
 
-	skew := v.GracePeriod
+	skew := core.GracePeriod
 	if skew == 0 {
 		skew = DefaultGracePeriod
 	} else if skew < 0 {
 		skew = 0
 	}
 
-	if !v.IgnoreIss {
+	if checks.checkIss {
 		if claims.Iss == "" {
 			errs = append(errs, "missing or malformed 'iss' (token issuer)")
-		} else if len(v.Iss) > 0 && !slices.Contains(v.Iss, claims.Iss) {
+		} else if len(core.Iss) > 0 && !slices.Contains(core.Iss, claims.Iss) {
 			errs = append(errs, fmt.Sprintf("'iss' %q not in allowed list", claims.Iss))
 		}
 	}
 
-	if !v.IgnoreSub && claims.Sub == "" {
+	if checks.checkSub && claims.Sub == "" {
 		errs = append(errs, "missing or malformed 'sub' (subject, typically pairwise user id)")
 	}
 
-	if !v.IgnoreAud {
+	if checks.checkAud {
 		if len(claims.Aud) == 0 {
 			errs = append(errs, "missing or malformed 'aud' (audience receiving token)")
-		} else if len(v.Aud) > 0 && !slices.ContainsFunc([]string(claims.Aud), func(a string) bool {
-			return slices.Contains(v.Aud, a)
+		} else if len(core.Aud) > 0 && !slices.ContainsFunc([]string(claims.Aud), func(a string) bool {
+			return slices.Contains(core.Aud, a)
 		}) {
 			errs = append(errs, fmt.Sprintf("'aud' not in allowed list: %v", claims.Aud))
 		}
 	}
 
-	if !v.IgnoreExp {
+	if checks.checkExp {
 		if claims.Exp <= 0 {
 			errs = append(errs, "missing or malformed 'exp' (expiration date in seconds)")
 		} else if now.After(time.Unix(claims.Exp, 0).Add(skew)) {
@@ -497,7 +569,7 @@ func validateClaims(claims StandardClaims, v Validator, now time.Time) ([]string
 		}
 	}
 
-	if !v.IgnoreIat {
+	if checks.checkIat {
 		if claims.Iat <= 0 {
 			errs = append(errs, "missing or malformed 'iat' (issued at, when token was signed)")
 		} else if time.Unix(claims.Iat, 0).After(now.Add(skew)) {
@@ -507,50 +579,54 @@ func validateClaims(claims StandardClaims, v Validator, now time.Time) ([]string
 		}
 	}
 
-	if !v.IgnoreJTI && claims.JTI == "" {
+	if checks.checkJTI && claims.JTI == "" {
 		errs = append(errs, "missing or malformed 'jti' (JWT ID)")
 	}
 
-	if !v.IgnoreAuthTime {
+	if checks.checkAuthTime {
 		if claims.AuthTime == 0 {
 			errs = append(errs, "missing or malformed 'auth_time' (time of real-world user authentication, in seconds)")
 		} else {
 			authTime := time.Unix(claims.AuthTime, 0)
 			authTimeStr := authTime.Format("2006-01-02 15:04:05 MST")
 			age := now.Sub(authTime)
-			diff := age - v.MaxAge
 			if authTime.After(now.Add(skew)) {
 				fromNow := authTime.Sub(now)
 				errs = append(errs, fmt.Sprintf(
 					"'auth_time' of %s is %s in the future (server time %s)",
 					authTimeStr, formatDuration(fromNow), now.Format("2006-01-02 15:04:05 MST")),
 				)
-			} else if v.MaxAge > 0 && age > v.MaxAge {
+			} else if core.MaxAge > 0 && age > core.MaxAge {
+				diff := age - core.MaxAge
 				errs = append(errs, fmt.Sprintf(
 					"'auth_time' of %s is %s old, exceeding max age %s by %s",
-					authTimeStr, formatDuration(age), formatDuration(v.MaxAge), formatDuration(diff)),
+					authTimeStr, formatDuration(age), formatDuration(core.MaxAge), formatDuration(diff)),
 				)
 			}
 		}
 	}
 
-	if !v.IgnoreAMR {
+	if checks.checkAMR {
 		if len(claims.AMR) == 0 {
 			errs = append(errs, "missing or malformed 'amr' (authorization methods, as json list)")
 		} else {
-			for _, required := range v.RequiredAMRs {
+			for _, required := range core.RequiredAMRs {
 				if !slices.Contains(claims.AMR, required) {
 					errs = append(errs, fmt.Sprintf("missing required '%s' from 'amr'", required))
 				}
 			}
-			if v.MinAMRCount > 0 && len(claims.AMR) < v.MinAMRCount {
-				errs = append(errs, fmt.Sprintf("'amr' has %d factor(s), need at least %d", len(claims.AMR), v.MinAMRCount))
+			if core.MinAMRCount > 0 && len(claims.AMR) < core.MinAMRCount {
+				errs = append(errs, fmt.Sprintf("'amr' has %d factor(s), need at least %d", len(claims.AMR), core.MinAMRCount))
 			}
 		}
 	}
 
-	if !v.IgnoreAzp && len(v.Azp) > 0 && !slices.Contains(v.Azp, claims.Azp) {
+	if checks.checkAzp && len(core.Azp) > 0 && !slices.Contains(core.Azp, claims.Azp) {
 		errs = append(errs, fmt.Sprintf("'azp' %q not in allowed list", claims.Azp))
+	}
+
+	if checks.checkNonce != "" && claims.Nonce != checks.checkNonce {
+		errs = append(errs, fmt.Sprintf("nonce mismatch: got %q, want %q", claims.Nonce, checks.checkNonce))
 	}
 
 	if len(errs) > 0 {
@@ -645,7 +721,7 @@ func (iss *Verifier) Verify(jws JWS) error {
 //
 // Returns (nil, err) on any failure — the caller never receives an
 // unauthenticated StandardJWS. Claim values (iss, aud, exp, etc.) are NOT checked;
-// call [Validator.Validate] on the unmarshalled claims after VerifyJWT:
+// call [ValidatorStrict.Validate] or [ValidatorLax.Validate] on the unmarshalled claims after VerifyJWT:
 //
 //	jws, err := iss.VerifyJWT(tokenStr)
 //	if err != nil { /* bad sig, malformed token, unknown kid */ }

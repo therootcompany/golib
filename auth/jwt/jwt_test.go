@@ -37,7 +37,7 @@ type AppClaims struct {
 // validateAppClaims is a plain function — not a method satisfying an interface.
 // It demonstrates the Decode+Verify pattern: custom validation logic lives here,
 // calling Validator.Validate and adding app-specific checks.
-func validateAppClaims(c AppClaims, v *jwt.Validator, now time.Time) ([]string, error) {
+func validateAppClaims(c AppClaims, v *jwt.ValidatorStrict, now time.Time) ([]string, error) {
 	errs, _ := v.Validate(&c, now)
 	if c.Email == "" {
 		errs = append(errs, "missing email claim")
@@ -68,14 +68,16 @@ func goodClaims() AppClaims {
 	}
 }
 
-// goodValidator configures the validator with iss set to "https://example.com".
+// goodValidator configures the strict validator with iss set to "https://example.com".
 // Iss checking is now the Validator's responsibility, not the Verifier's.
-func goodValidator() *jwt.Validator {
-	return &jwt.Validator{
-		Iss:          []string{"https://example.com"},
-		Aud:          []string{"myapp"},
-		Azp:          []string{"myapp"},
-		RequiredAMRs: []string{"pwd"},
+func goodValidator() *jwt.ValidatorStrict {
+	return &jwt.ValidatorStrict{
+		ValidatorCore: jwt.ValidatorCore{
+			Iss:          []string{"https://example.com"},
+			Aud:          []string{"myapp"},
+			Azp:          []string{"myapp"},
+			RequiredAMRs: []string{"pwd"},
+		},
 	}
 }
 
@@ -312,6 +314,94 @@ func TestCustomValidation(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected 'missing email claim' in errors: %v", errs)
+	}
+}
+
+// TestValidatorLax confirms that ValidatorLax always checks exp/iat, checks
+// iss/aud/azp when configured, and skips sub/jti/auth_time/amr by default.
+func TestValidatorLax(t *testing.T) {
+	now := time.Now()
+
+	// Minimal claims: only the fields ValidatorLax checks by default.
+	minimal := AppClaims{
+		StandardClaims: jwt.StandardClaims{
+			Iss: "https://example.com",
+			Aud: jwt.Audience{"myapp"},
+			Exp: now.Add(time.Hour).Unix(),
+			Iat: now.Unix(),
+			// Sub, JTI, AuthTime, AMR, Azp intentionally absent
+		},
+		Email: "user@example.com",
+	}
+
+	lax := &jwt.ValidatorLax{
+		ValidatorCore: jwt.ValidatorCore{
+			Iss: []string{"https://example.com"},
+			Aud: []string{"myapp"},
+		},
+	}
+
+	errs, err := lax.Validate(&minimal, now)
+	if err != nil {
+		t.Fatalf("ValidatorLax rejected minimal valid claims: %v — errs: %v", err, errs)
+	}
+
+	// Expired token must still be rejected.
+	expired := minimal
+	expired.Exp = now.Add(-time.Hour).Unix()
+	errs, err = lax.Validate(&expired, now)
+	if err == nil {
+		t.Fatal("ValidatorLax should reject expired token")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "expired") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected expiry error, got: %v", errs)
+	}
+
+	// Future iat must be rejected.
+	futureIat := minimal
+	futureIat.Iat = now.Add(time.Hour).Unix()
+	errs, err = lax.Validate(&futureIat, now)
+	if err == nil {
+		t.Fatal("ValidatorLax should reject future-dated iat")
+	}
+	found = false
+	for _, e := range errs {
+		if strings.Contains(e, "iat") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected iat error, got: %v", errs)
+	}
+
+	// Opt-in CheckNonce: mismatch must be caught.
+	laxNonce := &jwt.ValidatorLax{
+		ValidatorCore: jwt.ValidatorCore{
+			Iss: []string{"https://example.com"},
+			Aud: []string{"myapp"},
+		},
+		CheckNonce: "expected-nonce",
+	}
+	wrongNonce := minimal
+	wrongNonce.Nonce = "wrong-nonce"
+	errs, err = laxNonce.Validate(&wrongNonce, now)
+	if err == nil {
+		t.Fatal("ValidatorLax should reject nonce mismatch")
+	}
+	found = false
+	for _, e := range errs {
+		if strings.Contains(e, "nonce") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected nonce error, got: %v", errs)
 	}
 }
 
