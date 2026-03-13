@@ -58,7 +58,7 @@ func goodClaims() AppClaims {
 			Exp:      now.Add(time.Hour).Unix(),
 			Iat:      now.Unix(),
 			AuthTime: now.Unix(),
-			Amr:      []string{"pwd"},
+			AMR:      []string{"pwd"},
 			JTI:      "abc123",
 			Azp:      "myapp",
 			Nonce:    "nonce1",
@@ -76,7 +76,7 @@ func goodValidator() *jwt.Validator {
 		Aud:          []string{"myapp"},
 		Nonce:        "nonce1",
 		Azp:          []string{"myapp"},
-		RequiredAmrs: []string{"pwd"},
+		RequiredAMRs: []string{"pwd"},
 	}
 }
 
@@ -266,8 +266,8 @@ func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	if result == nil {
 		t.Fatal("Decode should return non-nil StandardJWS")
 	}
-	if result.GetStandardHeader().Kid != "k" {
-		t.Errorf("expected kid %q, got %q", "k", result.GetStandardHeader().Kid)
+	if result.GetStandardHeader().KID != "k" {
+		t.Errorf("expected kid %q, got %q", "k", result.GetStandardHeader().KID)
 	}
 
 	// Verify should fail with the wrong key.

@@ -137,7 +137,7 @@ func (jws *StandardJWS) StandardClaims() (StandardClaims, error) {
 //	// MyJWS now satisfies GetStandardHeader automatically.
 type StandardHeader struct {
 	Alg string `json:"alg"`
-	Kid string `json:"kid"`
+	KID string `json:"kid"`
 	Typ string `json:"typ"`
 }
 
@@ -207,7 +207,7 @@ type StandardClaims struct {
 	Iat      int64    `json:"iat"`
 	AuthTime int64    `json:"auth_time"`
 	Nonce    string   `json:"nonce,omitempty"`
-	Amr      []string `json:"amr"`
+	AMR      []string `json:"amr"`
 	Azp      string   `json:"azp,omitempty"`
 	JTI      string   `json:"jti"`
 }
@@ -280,7 +280,7 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 	var jws StandardJWS
 
 	jws.header = StandardHeader{
-		// Alg and Kid are set by Sign from the key type and PrivateKey.KID.
+		// Alg and KID are set by Sign from the key type and PrivateKey.KID.
 		Typ: "JWT",
 	}
 	headerJSON, err := json.Marshal(jws.header)
@@ -300,7 +300,7 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 
 // Sign signs the JWS in-place using pk.
 //
-// The KID is taken from pk.KID: if jws.Header.Kid is empty it is set
+// The KID is taken from pk.KID: if jws.Header.KID is empty it is set
 // automatically; if it is already set to a different value, Sign returns an error.
 //
 // If jws.Header.Alg is already set to a value that is incompatible with the
@@ -315,10 +315,10 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 //     https://www.rfc-editor.org/rfc/rfc8037.html
 func (jws *StandardJWS) Sign(pk *PrivateKey) ([]byte, error) {
 	switch {
-	case jws.header.Kid == "":
-		jws.header.Kid = pk.KID
-	case jws.header.Kid != pk.KID:
-		return nil, fmt.Errorf("Sign: header kid %q conflicts with PrivateKey KID %q", jws.header.Kid, pk.KID)
+	case jws.header.KID == "":
+		jws.header.KID = pk.KID
+	case jws.header.KID != pk.KID:
+		return nil, fmt.Errorf("Sign: header kid %q conflicts with PrivateKey KID %q", jws.header.KID, pk.KID)
 	}
 
 	switch pub := pk.Signer.Public().(type) {
@@ -446,8 +446,8 @@ type Validator struct {
 	MaxAge         time.Duration
 	IgnoreNonce    bool
 	Nonce          string        // if set, token's nonce must match exactly
-	IgnoreAmr      bool
-	RequiredAmrs   []string
+	IgnoreAMR      bool
+	RequiredAMRs   []string
 	IgnoreAzp      bool
 	Azp            []string      // token's azp must appear in list (if set)
 }
@@ -540,12 +540,12 @@ func validateClaims(claims StandardClaims, v Validator, now time.Time) ([]string
 		errs = append(errs, fmt.Sprintf("'nonce' mismatch: got %s, expected %s", claims.Nonce, v.Nonce))
 	}
 
-	if !v.IgnoreAmr {
-		if len(claims.Amr) == 0 {
+	if !v.IgnoreAMR {
+		if len(claims.AMR) == 0 {
 			errs = append(errs, "missing or malformed 'amr' (authorization methods, as json list)")
-		} else if len(v.RequiredAmrs) > 0 {
-			for _, required := range v.RequiredAmrs {
-				if !slices.Contains(claims.Amr, required) {
+		} else if len(v.RequiredAMRs) > 0 {
+			for _, required := range v.RequiredAMRs {
+				if !slices.Contains(claims.AMR, required) {
 					errs = append(errs, fmt.Sprintf("missing required '%s' from 'amr'", required))
 				}
 			}
@@ -629,12 +629,12 @@ func (iss *Verifier) ToJWKs() ([]byte, error) {
 // Use [Verifier.VerifyJWT] to decode and verify in one step.
 func (iss *Verifier) Verify(jws JWS) error {
 	h := jws.GetStandardHeader()
-	if h.Kid == "" {
+	if h.KID == "" {
 		return fmt.Errorf("missing 'kid' header")
 	}
-	key, ok := iss.keys[h.Kid]
+	key, ok := iss.keys[h.KID]
 	if !ok {
-		return fmt.Errorf("unknown kid: %q", h.Kid)
+		return fmt.Errorf("unknown kid: %q", h.KID)
 	}
 
 	protected, payload := jws.GetProtected(), jws.GetPayload()
