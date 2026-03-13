@@ -79,9 +79,9 @@ func goodParams() embeddedjwt.ValidateParams {
 	}
 }
 
-// TestRoundTrip is the primary happy path: sign, encode, decode, verify,
-// validate — and confirm that custom fields are accessible without a type
-// assertion via the local &claims pointer.
+// TestRoundTrip is the primary happy path: sign, encode, decode, unmarshal,
+// verify, validate — and confirm that custom fields are accessible via the
+// local claims pointer without a type assertion.
 func TestRoundTrip(t *testing.T) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -103,9 +103,12 @@ func TestRoundTrip(t *testing.T) {
 
 	token := jws.Encode()
 
-	var decoded AppClaims
-	jws2, err := embeddedjwt.Decode(token, &decoded)
+	jws2, err := embeddedjwt.Decode(token)
 	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded AppClaims
+	if err = jws2.UnmarshalClaims(&decoded); err != nil {
 		t.Fatal(err)
 	}
 	if !jws2.UnsafeVerify(&privKey.PublicKey) {
@@ -142,9 +145,12 @@ func TestRoundTripRS256(t *testing.T) {
 
 	token := jws.Encode()
 
-	var decoded AppClaims
-	jws2, err := embeddedjwt.Decode(token, &decoded)
+	jws2, err := embeddedjwt.Decode(token)
 	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded AppClaims
+	if err = jws2.UnmarshalClaims(&decoded); err != nil {
 		t.Fatal(err)
 	}
 	if !jws2.UnsafeVerify(&privKey.PublicKey) {
@@ -165,8 +171,9 @@ func TestPromotedValidate(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
+	jws2, _ := embeddedjwt.Decode(token)
 	var decoded AppClaims
-	jws2, _ := embeddedjwt.Decode(token, &decoded)
+	_ = jws2.UnmarshalClaims(&decoded)
 	jws2.UnsafeVerify(&privKey.PublicKey)
 
 	if errs, err := jws2.Validate(goodParams()); err != nil {
@@ -200,8 +207,9 @@ func TestOverriddenValidate(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
+	jws2, _ := embeddedjwt.Decode(token)
 	var decoded StrictAppClaims
-	jws2, _ := embeddedjwt.Decode(token, &decoded)
+	_ = jws2.UnmarshalClaims(&decoded)
 	jws2.UnsafeVerify(&privKey.PublicKey)
 
 	errs, err := jws2.Validate(goodParams())
@@ -230,8 +238,7 @@ func TestUnsafeVerifyWrongKey(t *testing.T) {
 	_, _ = jws.Sign(signingKey)
 	token := jws.Encode()
 
-	var decoded AppClaims
-	jws2, _ := embeddedjwt.Decode(token, &decoded)
+	jws2, _ := embeddedjwt.Decode(token)
 
 	if jws2.UnsafeVerify(&wrongKey.PublicKey) {
 		t.Fatal("expected verification to fail with wrong key")
@@ -248,8 +255,7 @@ func TestVerifyWrongKeyType(t *testing.T) {
 	_, _ = jws.Sign(ecKey)
 	token := jws.Encode()
 
-	var decoded AppClaims
-	jws2, _ := embeddedjwt.Decode(token, &decoded)
+	jws2, _ := embeddedjwt.Decode(token)
 
 	if jws2.UnsafeVerify(&rsaKey.PublicKey) {
 		t.Fatal("expected verification to fail: RSA key for ES256 token")
@@ -265,8 +271,7 @@ func TestVerifyUnknownAlg(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	var decoded AppClaims
-	jws2, _ := embeddedjwt.Decode(token, &decoded)
+	jws2, _ := embeddedjwt.Decode(token)
 	jws2.Header.Alg = "none"
 
 	if jws2.UnsafeVerify(&privKey.PublicKey) {
@@ -285,8 +290,7 @@ func TestVerifyWithJWKSKey(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	var decoded AppClaims
-	jws2, _ := embeddedjwt.Decode(token, &decoded)
+	jws2, _ := embeddedjwt.Decode(token)
 
 	if !jws2.UnsafeVerify(jwksKey.Key) {
 		t.Fatal("verification via PublicJWK.Key failed")
