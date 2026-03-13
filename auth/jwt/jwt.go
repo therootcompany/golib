@@ -412,14 +412,17 @@ func (jws *StandardJWS) signingInput() []byte {
 }
 
 // DefaultGracePeriod is the tolerance applied to exp, iat, and auth_time checks
-// when Validator.GracePeriod is zero. It covers common sub-second clock drift
+// when ValidatorCore.GracePeriod is zero. It covers common sub-second clock drift
 // between distributed systems.
 const DefaultGracePeriod = 5 * time.Second
 
 // ValidatorCore holds configuration shared by [ValidatorStrict] and [ValidatorLax].
+// It can also be used directly as a minimal validator.
 //
+// Exp and Iat are checked by default; set IgnoreExp or IgnoreIat to opt out.
 // Iss, Aud, and Azp are allowlists — when non-empty the token's claim value
-// must appear in the list. RequiredAMRs and MinAMRCount constrain the amr claim.
+// must appear in the list and the claim must be present. RequiredAMRs and
+// MinAMRCount constrain the amr claim when set.
 //
 // GracePeriod is applied to exp, iat, and auth_time to tolerate minor clock
 // differences between distributed systems. If zero, [DefaultGracePeriod] (5s)
@@ -430,19 +433,36 @@ const DefaultGracePeriod = 5 * time.Second
 type ValidatorCore struct {
 	GracePeriod  time.Duration // 0 = DefaultGracePeriod (5s); negative = no tolerance
 	MaxAge       time.Duration
-	Iss          []string // token's iss must appear in list (if set and iss is checked)
-	Aud          []string // token's aud must intersect list (if set and aud is checked)
-	Azp          []string // token's azp must appear in list (if set and azp is checked)
+	IgnoreExp    bool
+	IgnoreIat    bool
+	Iss          []string // token's iss must appear in list (if set)
+	Aud          []string // token's aud must intersect list (if set)
+	Azp          []string // token's azp must appear in list (if set)
 	RequiredAMRs []string // all of these must appear in the token's amr list
 	MinAMRCount  int      // token's amr must have at least this many values; 0 = no minimum
+}
+
+// Validate checks exp, iat, and any configured value lists (iss, aud, azp, amr).
+// It does not check sub, jti, or auth_time — use [ValidatorStrict] or [ValidatorLax]
+// for those.
+func (v *ValidatorCore) Validate(claims Claims, now time.Time) ([]string, error) {
+	return validateClaims(*claims.GetStandardClaims(), *v, claimChecks{
+		checkIss: len(v.Iss) > 0,
+		checkAud: len(v.Aud) > 0,
+		checkExp: !v.IgnoreExp,
+		checkIat: !v.IgnoreIat,
+		checkAMR: len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
+		checkAzp: len(v.Azp) > 0,
+	}, now)
 }
 
 // ValidatorStrict checks all standard JWT/OIDC claims by default.
 //
 // Configure once at startup and reuse across requests. Use Ignore* fields to
-// opt out of individual checks. Sub and JTI are presence-only: if not ignored,
-// the claim must be non-empty, but its value is not matched — that is
-// per-token/per-user logic and belongs in the application.
+// opt out of individual checks. IgnoreExp and IgnoreIat are promoted from
+// [ValidatorCore]. Sub and JTI are presence-only: if not ignored, the claim
+// must be non-empty, but its value is not matched — that is per-token/per-user
+// logic and belongs in the application.
 //
 // Call [ValidatorStrict.Validate] to check all standard fields.
 //
@@ -452,8 +472,6 @@ type ValidatorStrict struct {
 	IgnoreIss      bool
 	IgnoreSub      bool // if false, sub must be present (non-empty)
 	IgnoreAud      bool
-	IgnoreExp      bool
-	IgnoreIat      bool
 	IgnoreJTI      bool // if false, jti must be present (non-empty)
 	IgnoreAuthTime bool
 	IgnoreAMR      bool
@@ -477,10 +495,11 @@ func (v *ValidatorStrict) Validate(claims Claims, now time.Time) ([]string, erro
 
 // ValidatorLax checks only the most critical claims by default.
 //
-// Exp and Iat are always validated — expired or future-dated tokens are always
-// rejected. Iss, Aud, and Azp are checked automatically when their value lists
-// are configured. Everything else (Sub, JTI, AuthTime, AMR) requires explicit
-// opt-in via Check* fields.
+// Exp and Iat are checked by default (IgnoreExp and IgnoreIat from the embedded
+// [ValidatorCore] can disable them, but this is rarely appropriate). Iss, Aud,
+// and Azp are checked automatically when their value lists are configured.
+// Everything else (Sub, JTI, AuthTime, AMR) requires explicit opt-in via
+// Check* fields.
 //
 // Use ValidatorLax when many tokens legitimately omit optional claims such as
 // amr, jti, or auth_time. Prefer [ValidatorStrict] when you control token
@@ -502,8 +521,8 @@ func (v *ValidatorLax) Validate(claims Claims, now time.Time) ([]string, error) 
 		checkIss:      len(v.Iss) > 0,
 		checkSub:      v.CheckSub,
 		checkAud:      len(v.Aud) > 0,
-		checkExp:      true, // always validate expiry
-		checkIat:      true, // always validate issued-at
+		checkExp:      !v.IgnoreExp,
+		checkIat:      !v.IgnoreIat,
 		checkJTI:      v.CheckJTI,
 		checkAuthTime: v.CheckAuthTime || v.MaxAge > 0,
 		checkAMR:      v.CheckAMR || len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
