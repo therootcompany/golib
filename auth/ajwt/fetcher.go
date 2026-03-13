@@ -95,7 +95,7 @@ func (f *JWKsFetcher) Issuer(ctx context.Context) (*Issuer, error) {
 		return ci.iss, nil
 	}
 
-	keys, err := FetchJWKs(ctx, f.URL)
+	keys, err := FetchJWKsURL(ctx, f.URL)
 	if err != nil {
 		// On error, serve stale keys within the stale window.
 		if ci := f.cached.Load(); ci != nil && f.KeepOnError {

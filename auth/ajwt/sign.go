@@ -84,6 +84,16 @@ func (s *Signer) Issuer() *Issuer {
 	return New(s.PublicKeys())
 }
 
+// ToJWKsJSON returns the Signer's public keys as a [JWKsJSON] struct.
+func (s *Signer) ToJWKsJSON() (JWKsJSON, error) {
+	return ToJWKsJSON(s.PublicKeys())
+}
+
+// ToJWKs serializes the Signer's public keys as a JWKS JSON document.
+func (s *Signer) ToJWKs() ([]byte, error) {
+	return ToJWKs(s.PublicKeys())
+}
+
 // PublicKeys returns the public-key side of each signing key, in the same order
 // as the signers were provided to [NewSigner].
 func (s *Signer) PublicKeys() []PublicJWK {

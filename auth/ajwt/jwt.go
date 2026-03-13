@@ -565,9 +565,14 @@ func (iss *Issuer) PublicKeys() []PublicJWK {
 	return iss.pubKeys
 }
 
+// ToJWKsJSON returns the Issuer's public keys as a [JWKsJSON] struct.
+func (iss *Issuer) ToJWKsJSON() (JWKsJSON, error) {
+	return ToJWKsJSON(iss.pubKeys)
+}
+
 // ToJWKs serializes the Issuer's public keys as a JWKS JSON document.
 func (iss *Issuer) ToJWKs() ([]byte, error) {
-	return MarshalPublicJWKs(iss.pubKeys)
+	return ToJWKs(iss.pubKeys)
 }
 
 // Verify decodes tokenStr and verifies its signature.

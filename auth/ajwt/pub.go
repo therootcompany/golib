@@ -158,10 +158,10 @@ type JWKsJSON struct {
 	Keys []PublicJWKJSON `json:"keys"`
 }
 
-// EncodePublicJWK converts a [PublicJWK] to its JSON representation.
+// ToJWK converts a [PublicJWK] to its JSON representation.
 //
 // Supported key types: *ecdsa.PublicKey (EC), *rsa.PublicKey (RSA), ed25519.PublicKey (OKP).
-func EncodePublicJWK(k PublicJWK) (PublicJWKJSON, error) {
+func ToJWK(k PublicJWK) (PublicJWKJSON, error) {
 	switch key := k.Key.(type) {
 	case *ecdsa.PublicKey:
 		var crv string
@@ -173,7 +173,7 @@ func EncodePublicJWK(k PublicJWK) (PublicJWKJSON, error) {
 		case elliptic.P521():
 			crv = "P-521"
 		default:
-			return PublicJWKJSON{}, fmt.Errorf("EncodePublicJWK: unsupported EC curve %s", key.Curve.Params().Name)
+			return PublicJWKJSON{}, fmt.Errorf("ToJWK: unsupported EC curve %s", key.Curve.Params().Name)
 		}
 		byteLen := (key.Curve.Params().BitSize + 7) / 8
 		xBytes := make([]byte, byteLen)
@@ -209,27 +209,36 @@ func EncodePublicJWK(k PublicJWK) (PublicJWKJSON, error) {
 		}, nil
 
 	default:
-		return PublicJWKJSON{}, fmt.Errorf("EncodePublicJWK: unsupported key type %T", k.Key)
+		return PublicJWKJSON{}, fmt.Errorf("ToJWK: unsupported key type %T", k.Key)
 	}
 }
 
-// MarshalPublicJWKs serializes a slice of [PublicJWK] as a JWKS JSON document.
-func MarshalPublicJWKs(keys []PublicJWK) ([]byte, error) {
+// ToJWKsJSON converts a slice of [PublicJWK] to a [JWKsJSON] struct.
+func ToJWKsJSON(keys []PublicJWK) (JWKsJSON, error) {
 	jsonKeys := make([]PublicJWKJSON, 0, len(keys))
 	for _, k := range keys {
-		jk, err := EncodePublicJWK(k)
+		jk, err := ToJWK(k)
 		if err != nil {
-			return nil, err
+			return JWKsJSON{}, err
 		}
 		jsonKeys = append(jsonKeys, jk)
 	}
-	return json.Marshal(JWKsJSON{Keys: jsonKeys})
+	return JWKsJSON{Keys: jsonKeys}, nil
 }
 
-// FetchJWKs retrieves and parses a JWKS document from jwksURL.
+// ToJWKs serializes a slice of [PublicJWK] as a JWKS JSON document.
+func ToJWKs(keys []PublicJWK) ([]byte, error) {
+	doc, err := ToJWKsJSON(keys)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(doc)
+}
+
+// FetchJWKsURL retrieves and parses a JWKS document from the given JWKS endpoint URL.
 //
 // ctx is used for the HTTP request timeout and cancellation.
-func FetchJWKs(ctx context.Context, jwksURL string) ([]PublicJWK, error) {
+func FetchJWKsURL(ctx context.Context, jwksURL string) ([]PublicJWK, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("fetch JWKS: %w", err)
@@ -247,20 +256,20 @@ func FetchJWKs(ctx context.Context, jwksURL string) ([]PublicJWK, error) {
 	return DecodePublicJWKs(resp.Body)
 }
 
-// FetchJWKsFromOIDC fetches JWKS via OIDC discovery from baseURL.
+// FetchOIDCURL fetches JWKS via OIDC discovery from the given base URL.
 //
 // It fetches {baseURL}/.well-known/openid-configuration and reads the jwks_uri field.
-func FetchJWKsFromOIDC(ctx context.Context, baseURL string) ([]PublicJWK, error) {
+func FetchOIDCURL(ctx context.Context, baseURL string) ([]PublicJWK, error) {
 	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/openid-configuration"
 	keys, _, err := fetchJWKsFromDiscovery(ctx, discoveryURL)
 	return keys, err
 }
 
-// FetchJWKsFromOAuth2 fetches JWKS via OAuth 2.0 authorization server metadata (RFC 8414)
-// from baseURL.
+// FetchOAuth2URL fetches JWKS via OAuth 2.0 authorization server metadata (RFC 8414)
+// from the given base URL.
 //
 // It fetches {baseURL}/.well-known/oauth-authorization-server and reads the jwks_uri field.
-func FetchJWKsFromOAuth2(ctx context.Context, baseURL string) ([]PublicJWK, error) {
+func FetchOAuth2URL(ctx context.Context, baseURL string) ([]PublicJWK, error) {
 	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/oauth-authorization-server"
 	keys, _, err := fetchJWKsFromDiscovery(ctx, discoveryURL)
 	return keys, err
@@ -296,7 +305,7 @@ func fetchJWKsFromDiscovery(ctx context.Context, discoveryURL string) ([]PublicJ
 		return nil, "", fmt.Errorf("discovery doc missing jwks_uri field")
 	}
 
-	keys, err := FetchJWKs(ctx, doc.JWKsURI)
+	keys, err := FetchJWKsURL(ctx, doc.JWKsURI)
 	if err != nil {
 		return nil, "", err
 	}
