@@ -447,7 +447,8 @@ type Validator struct {
 	IgnoreNonce    bool
 	Nonce          string        // if set, token's nonce must match exactly
 	IgnoreAMR      bool
-	RequiredAMRs   []string
+	RequiredAMRs   []string // all of these must appear in the token's amr list
+	MinAMRCount    int      // token's amr must have at least this many values; 0 = no minimum
 	IgnoreAzp      bool
 	Azp            []string      // token's azp must appear in list (if set)
 }
@@ -543,11 +544,14 @@ func validateClaims(claims StandardClaims, v Validator, now time.Time) ([]string
 	if !v.IgnoreAMR {
 		if len(claims.AMR) == 0 {
 			errs = append(errs, "missing or malformed 'amr' (authorization methods, as json list)")
-		} else if len(v.RequiredAMRs) > 0 {
+		} else {
 			for _, required := range v.RequiredAMRs {
 				if !slices.Contains(claims.AMR, required) {
 					errs = append(errs, fmt.Sprintf("missing required '%s' from 'amr'", required))
 				}
+			}
+			if v.MinAMRCount > 0 && len(claims.AMR) < v.MinAMRCount {
+				errs = append(errs, fmt.Sprintf("'amr' has %d factor(s), need at least %d", len(claims.AMR), v.MinAMRCount))
 			}
 		}
 	}

@@ -11,7 +11,10 @@ package jwt
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -197,14 +200,37 @@ func (f *KeyFetcher) maybeInit() {
 }
 
 // fetch performs the HTTP request and stores the result. Must be called with fetchMu held.
+//
+// The cache TTL is the server's Cache-Control max-age, clamped to MaxAge.
+// If the server sends no Cache-Control header, MaxAge is used directly.
 func (f *KeyFetcher) fetch() (*Verifier, error) {
 	client := f.HTTPClient
-	timeout := clientTimeout(client)
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), clientTimeout(client))
 	defer cancel()
 
-	keys, err := jwk.FetchURL(ctx, f.URL, client)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.URL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fetch JWKS from %s: %w", f.URL, err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch JWKS from %s: %w", f.URL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch JWKS from %s: unexpected status %d", f.URL, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("fetch JWKS from %s: read body: %w", f.URL, err)
+	}
+	keys, err := jwk.Unmarshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("fetch JWKS from %s: %w", f.URL, err)
 	}
@@ -213,6 +239,11 @@ func (f *KeyFetcher) fetch() (*Verifier, error) {
 	if maxAge <= 0 {
 		maxAge = time.Hour
 	}
+	// Honor the server's Cache-Control max-age, clamped to our MaxAge ceiling.
+	if serverMaxAge := parseCacheControlMaxAge(resp.Header.Get("Cache-Control")); serverMaxAge > 0 && serverMaxAge < maxAge {
+		maxAge = serverMaxAge
+	}
+
 	now := time.Now()
 	ci := &cachedVerifier{
 		iss:       New(keys),
@@ -221,6 +252,21 @@ func (f *KeyFetcher) fetch() (*Verifier, error) {
 	}
 	f.cached.Store(ci)
 	return ci.iss, nil
+}
+
+// parseCacheControlMaxAge extracts the max-age value from a Cache-Control header.
+// Returns 0 if the header is absent or does not contain a valid max-age directive.
+func parseCacheControlMaxAge(header string) time.Duration {
+	for part := range strings.SplitSeq(header, ",") {
+		part = strings.TrimSpace(part)
+		if val, ok := strings.CutPrefix(part, "max-age="); ok {
+			n, err := strconv.Atoi(val)
+			if err == nil && n > 0 {
+				return time.Duration(n) * time.Second
+			}
+		}
+	}
+	return 0
 }
 
 // clientTimeout returns client.Timeout, or 30s if the client is nil or has no timeout set.
