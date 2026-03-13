@@ -11,7 +11,6 @@ package jwt
 import (
 	"crypto"
 	"fmt"
-	"io"
 	"sync/atomic"
 
 	"github.com/therootcompany/golib/auth/jwt/jwk"
@@ -19,26 +18,14 @@ import (
 
 // PrivateKey pairs a [crypto.Signer] with a key ID (KID).
 //
-// PrivateKey implements [crypto.Signer] so it can be passed directly to
-// [JWS.Sign], which auto-sets the KID from [PrivateKey.KID].
+// Pass *PrivateKey to [StandardJWS.Sign], which auto-applies the KID to the
+// JOSE header.
 //
 // If KID is empty, it is auto-computed from the RFC 7638 thumbprint of the
 // public key when passed to [NewSigner].
 type PrivateKey struct {
 	KID    string
 	Signer crypto.Signer
-}
-
-// Public returns the public key for this PrivateKey.
-// Implements [crypto.Signer].
-func (pk *PrivateKey) Public() crypto.PublicKey {
-	return pk.Signer.Public()
-}
-
-// Sign signs digest with the underlying signer.
-// Implements [crypto.Signer].
-func (pk *PrivateKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
-	return pk.Signer.Sign(rand, digest, opts)
 }
 
 // Signer manages one or more private signing keys and issues JWTs by
@@ -84,11 +71,11 @@ func NewSigner(signers []PrivateKey) (*Signer, error) {
 // Sign creates and signs a compact JWT from claims, using the next signing key
 // in round-robin order. The caller is responsible for setting the "iss" field
 // in claims if issuer identification is needed.
-func (s *Signer) Sign(claims any) (string, error) {
+func (s *Signer) Sign(claims Claims) (string, error) {
 	idx := s.signerIdx.Add(1) - 1
 	pk := &s.signers[idx%uint64(len(s.signers))]
 
-	jws, err := NewJWSFromClaims(claims, "")
+	jws, err := NewJWS(claims)
 	if err != nil {
 		return "", err
 	}

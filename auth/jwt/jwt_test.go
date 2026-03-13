@@ -35,10 +35,10 @@ type AppClaims struct {
 }
 
 // validateAppClaims is a plain function — not a method satisfying an interface.
-// It demonstrates the UnsafeVerify pattern: custom validation logic lives here,
-// calling ValidateStandardClaims directly and adding app-specific checks.
-func validateAppClaims(c AppClaims, v jwt.Validator, now time.Time) ([]string, error) {
-	errs, _ := jwt.ValidateStandardClaims(c.StandardClaims, v, now)
+// It demonstrates the Decode+Verify pattern: custom validation logic lives here,
+// calling Validator.Validate and adding app-specific checks.
+func validateAppClaims(c AppClaims, v *jwt.Validator, now time.Time) ([]string, error) {
+	errs, _ := v.Validate(&c, now)
 	if c.Email == "" {
 		errs = append(errs, "missing email claim")
 	}
@@ -93,16 +93,17 @@ func TestRoundTrip(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	jws, err := jwt.NewJWSFromClaims(&claims, "key-1")
+	pk := &jwt.PrivateKey{KID: "key-1", Signer: privKey}
+	jws, err := jwt.NewJWS(&claims)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err = jws.Sign(privKey); err != nil {
+	if _, err = jws.Sign(pk); err != nil {
 		t.Fatal(err)
 	}
-	if jws.StandardHeader().Alg != "ES256" {
-		t.Fatalf("expected ES256, got %s", jws.StandardHeader().Alg)
+	if jws.GetStandardHeader().Alg != "ES256" {
+		t.Fatalf("expected ES256, got %s", jws.GetStandardHeader().Alg)
 	}
 
 	token := jws.Encode()
@@ -113,8 +114,8 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyJWT failed: %v", err)
 	}
-	if jws2.StandardHeader().Alg != "ES256" {
-		t.Errorf("expected ES256 alg in jws, got %s", jws2.StandardHeader().Alg)
+	if jws2.GetStandardHeader().Alg != "ES256" {
+		t.Errorf("expected ES256 alg in jws, got %s", jws2.GetStandardHeader().Alg)
 	}
 
 	var decoded AppClaims
@@ -139,16 +140,17 @@ func TestRoundTripRS256(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	jws, err := jwt.NewJWSFromClaims(&claims, "key-1")
+	pk := &jwt.PrivateKey{KID: "key-1", Signer: privKey}
+	jws, err := jwt.NewJWS(&claims)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err = jws.Sign(privKey); err != nil {
+	if _, err = jws.Sign(pk); err != nil {
 		t.Fatal(err)
 	}
-	if jws.StandardHeader().Alg != "RS256" {
-		t.Fatalf("expected RS256, got %s", jws.StandardHeader().Alg)
+	if jws.GetStandardHeader().Alg != "RS256" {
+		t.Fatalf("expected RS256, got %s", jws.GetStandardHeader().Alg)
 	}
 
 	token := jws.Encode()
@@ -177,16 +179,17 @@ func TestRoundTripEdDSA(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	jws, err := jwt.NewJWSFromClaims(&claims, "key-1")
+	pk := &jwt.PrivateKey{KID: "key-1", Signer: privKey}
+	jws, err := jwt.NewJWS(&claims)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err = jws.Sign(privKey); err != nil {
+	if _, err = jws.Sign(pk); err != nil {
 		t.Fatal(err)
 	}
-	if jws.StandardHeader().Alg != "EdDSA" {
-		t.Fatalf("expected EdDSA, got %s", jws.StandardHeader().Alg)
+	if jws.GetStandardHeader().Alg != "EdDSA" {
+		t.Fatalf("expected EdDSA, got %s", jws.GetStandardHeader().Alg)
 	}
 
 	token := jws.Encode()
@@ -207,21 +210,25 @@ func TestRoundTripEdDSA(t *testing.T) {
 	}
 }
 
-// TestUnsafeVerifyFlow demonstrates the UnsafeVerify + custom validation pattern.
+// TestDecodeVerifyFlow demonstrates the Decode + Verify + custom validation pattern.
 // The caller owns the full validation pipeline.
-func TestUnsafeVerifyFlow(t *testing.T) {
+func TestDecodeVerifyFlow(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
-	_, _ = jws.Sign(privKey)
+	pk := &jwt.PrivateKey{KID: "k", Signer: privKey}
+	jws, _ := jwt.NewJWS(&claims)
+	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
 	iss := jwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
 
-	jws2, err := iss.UnsafeVerify(token)
+	jws2, err := jwt.Decode(token)
 	if err != nil {
-		t.Fatalf("UnsafeVerify failed: %v", err)
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if err := iss.Verify(jws2); err != nil {
+		t.Fatalf("Verify failed: %v", err)
 	}
 
 	var decoded AppClaims
@@ -229,62 +236,72 @@ func TestUnsafeVerifyFlow(t *testing.T) {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 
-	errs, err := jwt.ValidateStandardClaims(decoded.StandardClaims, *goodValidator(), time.Now())
+	errs, err := goodValidator().Validate(&decoded, time.Now())
 	if err != nil {
-		t.Fatalf("ValidateStandardClaims failed: %v — errs: %v", err, errs)
+		t.Fatalf("Validate failed: %v — errs: %v", err, errs)
 	}
 }
 
-// TestUnsafeVerifyReturnsJWSOnSigFailure verifies that UnsafeVerify returns a
-// non-nil *StandardJWS even when signature verification fails, so callers can inspect
-// the header (kid, iss) for routing.
-func TestUnsafeVerifyReturnsJWSOnSigFailure(t *testing.T) {
+// TestDecodeReturnsParsedOnSigFailure verifies that Decode returns a non-nil
+// *StandardJWS even when the token will later fail signature verification.
+// Callers can inspect the header (kid, alg) for routing before calling Verify.
+func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	signingKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
-	_, _ = jws.Sign(signingKey)
+	pk := &jwt.PrivateKey{KID: "k", Signer: signingKey}
+	jws, _ := jwt.NewJWS(&claims)
+	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
 	// Verifier has wrong public key — sig verification will fail.
 	iss := jwt.New([]jwk.Key{{Key: &wrongKey.PublicKey, KID: "k"}})
 
-	result, err := iss.UnsafeVerify(token)
-	if err == nil {
-		t.Fatal("expected error for wrong key")
+	// Decode always succeeds for well-formed tokens.
+	result, err := jwt.Decode(token)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
 	}
-	// UnsafeVerify must return the JWS despite sig failure.
 	if result == nil {
-		t.Fatal("UnsafeVerify should return non-nil StandardJWS on sig failure")
+		t.Fatal("Decode should return non-nil StandardJWS")
 	}
-	if result.StandardHeader().Kid != "k" {
-		t.Errorf("expected kid %q, got %q", "k", result.StandardHeader().Kid)
+	if result.GetStandardHeader().Kid != "k" {
+		t.Errorf("expected kid %q, got %q", "k", result.GetStandardHeader().Kid)
+	}
+
+	// Verify should fail with the wrong key.
+	if err := iss.Verify(result); err == nil {
+		t.Fatal("expected Verify to fail with wrong key")
 	}
 }
 
-// TestCustomValidation demonstrates that ValidateStandardClaims is called
-// explicitly and custom fields are validated without any Claims interface.
+// TestCustomValidation demonstrates that Validator.Validate is called
+// explicitly and custom fields are validated alongside the standard ones.
 func TestCustomValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	// Token with empty Email — our custom validator should reject it.
 	claims := goodClaims()
 	claims.Email = ""
-	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
-	_, _ = jws.Sign(privKey)
+	pk := &jwt.PrivateKey{KID: "k", Signer: privKey}
+	jws, _ := jwt.NewJWS(&claims)
+	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
-	jws2, err := iss.UnsafeVerify(token)
+	jws2, err := jwt.Decode(token)
 	if err != nil {
-		t.Fatalf("UnsafeVerify failed unexpectedly: %v", err)
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if err := iss.Verify(jws2); err != nil {
+		t.Fatalf("Verify failed unexpectedly: %v", err)
 	}
 
 	var decoded AppClaims
 	_ = jws2.UnmarshalClaims(&decoded)
 
-	errs, err := validateAppClaims(decoded, *goodValidator(), time.Now())
+	errs, err := validateAppClaims(decoded, goodValidator(), time.Now())
 	if err == nil {
 		t.Fatal("expected validation to fail: email is empty")
 	}
@@ -304,8 +321,9 @@ func TestCustomValidation(t *testing.T) {
 func TestVerifyWithoutValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	c := goodClaims()
-	jws, _ := jwt.NewJWSFromClaims(&c, "k")
-	_, _ = jws.Sign(privKey)
+	pk := &jwt.PrivateKey{KID: "k", Signer: privKey}
+	jws, _ := jwt.NewJWS(&c)
+	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
 	iss := jwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
@@ -329,13 +347,18 @@ func TestVerifierWrongKey(t *testing.T) {
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
-	_, _ = jws.Sign(signingKey)
+	pk := &jwt.PrivateKey{KID: "k", Signer: signingKey}
+	jws, _ := jwt.NewJWS(&claims)
+	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.Key{Key: &wrongKey.PublicKey, KID: "k"})
 
-	if _, err := iss.Verify(token); err == nil {
+	parsed, err := jwt.Decode(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := iss.Verify(parsed); err == nil {
 		t.Fatal("expected Verify to fail with wrong key")
 	}
 }
@@ -345,13 +368,18 @@ func TestVerifierUnknownKid(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	jws, _ := jwt.NewJWSFromClaims(&claims, "unknown-kid")
-	_, _ = jws.Sign(privKey)
+	pk := &jwt.PrivateKey{KID: "unknown-kid", Signer: privKey}
+	jws, _ := jwt.NewJWS(&claims)
+	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "known-kid"})
 
-	if _, err := iss.Verify(token); err == nil {
+	parsed, err := jwt.Decode(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := iss.Verify(parsed); err == nil {
 		t.Fatal("expected Verify to fail for unknown kid")
 	}
 }
@@ -364,15 +392,20 @@ func TestVerifierIssMismatch(t *testing.T) {
 
 	claims := goodClaims()
 	claims.Iss = "https://evil.example.com"
-	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
-	_, _ = jws.Sign(privKey)
+	pk := &jwt.PrivateKey{KID: "k", Signer: privKey}
+	jws, _ := jwt.NewJWS(&claims)
+	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
 
-	// UnsafeVerify succeeds — iss is not checked at the Verifier level.
-	if _, err := iss.UnsafeVerify(token); err != nil {
-		t.Fatalf("UnsafeVerify should succeed (no iss check): %v", err)
+	// Decode+Verify succeeds — iss is not checked at the Verifier level.
+	parsed, err := jwt.Decode(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := iss.Verify(parsed); err != nil {
+		t.Fatalf("Verify should succeed (no iss check): %v", err)
 	}
 
 	// VerifyJWT + Validate: signature passes but iss validation catches the mismatch.
@@ -406,8 +439,9 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
-	_, _ = jws.Sign(privKey)
+	pk := &jwt.PrivateKey{KID: "k", Signer: privKey}
+	jws, _ := jwt.NewJWS(&claims)
+	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
@@ -418,7 +452,11 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	parts := strings.SplitN(token, ".", 3)
 	tamperedToken := noneHeader + "." + parts[1] + "." + parts[2]
 
-	if _, err := iss.Verify(tamperedToken); err == nil {
+	parsed, err := jwt.Decode(tamperedToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := iss.Verify(parsed); err == nil {
 		t.Fatal("expected Verify to fail for tampered alg")
 	}
 }
@@ -482,7 +520,11 @@ func TestSignerAutoKID(t *testing.T) {
 	claims := goodClaims()
 	tokenStr, _ := signer.Sign(&claims)
 
-	if _, err := iss.Verify(tokenStr); err != nil {
+	parsed, err := jwt.Decode(tokenStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := iss.Verify(parsed); err != nil {
 		t.Fatalf("Verify failed: %v", err)
 	}
 }
@@ -554,7 +596,12 @@ func TestVerifierToJWKs(t *testing.T) {
 	iss2 := jwt.New(keys)
 	claims := goodClaims()
 	tokenStr, _ := signer.Sign(&claims)
-	if _, err := iss2.Verify(tokenStr); err != nil {
+
+	parsed, err := jwt.Decode(tokenStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := iss2.Verify(parsed); err != nil {
 		t.Fatalf("Verify on round-tripped JWKS failed: %v", err)
 	}
 }

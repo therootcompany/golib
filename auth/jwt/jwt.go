@@ -25,7 +25,7 @@
 // automatically from the key type; KID comes from [PrivateKey.KID]; typ is
 // always "JWT". [StandardJWS.Sign] handles all of this — you do not configure alg.
 //
-// You'll almost always need custom claims. [JWS.UnmarshalClaims] accepts any
+// You'll almost always need custom claims. [StandardJWS.UnmarshalClaims] accepts any
 // pointer — no interface to implement for decoding. Embed [StandardClaims] in
 // your struct to get the registered fields and satisfy [Claims] for free via
 // Go method promotion, with zero boilerplate.
@@ -34,12 +34,9 @@
 // signature; [StandardJWS.UnmarshalClaims] decodes the payload; [Validator.Validate]
 // checks the registered claim values (iss, aud, exp, etc.). These are three
 // separate calls — you compose them in whatever order your application needs.
-// [ValidateStandardClaims] is exported so you can call it directly without a
-// [Validator] receiver, and add your own checks before or after.
 //
-// [Verifier.UnsafeVerify] returns the [*StandardJWS] even when signature verification
-// fails, so you can inspect the kid or iss for multi-issuer routing before
-// deciding which verifier or validator to apply.
+// [Decode] always succeeds for a well-formed token — inspect the header (kid,
+// alg) before calling [Verifier.Verify] for multi-issuer routing.
 //
 // Convenience is not convenient if it gets in your way. This is a library, not
 // a framework: it gives you composable pieces you call and control, not
@@ -67,17 +64,20 @@ import (
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
-// JWS is the interface implemented by [*StandardJWS].
+// JWS is the interface implemented by [*StandardJWS] and any custom JWS type.
 //
-// It provides read-only access to the parsed token structure.
+// Custom implementations can embed [StandardHeader] to satisfy
+// [JWS.GetStandardHeader] for free via Go method promotion — similar to
+// how embedding [StandardClaims] satisfies [Claims].
+//
 // Use [Verifier.VerifyJWT] to get a [*StandardJWS] with access to
-// [StandardJWS.UnmarshalClaims], or [Verifier.Verify] to get a JWS interface
-// for header/claims inspection only.
+// [StandardJWS.UnmarshalClaims], or [Decode] + [Verifier.Verify] for
+// routing by header fields before verifying the signature.
 type JWS interface {
 	GetProtected() string
 	GetPayload() string
 	GetSignature() []byte
-	StandardHeader() StandardHeader
+	GetStandardHeader() *StandardHeader
 	StandardClaims() (StandardClaims, error)
 }
 
@@ -85,8 +85,8 @@ type JWS interface {
 //
 // It holds only the parsed structure — header, raw base64url fields, and
 // decoded signature bytes. It carries no Claims interface and no Verified flag;
-// use [Verifier.VerifyJWT] or [Verifier.UnsafeVerify] to authenticate the token and
-// [StandardJWS.UnmarshalClaims] to decode the payload into a typed struct.
+// use [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] to authenticate the token
+// and [StandardJWS.UnmarshalClaims] to decode the payload into a typed struct.
 //
 // *StandardJWS implements [JWS].
 type StandardJWS struct {
@@ -105,13 +105,14 @@ func (jws *StandardJWS) GetPayload() string { return jws.payload }
 // GetSignature returns the decoded signature bytes.
 func (jws *StandardJWS) GetSignature() []byte { return jws.signature }
 
-// StandardHeader returns the decoded JOSE header fields.
-func (jws *StandardJWS) StandardHeader() StandardHeader { return jws.header }
+// GetStandardHeader returns the decoded JOSE header fields.
+// Implements [JWS].
+func (jws *StandardJWS) GetStandardHeader() *StandardHeader { return &jws.header }
 
 // StandardClaims decodes the payload and returns the standard JWT claims.
 //
 // It does not verify the signature — always call [Verifier.VerifyJWT] or
-// [Verifier.UnsafeVerify] before trusting the returned claims.
+// [Decode]+[Verifier.Verify] before trusting the returned claims.
 func (jws *StandardJWS) StandardClaims() (StandardClaims, error) {
 	payload, err := base64.RawURLEncoding.DecodeString(jws.payload)
 	if err != nil {
@@ -125,11 +126,24 @@ func (jws *StandardJWS) StandardClaims() (StandardClaims, error) {
 }
 
 // StandardHeader holds the standard JOSE header fields.
+//
+// Embed StandardHeader in a custom JWS struct to satisfy [JWS.GetStandardHeader]
+// for free via Go method promotion — zero boilerplate:
+//
+//	type MyJWS struct {
+//	    jwt.StandardHeader        // promotes GetStandardHeader()
+//	    // other fields...
+//	}
+//	// MyJWS now satisfies GetStandardHeader automatically.
 type StandardHeader struct {
 	Alg string `json:"alg"`
 	Kid string `json:"kid"`
 	Typ string `json:"typ"`
 }
+
+// GetStandardHeader implements [JWS].
+// Any struct embedding StandardHeader gets this method for free via promotion.
+func (h *StandardHeader) GetStandardHeader() *StandardHeader { return h }
 
 // Audience represents the "aud" JWT claim (RFC 7519 §4.1.3).
 //
@@ -194,7 +208,7 @@ type StandardClaims struct {
 
 // GetStandardClaims implements [Claims].
 // Any struct embedding StandardClaims gets this method for free via promotion.
-func (sc StandardClaims) GetStandardClaims() StandardClaims { return sc }
+func (sc *StandardClaims) GetStandardClaims() *StandardClaims { return sc }
 
 // Claims is implemented for free by any struct that embeds [StandardClaims].
 //
@@ -203,13 +217,13 @@ func (sc StandardClaims) GetStandardClaims() StandardClaims { return sc }
 //	    Email string `json:"email"`
 //	}
 type Claims interface {
-	GetStandardClaims() StandardClaims
+	GetStandardClaims() *StandardClaims
 }
 
 // Decode parses a compact JWT string (header.payload.signature) into a StandardJWS.
 //
 // It does not unmarshal the claims payload — call [StandardJWS.UnmarshalClaims] after
-// [Verifier.VerifyJWT] or [Verifier.UnsafeVerify] to populate a typed claims struct.
+// [Verifier.VerifyJWT] or [Verifier.Verify] to populate a typed claims struct.
 func Decode(tokenStr string) (*StandardJWS, error) {
 	parts := strings.Split(tokenStr, ".")
 	if len(parts) != 3 {
@@ -238,7 +252,7 @@ func Decode(tokenStr string) (*StandardJWS, error) {
 // UnmarshalClaims decodes the JWT payload into v.
 //
 // v must be a pointer to a struct (e.g. *AppClaims). Always call
-// [Verifier.VerifyJWT] or [Verifier.UnsafeVerify] before UnmarshalClaims to ensure
+// [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before UnmarshalClaims to ensure
 // the signature is authenticated before trusting the payload.
 func (jws *StandardJWS) UnmarshalClaims(v any) error {
 	payload, err := base64.RawURLEncoding.DecodeString(jws.payload)
@@ -251,18 +265,16 @@ func (jws *StandardJWS) UnmarshalClaims(v any) error {
 	return nil
 }
 
-// NewJWSFromClaims creates an unsigned StandardJWS from the provided claims.
+// NewJWS creates an unsigned StandardJWS from the provided claims.
 //
-// kid identifies the signing key; pass "" when using [StandardJWS.Sign] with a
-// [*PrivateKey], which sets the KID automatically from the key. The "alg"
-// header field is always set when [StandardJWS.Sign] is called. Call [StandardJWS.Encode]
-// to produce the compact JWT string after signing.
-func NewJWSFromClaims(claims any, kid string) (*StandardJWS, error) {
+// The "alg" and "kid" header fields are set automatically by [StandardJWS.Sign]
+// based on the key type and [PrivateKey.KID]. Call [StandardJWS.Encode] to
+// produce the compact JWT string after signing.
+func NewJWS(claims Claims) (*StandardJWS, error) {
 	var jws StandardJWS
 
 	jws.header = StandardHeader{
-		// Alg is set by Sign based on the key type.
-		Kid: kid,
+		// Alg and Kid are set by Sign from the key type and PrivateKey.KID.
 		Typ: "JWT",
 	}
 	headerJSON, err := json.Marshal(jws.header)
@@ -280,33 +292,29 @@ func NewJWSFromClaims(claims any, kid string) (*StandardJWS, error) {
 	return &jws, nil
 }
 
-// Sign signs the JWS in-place using the provided [crypto.Signer].
+// Sign signs the JWS in-place using pk.
 //
-// If key is a [*PrivateKey], the KID is taken from it: if jws.Header.Kid is
-// empty it is set automatically; if it is already set to a different value,
-// Sign returns an error.
+// The KID is taken from pk.KID: if jws.Header.Kid is empty it is set
+// automatically; if it is already set to a different value, Sign returns an error.
 //
 // If jws.Header.Alg is already set to a value that is incompatible with the
-// provided key type, Sign returns an error.
+// key type, Sign returns an error.
 //
 // Supported algorithms (inferred from key type):
-//   - *ecdsa.PublicKey P-256  → ES256 (SHA-256, raw r||s)
-//   - *ecdsa.PublicKey P-384  → ES384 (SHA-384, raw r||s)
-//   - *ecdsa.PublicKey P-521  → ES512 (SHA-512, raw r||s)
-//   - *rsa.PublicKey           → RS256 (PKCS#1 v1.5 + SHA-256)
-//   - ed25519.PublicKey         → EdDSA (Ed25519, RFC 8037)
-func (jws *StandardJWS) Sign(key crypto.Signer) ([]byte, error) {
-	// If the signer is a *PrivateKey, apply its KID to the header.
-	if pk, ok := key.(*PrivateKey); ok {
-		switch {
-		case jws.header.Kid == "":
-			jws.header.Kid = pk.KID
-		case jws.header.Kid != pk.KID:
-			return nil, fmt.Errorf("Sign: header kid %q conflicts with PrivateKey KID %q", jws.header.Kid, pk.KID)
-		}
+//   - *ecdsa.PrivateKey P-256  → ES256 (SHA-256, raw r||s)
+//   - *ecdsa.PrivateKey P-384  → ES384 (SHA-384, raw r||s)
+//   - *ecdsa.PrivateKey P-521  → ES512 (SHA-512, raw r||s)
+//   - *rsa.PrivateKey           → RS256 (PKCS#1 v1.5 + SHA-256)
+//   - ed25519.PrivateKey         → EdDSA (Ed25519, RFC 8037)
+func (jws *StandardJWS) Sign(pk *PrivateKey) ([]byte, error) {
+	switch {
+	case jws.header.Kid == "":
+		jws.header.Kid = pk.KID
+	case jws.header.Kid != pk.KID:
+		return nil, fmt.Errorf("Sign: header kid %q conflicts with PrivateKey KID %q", jws.header.Kid, pk.KID)
 	}
 
-	switch pub := key.Public().(type) {
+	switch pub := pk.Signer.Public().(type) {
 	case *ecdsa.PublicKey:
 		alg, h, err := algForECKey(pub)
 		if err != nil {
@@ -327,7 +335,7 @@ func (jws *StandardJWS) Sign(key crypto.Signer) ([]byte, error) {
 			return nil, err
 		}
 		// crypto.Signer returns ASN.1 DER for ECDSA; convert to raw r||s for JWS.
-		derSig, err := key.Sign(rand.Reader, digest, h)
+		derSig, err := pk.Signer.Sign(rand.Reader, digest, h)
 		if err != nil {
 			return nil, fmt.Errorf("Sign %s: %w", alg, err)
 		}
@@ -350,7 +358,7 @@ func (jws *StandardJWS) Sign(key crypto.Signer) ([]byte, error) {
 			return nil, err
 		}
 		// crypto.Signer returns raw PKCS#1 v1.5 bytes for RSA; use directly.
-		jws.signature, err = key.Sign(rand.Reader, digest, crypto.SHA256)
+		jws.signature, err = pk.Signer.Sign(rand.Reader, digest, crypto.SHA256)
 		return jws.signature, err
 
 	case ed25519.PublicKey:
@@ -366,13 +374,13 @@ func (jws *StandardJWS) Sign(key crypto.Signer) ([]byte, error) {
 
 		// Ed25519 signs the raw message with no pre-hashing; pass crypto.Hash(0).
 		signingInput := jws.protected + "." + jws.payload
-		jws.signature, err = key.Sign(rand.Reader, []byte(signingInput), crypto.Hash(0))
+		jws.signature, err = pk.Signer.Sign(rand.Reader, []byte(signingInput), crypto.Hash(0))
 		return jws.signature, err
 
 	default:
 		return nil, fmt.Errorf(
 			"Sign: unsupported public key type %T (supported: *ecdsa.PublicKey, *rsa.PublicKey, ed25519.PublicKey)",
-			key.Public(),
+			pk.Signer.Public(),
 		)
 	}
 }
@@ -399,8 +407,7 @@ const DefaultMaxClockSkew = 5 * time.Second
 // differences between systems. If zero, [DefaultMaxClockSkew] (5s) is used.
 // Set to a negative value (e.g. -1) to disable skew tolerance entirely.
 //
-// Call [Validator.Validate] directly, or use [ValidateStandardClaims] to add
-// checks before or after the standard ones.
+// Call [Validator.Validate] to check all standard fields.
 //
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 type Validator struct {
@@ -425,15 +432,10 @@ type Validator struct {
 
 // Validate checks the standard JWT/OIDC claims and returns soft errors.
 func (v *Validator) Validate(claims Claims, now time.Time) ([]string, error) {
-	return ValidateStandardClaims(claims.GetStandardClaims(), *v, now)
+	return validateClaims(*claims.GetStandardClaims(), *v, now)
 }
 
-// ValidateStandardClaims checks the registered JWT/OIDC claim fields against v.
-//
-// Exported so callers can use it directly without a [Validator] receiver:
-//
-//	errs, err := jwt.ValidateStandardClaims(claims.StandardClaims, v, time.Now())
-func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) ([]string, error) {
+func validateClaims(claims StandardClaims, v Validator, now time.Time) ([]string, error) {
 	var errs []string
 
 	skew := v.MaxClockSkew
@@ -588,16 +590,36 @@ func (iss *Verifier) ToJWKs() ([]byte, error) {
 	return jwk.Marshal(iss.pubKeys)
 }
 
-// Verify decodes tokenStr and verifies its signature, returning a [JWS] interface.
+// Verify checks the signature of an already-decoded [JWS].
 //
-// Returns (nil, err) on any failure. Use the returned [JWS] to inspect the
-// standard header or claims. For access to [StandardJWS.UnmarshalClaims] or
-// other *StandardJWS-specific methods, use [Verifier.VerifyJWT] instead.
+// Returns nil on success, a descriptive error on failure. Claim values
+// (iss, aud, exp, etc.) are NOT checked — call [Validator.Validate] on the
+// unmarshalled claims after verifying.
 //
-// For inspecting a JWS despite signature failure (e.g., multi-issuer routing
-// by kid/iss), use [Verifier.UnsafeVerify].
-func (iss *Verifier) Verify(tokenStr string) (JWS, error) {
-	return iss.VerifyJWT(tokenStr)
+// Use [Decode] followed by Verify when you need to inspect the header
+// (kid, alg) before deciding which verifier to apply:
+//
+//	jws, err := jwt.Decode(tokenStr)
+//	if err != nil { /* malformed */ }
+//	// route by kid before verifying
+//	if err := chosenVerifier.Verify(jws); err != nil { /* bad sig */ }
+//
+// Use [Verifier.VerifyJWT] to decode and verify in one step.
+func (iss *Verifier) Verify(jws JWS) error {
+	h := jws.GetStandardHeader()
+	if h.Kid == "" {
+		return fmt.Errorf("missing 'kid' header")
+	}
+	key, ok := iss.keys[h.Kid]
+	if !ok {
+		return fmt.Errorf("unknown kid: %q", h.Kid)
+	}
+
+	signingInput := jws.GetProtected() + "." + jws.GetPayload()
+	if err := verifyWith(signingInput, jws.GetSignature(), h.Alg, key); err != nil {
+		return fmt.Errorf("signature verification failed: %w", err)
+	}
+	return nil
 }
 
 // VerifyJWT decodes tokenStr and verifies its signature, returning the parsed
@@ -613,50 +635,15 @@ func (iss *Verifier) Verify(tokenStr string) (JWS, error) {
 //	if err := jws.UnmarshalClaims(&claims); err != nil { /* ... */ }
 //	errs, _ := v.Validate(&claims, time.Now())
 //
-// For inspecting a JWS despite signature failure (e.g., multi-issuer routing
-// by kid/iss), use [Verifier.UnsafeVerify].
+// For routing by kid/iss before verifying, use [Decode] then [Verifier.Verify].
 func (iss *Verifier) VerifyJWT(tokenStr string) (*StandardJWS, error) {
-	jws, err := iss.UnsafeVerify(tokenStr)
-	if err != nil {
-		return nil, err
-	}
-	return jws, nil
-}
-
-// UnsafeVerify decodes tokenStr and verifies the signature.
-//
-// Unlike [Verifier.VerifyJWT], UnsafeVerify returns the parsed [*StandardJWS] even when
-// signature verification fails — the error is non-nil but the StandardJWS is
-// available for inspection (e.g., to read the kid or iss for multi-issuer
-// routing). Returns (nil, err) only when the token cannot be parsed at all.
-//
-// Claim values (iss, aud, exp, etc.) are NOT checked — call
-// [Validator.Validate] on the unmarshalled claims after verifying:
-//
-//	jws, err := iss.UnsafeVerify(tokenStr)
-//	// inspect jws.StandardHeader().Kid or jws.StandardHeader().Alg for routing even on err
-//	var claims AppClaims
-//	jws.UnmarshalClaims(&claims)
-//	errs, _ := v.Validate(&claims, time.Now())
-func (iss *Verifier) UnsafeVerify(tokenStr string) (*StandardJWS, error) {
 	jws, err := Decode(tokenStr)
 	if err != nil {
 		return nil, err
 	}
-
-	if jws.header.Kid == "" {
-		return jws, fmt.Errorf("missing 'kid' header")
+	if err := iss.Verify(jws); err != nil {
+		return nil, err
 	}
-	key, ok := iss.keys[jws.header.Kid]
-	if !ok {
-		return jws, fmt.Errorf("unknown kid: %q", jws.header.Kid)
-	}
-
-	signingInput := jws.protected + "." + jws.payload
-	if err := verifyWith(signingInput, jws.signature, jws.header.Alg, key); err != nil {
-		return jws, fmt.Errorf("signature verification failed: %w", err)
-	}
-
 	return jws, nil
 }
 
