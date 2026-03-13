@@ -15,7 +15,7 @@
 //   - [Validator] and [MultiValidator] validate standard JWT/OIDC claims.
 //   - [JWS] is a parsed structure — use [Verifier.Verify] or [Verifier.UnsafeVerify] to authenticate.
 //   - [JWS.UnmarshalClaims] accepts any type — no Claims interface to implement.
-//   - [StandardClaimsSource] is satisfied for free by embedding [StandardClaims].
+//   - [Claims] is satisfied for free by embedding [StandardClaims].
 //
 // Typical usage with VerifyAndValidate:
 //
@@ -134,7 +134,7 @@ func (a Audience) MarshalJSON() ([]byte, error) {
 // StandardClaims holds the registered JWT claim names defined in RFC 7519
 // and extended by OpenID Connect Core.
 //
-// Embed StandardClaims in your own claims struct to satisfy [StandardClaimsSource]
+// Embed StandardClaims in your own claims struct to satisfy [Claims]
 // for free via Go's method promotion — zero boilerplate:
 //
 //	type AppClaims struct {
@@ -142,7 +142,7 @@ func (a Audience) MarshalJSON() ([]byte, error) {
 //	    Email string `json:"email"`
 //	    Roles []string `json:"roles"`
 //	}
-//	// AppClaims now satisfies StandardClaimsSource automatically.
+//	// AppClaims now satisfies Claims automatically.
 type StandardClaims struct {
 	Iss      string   `json:"iss"`
 	Sub      string   `json:"sub"`
@@ -156,24 +156,24 @@ type StandardClaims struct {
 	Jti      string   `json:"jti"`
 }
 
-// GetStandardClaims implements [StandardClaimsSource].
+// GetStandardClaims implements [Claims].
 // Any struct embedding StandardClaims gets this method for free via promotion.
 func (sc StandardClaims) GetStandardClaims() StandardClaims { return sc }
 
-// StandardClaimsSource is implemented for free by any struct that embeds [StandardClaims].
+// Claims is implemented for free by any struct that embeds [StandardClaims].
 //
 //	type AppClaims struct {
 //	    jwt.StandardClaims        // promotes GetStandardClaims() — zero boilerplate
 //	    Email string `json:"email"`
 //	}
-type StandardClaimsSource interface {
+type Claims interface {
 	GetStandardClaims() StandardClaims
 }
 
 // ClaimsValidator validates the standard JWT/OIDC claims in a token.
 // Implemented by [*Validator] and [*MultiValidator].
 type ClaimsValidator interface {
-	Validate(claims StandardClaimsSource, now time.Time) ([]string, error)
+	Validate(claims Claims, now time.Time) ([]string, error)
 }
 
 // Decode parses a compact JWT string (header.payload.signature) into a JWS.
@@ -380,7 +380,7 @@ type Validator struct {
 }
 
 // Validate implements [ClaimsValidator].
-func (v *Validator) Validate(claims StandardClaimsSource, now time.Time) ([]string, error) {
+func (v *Validator) Validate(claims Claims, now time.Time) ([]string, error) {
 	return ValidateStandardClaims(claims.GetStandardClaims(), *v, now)
 }
 
@@ -405,7 +405,7 @@ type MultiValidator struct {
 }
 
 // Validate implements [ClaimsValidator].
-func (v *MultiValidator) Validate(claims StandardClaimsSource, now time.Time) ([]string, error) {
+func (v *MultiValidator) Validate(claims Claims, now time.Time) ([]string, error) {
 	sc := claims.GetStandardClaims()
 	var errs []string
 
@@ -703,7 +703,7 @@ func (iss *Verifier) UnsafeVerify(tokenStr string) (*JWS, error) {
 //
 //	var claims AppClaims
 //	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, v, time.Now())
-func (iss *Verifier) VerifyAndValidate(tokenStr string, claims StandardClaimsSource, v ClaimsValidator, now time.Time) (*JWS, []string, error) {
+func (iss *Verifier) VerifyAndValidate(tokenStr string, claims Claims, v ClaimsValidator, now time.Time) (*JWS, []string, error) {
 	jws, err := iss.Verify(tokenStr)
 	if err != nil {
 		return nil, nil, err

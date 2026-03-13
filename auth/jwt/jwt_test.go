@@ -26,7 +26,7 @@ import (
 
 // AppClaims embeds StandardClaims and adds application-specific fields.
 //
-// Because StandardClaims is embedded, AppClaims satisfies StandardClaimsSource
+// Because StandardClaims is embedded, AppClaims satisfies Claims
 // for free via Go's method promotion — no interface to implement.
 type AppClaims struct {
 	jwt.StandardClaims
