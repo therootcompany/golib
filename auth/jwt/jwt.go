@@ -6,63 +6,44 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-// Package jwt is a lightweight JWT/JWS/JWK library designed from first
-// principles:
+// Package jwt is a lightweight JWT/JWS/JWK library designed from first principles.
 //
-//   - [Verifier] is immutable — constructed with a fixed key set, safe for concurrent use.
-//   - [Signer] manages private keys and returns [*Verifier] for verification.
-//   - [KeyFetcher] lazily fetches and caches JWKS keys, returning a fresh [*Verifier] on demand.
-//   - [Validator] validates standard JWT/OIDC claims.
-//   - [JWS] is a parsed structure — use [Verifier.Verify] or [Verifier.UnsafeVerify] to authenticate.
-//   - [JWS.UnmarshalClaims] accepts any type — no Claims interface to implement.
-//   - [Claims] is satisfied for free by embedding [StandardClaims].
+// # Use cases
 //
-// Signature verification and claim validation are intentionally separate steps.
-// Verify authenticates the cryptographic signature; Validate checks registered
-// claim values (iss, aud, exp, etc.). This lets you route tokens by kid or iss
-// before deciding which validator to apply.
+// You are either an issuer (you sign tokens) or a relying party (you only verify
+// them). As a relying party you either hold known public keys at startup, or you
+// fetch them at runtime from a canonical JWKS endpoint.
 //
-// Typical usage (configured signer/verifier):
+//   - Issuer: use [NewSigner] → [Signer.Sign]; expose public keys via [Signer.ToJWKs]
+//     or hand them directly to [New] for a co-located verifier.
+//   - Relying party, known keys: use [New] with a []jwk.Key slice.
+//   - Relying party, remote keys: use [KeyFetcher]; it fetches lazily and caches.
 //
-//	// At startup:
-//	signer, err := jwt.NewSigner([]jwt.PrivateKey{{Signer: privKey}})
-//	iss := signer.Verifier()
-//	v := &jwt.Validator{Iss: []string{"https://example.com"}, Aud: []string{"my-app"}}
+// # Design choices
 //
-//	// Sign a token:
-//	tokenStr, err := signer.Sign(claims)
+// You'll almost never need a custom JOSE header. The algorithm is inferred
+// automatically from the key type; KID comes from [PrivateKey.KID]; typ is
+// always "JWT". [JWS.Sign] handles all of this — you do not configure alg.
 //
-//	// Per request — verify signature, then validate claims:
-//	jws, err := iss.Verify(tokenStr)
-//	if err != nil { /* bad sig, malformed token, unknown kid */ }
-//	var claims AppClaims
-//	if err := jws.UnmarshalClaims(&claims); err != nil { /* bad JSON */ }
-//	errs, _ := v.Validate(&claims, time.Now())
-//	if len(errs) > 0 { /* wrong aud, expired, etc. */ }
+// You'll almost always need custom claims. [JWS.UnmarshalClaims] accepts any
+// pointer — no interface to implement for decoding. Embed [StandardClaims] in
+// your struct to get the registered fields and satisfy [Claims] for free via
+// Go method promotion, with zero boilerplate.
 //
-// Typical usage with KeyFetcher (dynamic keys from remote):
+// Your custom claims validation logic is your own. [Verify] authenticates the
+// signature; [JWS.UnmarshalClaims] decodes the payload; [Validator.Validate]
+// checks the registered claim values (iss, aud, exp, etc.). These are three
+// separate calls — you compose them in whatever order your application needs.
+// [ValidateStandardClaims] is exported so you can call it directly without a
+// [Validator] receiver, and add your own checks before or after.
 //
-//	fetcher := &jwt.KeyFetcher{
-//	    URL:         "https://accounts.example.com/.well-known/jwks.json",
-//	    MaxAge:      time.Hour,
-//	    StaleAge:    time.Hour,
-//	    KeepOnError: true,
-//	}
-//	iss, err := fetcher.Verifier(ctx)
-//	jws, err := iss.Verify(tokenStr)
-//	if err != nil { /* bad sig, malformed token, unknown kid */ }
-//	var claims AppClaims
-//	if err := jws.UnmarshalClaims(&claims); err != nil { /* bad JSON */ }
-//	errs, _ := v.Validate(&claims, time.Now())
-//	if len(errs) > 0 { /* wrong aud, expired, etc. */ }
+// [Verifier.UnsafeVerify] returns the [*JWS] even when signature verification
+// fails, so you can inspect the kid or iss for multi-issuer routing before
+// deciding which verifier or validator to apply.
 //
-// Custom validation (UnsafeVerify for multi-issuer routing):
-//
-//	jws, err := iss.UnsafeVerify(tokenStr) // returns JWS even on sig failure
-//	var claims AppClaims
-//	jws.UnmarshalClaims(&claims)
-//	errs, _ := jwt.ValidateStandardClaims(claims.StandardClaims,
-//	    jwt.Validator{Aud: []string{"myapp"}}, time.Now())
+// Convenience is not convenient if it gets in your way. This is a library, not
+// a framework: it gives you composable pieces you call and control, not
+// scaffolding you must conform to.
 package jwt
 
 import (
@@ -374,7 +355,8 @@ const DefaultMaxClockSkew = 5 * time.Second
 // differences between systems. If zero, [DefaultMaxClockSkew] (5s) is used.
 // Set to a negative value (e.g. -1) to disable skew tolerance entirely.
 //
-// Pass to [Verifier.VerifyAndValidate] or call [Validator.Validate] directly.
+// Call [Validator.Validate] directly, or use [ValidateStandardClaims] to add
+// checks before or after the standard ones.
 //
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 type Validator struct {
