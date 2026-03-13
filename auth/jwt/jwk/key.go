@@ -6,17 +6,20 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-// Package jwk provides JWK (JSON Web Key) and JWKS (JSON Web Key Set) types,
-// encoding, decoding, and key management utilities.
+// Package jwk provides JWK (JSON Web Key) and JWKS (JSON Web Key Set) types
+// and key management utilities.
 //
-// The [Key] type is the primary in-memory representation of a public key with
-// its JWKS metadata (KID, Use). Encoding converts [Key] to [PublicKey] or
-// JSON bytes; decoding parses them back. Fetching retrieves JWKS documents from
-// remote endpoints.
+// [Key] is the primary in-memory representation of a public key with its JWKS
+// metadata (KID, Use, Alg, KeyOps). It implements [json.Marshaler] and
+// [json.Unmarshaler], so [JWKs] can be marshalled and unmarshalled directly:
 //
-// [PublicKey] and [PrivateKey] are kept separate so that private keys
-// can never be accidentally marshalled where a public key is expected. Use
-// [PrivateKey.PublicJWK] to explicitly extract the public portion.
+//	var jwks jwk.JWKs
+//	json.Unmarshal(data, &jwks)   // parse a JWKS document
+//	json.Marshal(jwks)             // serialize a JWKS document
+//
+// [PublicKey] and [PrivateKey] are the JSON wire structs. Private key fields
+// (d, p, q, etc.) are silently ignored when parsing into [Key]; use [PrivateKey]
+// explicitly when you need to read private key material from JSON.
 package jwk
 
 import (
@@ -86,6 +89,38 @@ func (k Key) KeyType() string {
 	default:
 		return ""
 	}
+}
+
+// MarshalJSON implements [json.Marshaler], encoding the key as a JWK JSON object.
+// Private key fields are never included; use [PrivateKey] for private key material.
+func (k Key) MarshalJSON() ([]byte, error) {
+	pk, err := encode(k)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(pk)
+}
+
+// UnmarshalJSON implements [json.Unmarshaler], parsing a JWK JSON object.
+// Private key fields (d, p, q, etc.) are silently ignored — use [PrivateKey] for those.
+// If the JWK has no "kid" field, the KID is auto-computed via [Key.Thumbprint].
+func (k *Key) UnmarshalJSON(data []byte) error {
+	var kj PublicKey
+	if err := json.Unmarshal(data, &kj); err != nil {
+		return fmt.Errorf("parse JWK: %w", err)
+	}
+	decoded, err := decodeOne(kj)
+	if err != nil {
+		return err
+	}
+	if decoded.KID == "" {
+		decoded.KID, err = decoded.Thumbprint()
+		if err != nil {
+			return fmt.Errorf("parse JWK: compute thumbprint: %w", err)
+		}
+	}
+	*k = *decoded
+	return nil
 }
 
 // Thumbprint computes the RFC 7638 JWK Thumbprint (SHA-256 of the canonical
@@ -185,9 +220,10 @@ type PublicKey struct {
 	KeyOps []string `json:"key_ops,omitempty"` // allowed operations, e.g. ["sign"], ["verify"]
 }
 
-// KeySetJSON is the JSON representation of a JWKS document (a set of keys).
-type KeySetJSON struct {
-	Keys []PublicKey `json:"keys"`
+// JWKs is a JSON Web Key Set. Use json.Marshal and json.Unmarshal directly —
+// each [Key] in Keys handles its own encoding via MarshalJSON / UnmarshalJSON.
+type JWKs struct {
+	Keys []Key `json:"keys"`
 }
 
 // PrivateKey is the JSON representation of a private JWK.
@@ -221,10 +257,9 @@ type PrivateKey struct {
 // of private key material.
 func (k PrivateKey) PublicJWK() PublicKey { return k.PublicKey }
 
-// Encode converts a [Key] to its [PublicKey] representation.
-//
-// Supported key types: *ecdsa.PublicKey (EC), *rsa.PublicKey (RSA), ed25519.PublicKey (OKP).
-func Encode(k Key) (PublicKey, error) {
+// encode converts a [Key] to its [PublicKey] wire representation.
+// Used by [Key.MarshalJSON].
+func encode(k Key) (PublicKey, error) {
 	switch key := k.Key.(type) {
 	case *ecdsa.PublicKey:
 		var crv string
@@ -282,28 +317,6 @@ func Encode(k Key) (PublicKey, error) {
 	}
 }
 
-// EncodeSet converts a slice of [Key] to a [KeySetJSON] struct.
-func EncodeSet(keys []Key) (KeySetJSON, error) {
-	jsonKeys := make([]PublicKey, 0, len(keys))
-	for _, k := range keys {
-		jk, err := Encode(k)
-		if err != nil {
-			return KeySetJSON{}, err
-		}
-		jsonKeys = append(jsonKeys, jk)
-	}
-	return KeySetJSON{Keys: jsonKeys}, nil
-}
-
-// Marshal serializes a slice of [Key] as a JWKS JSON document.
-func Marshal(keys []Key) ([]byte, error) {
-	doc, err := EncodeSet(keys)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(doc)
-}
-
 // ReadFile reads and parses a JWKS document from a file path.
 func ReadFile(filePath string) ([]Key, error) {
 	data, err := os.ReadFile(filePath)
@@ -314,53 +327,31 @@ func ReadFile(filePath string) ([]Key, error) {
 }
 
 // Decode parses a JWKS document from raw JSON bytes.
+// Each key's KID is auto-computed via [Key.Thumbprint] if absent.
 func Decode(data []byte) ([]Key, error) {
-	var set KeySetJSON
-	if err := json.Unmarshal(data, &set); err != nil {
+	var jwks JWKs
+	if err := json.Unmarshal(data, &jwks); err != nil {
 		return nil, fmt.Errorf("failed to parse JWKS JSON: %w", err)
 	}
-	return DecodeKeySetJSON(set)
-}
-
-// DecodeKeySetJSON converts a parsed [KeySetJSON] into typed public keys.
-//
-// If a key has no kid field in the source document, the KID is auto-populated
-// from [Key.Thumbprint] per RFC 7638.
-//
-// https://www.rfc-editor.org/rfc/rfc7638.html
-func DecodeKeySetJSON(set KeySetJSON) ([]Key, error) {
-	var keys []Key
-	for _, kj := range set.Keys {
-		key, err := DecodeOne(kj)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse public jwk %q: %w", kj.KID, err)
-		}
-		if key.KID == "" {
-			key.KID, err = key.Thumbprint()
-			if err != nil {
-				return nil, fmt.Errorf("compute thumbprint for kid-less key: %w", err)
-			}
-		}
-		keys = append(keys, *key)
-	}
-	if len(keys) == 0 {
+	if len(jwks.Keys) == 0 {
 		return nil, fmt.Errorf("no valid keys found in JWKS")
 	}
-	return keys, nil
+	return jwks.Keys, nil
 }
 
-// DecodeOne parses a single [PublicKey] into a [Key].
+// decodeOne parses a single [PublicKey] wire struct into a [Key].
+// KID auto-derivation from thumbprint is handled by [Key.UnmarshalJSON].
 //
 // Supported key types:
 //   - "RSA" — minimum 1024-bit (RS256)
 //   - "EC"  — P-256, P-384, P-521 (ES256, ES384, ES512)
 //   - "OKP" — Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
-func DecodeOne(kj PublicKey) (*Key, error) {
+func decodeOne(kj PublicKey) (*Key, error) {
 	switch kj.Kty {
 	case "RSA":
 		key, err := decodeRSA(kj)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse RSA key %q: %w", kj.KID, err)
+			return nil, fmt.Errorf("parse RSA key %q: %w", kj.KID, err)
 		}
 		if key.Size() < 128 { // 1024 bits minimum
 			return nil, fmt.Errorf("RSA key %q too small: %d bytes", kj.KID, key.Size())
@@ -370,14 +361,14 @@ func DecodeOne(kj PublicKey) (*Key, error) {
 	case "EC":
 		key, err := decodeEC(kj)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse EC key %q: %w", kj.KID, err)
+			return nil, fmt.Errorf("parse EC key %q: %w", kj.KID, err)
 		}
 		return &Key{Key: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
 
 	case "OKP":
 		key, err := decodeOKP(kj)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse OKP key %q: %w", kj.KID, err)
+			return nil, fmt.Errorf("parse OKP key %q: %w", kj.KID, err)
 		}
 		return &Key{Key: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
 

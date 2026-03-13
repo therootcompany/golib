@@ -74,7 +74,6 @@ func goodValidator() *jwt.Validator {
 	return &jwt.Validator{
 		Iss:          []string{"https://example.com"},
 		Aud:          []string{"myapp"},
-		Nonce:        "nonce1",
 		Azp:          []string{"myapp"},
 		RequiredAMRs: []string{"pwd"},
 	}

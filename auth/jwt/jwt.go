@@ -78,7 +78,6 @@ type JWS interface {
 	GetPayload() []byte
 	GetSignature() []byte
 	GetStandardHeader() *StandardHeader
-	StandardClaims() (StandardClaims, error)
 }
 
 // StandardJWS is a decoded JSON Web Signature / JWT.
@@ -412,10 +411,10 @@ func (jws *StandardJWS) signingInput() []byte {
 	return out
 }
 
-// DefaultMaxClockSkew is the tolerance applied to exp, iat, and auth_time checks
-// when Validator.MaxClockSkew is zero. It covers common sub-second clock drift
+// DefaultGracePeriod is the tolerance applied to exp, iat, and auth_time checks
+// when Validator.GracePeriod is zero. It covers common sub-second clock drift
 // between distributed systems.
-const DefaultMaxClockSkew = 5 * time.Second
+const DefaultGracePeriod = 5 * time.Second
 
 // Validator holds claim validation configuration.
 //
@@ -425,8 +424,8 @@ const DefaultMaxClockSkew = 5 * time.Second
 // must be non-empty, but its value is not matched (those are per-token and
 // per-user; value matching must be done by the application).
 //
-// MaxClockSkew is applied to exp, iat, and auth_time to tolerate minor clock
-// differences between systems. If zero, [DefaultMaxClockSkew] (5s) is used.
+// GracePeriod is applied to exp, iat, and auth_time to tolerate minor clock
+// differences between systems. If zero, [DefaultGracePeriod] (5s) is used.
 // Set to a negative value (e.g. -1) to disable skew tolerance entirely.
 //
 // Call [Validator.Validate] to check all standard fields.
@@ -442,10 +441,8 @@ type Validator struct {
 	IgnoreIat      bool
 	IgnoreJTI      bool          // if false, jti must be present (non-empty)
 	IgnoreAuthTime bool
-	MaxClockSkew      time.Duration // tolerance for exp/iat/auth_time; 0 = DefaultMaxClockSkew (5s); negative = no tolerance
+	GracePeriod    time.Duration // tolerance for exp/iat/auth_time; 0 = DefaultGracePeriod (5s); negative = no tolerance
 	MaxAge         time.Duration
-	IgnoreNonce    bool
-	Nonce          string        // if set, token's nonce must match exactly
 	IgnoreAMR      bool
 	RequiredAMRs   []string // all of these must appear in the token's amr list
 	MinAMRCount    int      // token's amr must have at least this many values; 0 = no minimum
@@ -461,9 +458,9 @@ func (v *Validator) Validate(claims Claims, now time.Time) ([]string, error) {
 func validateClaims(claims StandardClaims, v Validator, now time.Time) ([]string, error) {
 	var errs []string
 
-	skew := v.MaxClockSkew
+	skew := v.GracePeriod
 	if skew == 0 {
-		skew = DefaultMaxClockSkew
+		skew = DefaultGracePeriod
 	} else if skew < 0 {
 		skew = 0
 	}
@@ -537,10 +534,6 @@ func validateClaims(claims StandardClaims, v Validator, now time.Time) ([]string
 		}
 	}
 
-	if !v.IgnoreNonce && len(v.Nonce) > 0 && v.Nonce != claims.Nonce {
-		errs = append(errs, fmt.Sprintf("'nonce' mismatch: got %s, expected %s", claims.Nonce, v.Nonce))
-	}
-
 	if !v.IgnoreAMR {
 		if len(claims.AMR) == 0 {
 			errs = append(errs, "missing or malformed 'amr' (authorization methods, as json list)")
@@ -606,14 +599,9 @@ func (iss *Verifier) PublicKeys() []jwk.Key {
 	return iss.pubKeys
 }
 
-// ToJWKsJSON returns the Verifier's public keys as a [jwk.KeySetJSON] struct.
-func (iss *Verifier) ToJWKsJSON() (jwk.KeySetJSON, error) {
-	return jwk.EncodeSet(iss.pubKeys)
-}
-
 // ToJWKs serializes the Verifier's public keys as a JWKS JSON document.
 func (iss *Verifier) ToJWKs() ([]byte, error) {
-	return jwk.Marshal(iss.pubKeys)
+	return json.Marshal(jwk.JWKs{Keys: iss.pubKeys})
 }
 
 // Verify checks the signature of an already-decoded [JWS].
