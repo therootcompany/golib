@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-// Package ajwt is a lightweight JWT/JWS/JWK library designed from first
+// Package jwt is a lightweight JWT/JWS/JWK library designed from first
 // principles:
 //
 //   - [Issuer] is immutable — constructed with a fixed key set, safe for concurrent use.
@@ -20,9 +20,9 @@
 // Typical usage with VerifyAndValidate:
 //
 //	// At startup:
-//	signer, err := ajwt.NewSigner([]ajwt.PrivateKey{{Signer: privKey}})
+//	signer, err := jwt.NewSigner([]jwt.PrivateKey{{Signer: privKey}})
 //	iss := signer.Issuer()
-//	v := &ajwt.Validator{Iss: "https://example.com", Aud: "my-app"}
+//	v := &jwt.Validator{Iss: "https://example.com", Aud: "my-app"}
 //
 //	// Sign a token:
 //	tokenStr, err := signer.Sign(claims)
@@ -35,16 +35,16 @@
 //
 // Typical usage with UnsafeVerify (custom validation):
 //
-//	iss := ajwt.New(keys)
+//	iss := jwt.New(keys)
 //	jws, err := iss.UnsafeVerify(tokenStr)
 //	var claims AppClaims
 //	jws.UnmarshalClaims(&claims)
-//	errs, err := ajwt.ValidateStandardClaims(claims.StandardClaims,
-//	    ajwt.Validator{Aud: "myapp"}, time.Now())
+//	errs, err := jwt.ValidateStandardClaims(claims.StandardClaims,
+//	    jwt.Validator{Aud: "myapp"}, time.Now())
 //
 // Typical usage with JWKsFetcher (dynamic keys from remote):
 //
-//	fetcher := &ajwt.JWKsFetcher{
+//	fetcher := &jwt.JWKsFetcher{
 //	    URL:         "https://accounts.example.com/.well-known/jwks.json",
 //	    MaxAge:      time.Hour,
 //	    StaleAge:    time.Hour,
@@ -52,7 +52,7 @@
 //	}
 //	iss, err := fetcher.Issuer(ctx)
 //	jws, errs, err := iss.VerifyAndValidate(tokenStr, &claims, v, time.Now())
-package ajwt
+package jwt
 
 import (
 	"crypto"
@@ -72,7 +72,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/therootcompany/golib/auth/ajwt/jwk"
+	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 // JWS is a decoded JSON Web Signature / JWT.
@@ -138,7 +138,7 @@ func (a Audience) MarshalJSON() ([]byte, error) {
 // for free via Go's method promotion — zero boilerplate:
 //
 //	type AppClaims struct {
-//	    ajwt.StandardClaims        // promotes GetStandardClaims()
+//	    jwt.StandardClaims        // promotes GetStandardClaims()
 //	    Email string `json:"email"`
 //	    Roles []string `json:"roles"`
 //	}
@@ -163,7 +163,7 @@ func (sc StandardClaims) GetStandardClaims() StandardClaims { return sc }
 // StandardClaimsSource is implemented for free by any struct that embeds [StandardClaims].
 //
 //	type AppClaims struct {
-//	    ajwt.StandardClaims        // promotes GetStandardClaims() — zero boilerplate
+//	    jwt.StandardClaims        // promotes GetStandardClaims() — zero boilerplate
 //	    Email string `json:"email"`
 //	}
 type StandardClaimsSource interface {
@@ -485,7 +485,7 @@ func (v *MultiValidator) Validate(claims StandardClaimsSource, now time.Time) ([
 //
 // Exported so callers can use it directly without a [Validator] receiver:
 //
-//	errs, err := ajwt.ValidateStandardClaims(claims.StandardClaims, v, time.Now())
+//	errs, err := jwt.ValidateStandardClaims(claims.StandardClaims, v, time.Now())
 func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) ([]string, error) {
 	var errs []string
 
@@ -803,7 +803,7 @@ func digestFor(h crypto.Hash, data string) ([]byte, error) {
 		d := sha512.Sum512([]byte(data))
 		return d[:], nil
 	default:
-		return nil, fmt.Errorf("ajwt: unsupported hash %v", h)
+		return nil, fmt.Errorf("jwt: unsupported hash %v", h)
 	}
 }
 

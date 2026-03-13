@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-package ajwt
+package jwt
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/therootcompany/golib/auth/ajwt/jwk"
+	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 // cachedIssuer bundles an [*Issuer] with its freshness window.
@@ -38,7 +38,7 @@ type cachedIssuer struct {
 //
 // Typical usage:
 //
-//	fetcher := &ajwt.JWKsFetcher{
+//	fetcher := &jwt.JWKsFetcher{
 //	    URL:         "https://accounts.example.com/.well-known/jwks.json",
 //	    MaxAge:      time.Hour,
 //	    StaleAge:    30 * time.Minute,

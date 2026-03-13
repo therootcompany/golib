@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-package ajwt
+package jwt
 
 import (
 	"crypto"
@@ -14,7 +14,7 @@ import (
 	"io"
 	"sync/atomic"
 
-	"github.com/therootcompany/golib/auth/ajwt/jwk"
+	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 // PrivateKey pairs a [crypto.Signer] with a key ID (KID).
@@ -101,7 +101,7 @@ func (s *Signer) Sign(claims any) (string, error) {
 // Use this to construct an Issuer for verifying tokens signed by this Signer.
 // For key rotation, combine with old public keys:
 //
-//	iss := ajwt.New(append(signer.PublicKeys(), oldKeys...))
+//	iss := jwt.New(append(signer.PublicKeys(), oldKeys...))
 func (s *Signer) Issuer() *Issuer {
 	return New(s.PublicKeys())
 }

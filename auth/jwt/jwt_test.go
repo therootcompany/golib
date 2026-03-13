@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-package ajwt_test
+package jwt_test
 
 import (
 	"crypto/ecdsa"
@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/therootcompany/golib/auth/ajwt"
-	"github.com/therootcompany/golib/auth/ajwt/jwk"
+	"github.com/therootcompany/golib/auth/jwt"
+	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 // AppClaims embeds StandardClaims and adds application-specific fields.
@@ -29,7 +29,7 @@ import (
 // Because StandardClaims is embedded, AppClaims satisfies StandardClaimsSource
 // for free via Go's method promotion — no interface to implement.
 type AppClaims struct {
-	ajwt.StandardClaims
+	jwt.StandardClaims
 	Email string   `json:"email"`
 	Roles []string `json:"roles"`
 }
@@ -37,8 +37,8 @@ type AppClaims struct {
 // validateAppClaims is a plain function — not a method satisfying an interface.
 // It demonstrates the UnsafeVerify pattern: custom validation logic lives here,
 // calling ValidateStandardClaims directly and adding app-specific checks.
-func validateAppClaims(c AppClaims, v ajwt.Validator, now time.Time) ([]string, error) {
-	errs, _ := ajwt.ValidateStandardClaims(c.StandardClaims, v, now)
+func validateAppClaims(c AppClaims, v jwt.Validator, now time.Time) ([]string, error) {
+	errs, _ := jwt.ValidateStandardClaims(c.StandardClaims, v, now)
 	if c.Email == "" {
 		errs = append(errs, "missing email claim")
 	}
@@ -51,10 +51,10 @@ func validateAppClaims(c AppClaims, v ajwt.Validator, now time.Time) ([]string, 
 func goodClaims() AppClaims {
 	now := time.Now()
 	return AppClaims{
-		StandardClaims: ajwt.StandardClaims{
+		StandardClaims: jwt.StandardClaims{
 			Iss:      "https://example.com",
 			Sub:      "user123",
-			Aud:      ajwt.Audience{"myapp"},
+			Aud:      jwt.Audience{"myapp"},
 			Exp:      now.Add(time.Hour).Unix(),
 			Iat:      now.Unix(),
 			AuthTime: now.Unix(),
@@ -70,8 +70,8 @@ func goodClaims() AppClaims {
 
 // goodValidator configures the validator with iss set to "https://example.com".
 // Iss checking is now the Validator's responsibility, not the Issuer's.
-func goodValidator() *ajwt.Validator {
-	return &ajwt.Validator{
+func goodValidator() *jwt.Validator {
+	return &jwt.Validator{
 		Iss:          "https://example.com",
 		Sub:          "user123",
 		Aud:          "myapp",
@@ -82,8 +82,8 @@ func goodValidator() *ajwt.Validator {
 	}
 }
 
-func goodIssuer(pub jwk.Key) *ajwt.Issuer {
-	return ajwt.New([]jwk.Key{pub})
+func goodIssuer(pub jwk.Key) *jwt.Issuer {
+	return jwt.New([]jwk.Key{pub})
 }
 
 // TestRoundTrip is the primary happy path using ES256.
@@ -97,7 +97,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	jws, err := ajwt.NewJWSFromClaims(&claims, "key-1")
+	jws, err := jwt.NewJWSFromClaims(&claims, "key-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestRoundTripRS256(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	jws, err := ajwt.NewJWSFromClaims(&claims, "key-1")
+	jws, err := jwt.NewJWSFromClaims(&claims, "key-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	jws, err := ajwt.NewJWSFromClaims(&claims, "key-1")
+	jws, err := jwt.NewJWSFromClaims(&claims, "key-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,11 +204,11 @@ func TestUnsafeVerifyFlow(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	jws, _ := ajwt.NewJWSFromClaims(&claims, "k")
+	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := ajwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
+	iss := jwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
 
 	jws2, err := iss.UnsafeVerify(token)
 	if err != nil {
@@ -220,7 +220,7 @@ func TestUnsafeVerifyFlow(t *testing.T) {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 
-	errs, err := ajwt.ValidateStandardClaims(decoded.StandardClaims, *goodValidator(), time.Now())
+	errs, err := jwt.ValidateStandardClaims(decoded.StandardClaims, *goodValidator(), time.Now())
 	if err != nil {
 		t.Fatalf("ValidateStandardClaims failed: %v — errs: %v", err, errs)
 	}
@@ -234,12 +234,12 @@ func TestUnsafeVerifyReturnsJWSOnSigFailure(t *testing.T) {
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	jws, _ := ajwt.NewJWSFromClaims(&claims, "k")
+	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
 	_, _ = jws.Sign(signingKey)
 	token := jws.Encode()
 
 	// Issuer has wrong public key — sig verification will fail.
-	iss := ajwt.New([]jwk.Key{{Key: &wrongKey.PublicKey, KID: "k"}})
+	iss := jwt.New([]jwk.Key{{Key: &wrongKey.PublicKey, KID: "k"}})
 
 	result, err := iss.UnsafeVerify(token)
 	if err == nil {
@@ -262,7 +262,7 @@ func TestCustomValidation(t *testing.T) {
 	// Token with empty Email — our custom validator should reject it.
 	claims := goodClaims()
 	claims.Email = ""
-	jws, _ := ajwt.NewJWSFromClaims(&claims, "k")
+	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
@@ -295,11 +295,11 @@ func TestCustomValidation(t *testing.T) {
 func TestVerifyAndValidateNilValidator(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	c := goodClaims()
-	jws, _ := ajwt.NewJWSFromClaims(&c, "k")
+	jws, _ := jwt.NewJWSFromClaims(&c, "k")
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := ajwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
+	iss := jwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
 
 	var claims AppClaims
 	jws2, errs, err := iss.VerifyAndValidate(token, &claims, nil, time.Now())
@@ -323,7 +323,7 @@ func TestIssuerWrongKey(t *testing.T) {
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	jws, _ := ajwt.NewJWSFromClaims(&claims, "k")
+	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
 	_, _ = jws.Sign(signingKey)
 	token := jws.Encode()
 
@@ -339,7 +339,7 @@ func TestIssuerUnknownKid(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	jws, _ := ajwt.NewJWSFromClaims(&claims, "unknown-kid")
+	jws, _ := jwt.NewJWSFromClaims(&claims, "unknown-kid")
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
@@ -358,7 +358,7 @@ func TestIssuerIssMismatch(t *testing.T) {
 
 	claims := goodClaims()
 	claims.Iss = "https://evil.example.com"
-	jws, _ := ajwt.NewJWSFromClaims(&claims, "k")
+	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
@@ -396,7 +396,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	jws, _ := ajwt.NewJWSFromClaims(&claims, "k")
+	jws, _ := jwt.NewJWSFromClaims(&claims, "k")
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
@@ -420,7 +420,7 @@ func TestSignerRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, err := ajwt.NewSigner([]ajwt.PrivateKey{{KID: "k1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "k1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestSignerRoundTrip(t *testing.T) {
 func TestSignerAutoKID(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := ajwt.NewSigner([]ajwt.PrivateKey{{Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{{Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +479,7 @@ func TestSignerRoundRobin(t *testing.T) {
 	key1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := ajwt.NewSigner([]ajwt.PrivateKey{
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{
 		{KID: "k1", Signer: key1},
 		{KID: "k2", Signer: key2},
 	})
@@ -507,7 +507,7 @@ func TestSignerRoundRobin(t *testing.T) {
 func TestIssuerToJWKs(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := ajwt.NewSigner([]ajwt.PrivateKey{{KID: "k1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "k1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,7 +530,7 @@ func TestIssuerToJWKs(t *testing.T) {
 		t.Errorf("expected kid 'k1', got %q", keys[0].KID)
 	}
 
-	iss2 := ajwt.New(keys)
+	iss2 := jwt.New(keys)
 	claims := goodClaims()
 	tokenStr, _ := signer.Sign(&claims)
 	if _, err := iss2.Verify(tokenStr); err != nil {
