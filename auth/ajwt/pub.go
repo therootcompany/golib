@@ -412,14 +412,18 @@ func decodeRSAPublicJWK(jwk PublicJWKJSON) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("invalid RSA exponent: %w", err)
 	}
 
-	eInt := new(big.Int).SetBytes(e).Int64()
-	if eInt > int64(^uint(0)>>1) || eInt < 0 {
-		return nil, fmt.Errorf("RSA exponent too large or negative")
+	eInt := new(big.Int).SetBytes(e)
+	if !eInt.IsInt64() {
+		return nil, fmt.Errorf("RSA exponent too large")
+	}
+	eVal := eInt.Int64()
+	if eVal <= 0 {
+		return nil, fmt.Errorf("RSA exponent must be positive")
 	}
 
 	return &rsa.PublicKey{
 		N: new(big.Int).SetBytes(n),
-		E: int(eInt),
+		E: int(eVal),
 	}, nil
 }
 

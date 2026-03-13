@@ -64,10 +64,6 @@ type JWKsFetcher struct {
 	// (nil, err).
 	KeepOnError bool
 
-	// RespectHeaders is reserved for future use (honor Cache-Control max-age
-	// from the JWKS response, capped at MaxAge).
-	RespectHeaders bool
-
 	mu     sync.Mutex
 	cached atomic.Pointer[cachedIssuer]
 }
@@ -89,6 +85,10 @@ func (f *JWKsFetcher) Issuer(ctx context.Context) (*Issuer, error) {
 	// Slow path: refresh needed. Serialize to avoid stampeding.
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	// Recapture time after acquiring lock — the fast-path timestamp may be stale
+	// if there was contention and another goroutine held the lock for a while.
+	now = time.Now()
 
 	// Re-check after acquiring lock — another goroutine may have refreshed.
 	if ci := f.cached.Load(); ci != nil && now.Before(ci.expiresAt) {

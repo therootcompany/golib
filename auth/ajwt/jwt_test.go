@@ -53,7 +53,7 @@ func goodClaims() AppClaims {
 		StandardClaims: ajwt.StandardClaims{
 			Iss:      "https://example.com",
 			Sub:      "user123",
-			Aud:      "myapp",
+			Aud:      ajwt.Audience{"myapp"},
 			Exp:      now.Add(time.Hour).Unix(),
 			Iat:      now.Unix(),
 			AuthTime: now.Unix(),
