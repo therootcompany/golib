@@ -387,7 +387,7 @@ func TestValidatorLax(t *testing.T) {
 			Iss: []string{"https://example.com"},
 			Aud: []string{"myapp"},
 		},
-		CheckNonce: "expected-nonce",
+		ExpectedNonce: "expected-nonce",
 	}
 	wrongNonce := minimal
 	wrongNonce.Nonce = "wrong-nonce"

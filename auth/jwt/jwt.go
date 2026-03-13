@@ -14,8 +14,9 @@
 // them). As a relying party you either hold known public keys at startup, or you
 // fetch them at runtime from a canonical JWKS endpoint.
 //
-//   - Issuer: use [NewSigner] → [Signer.Sign]; expose public keys via [Signer.ToJWKs]
-//     or hand them directly to [New] for a co-located verifier.
+//   - Issuer: use [NewSigner] → [Signer.Sign]; expose public keys via
+//     json.Marshal(jwk.JWKs{Keys: signer.PublicKeys()}) or hand them directly
+//     to [New] for a co-located verifier.
 //   - Relying party, known keys: use [New] with a []jwk.PublicKey slice.
 //   - Relying party, remote keys: use [KeyFetcher]; it fetches lazily and caches.
 //
@@ -516,7 +517,7 @@ type ValidatorLax struct {
 	CheckJTI      bool   // if true, jti must be present (non-empty)
 	CheckAuthTime bool   // if true (or MaxAge > 0), auth_time is validated
 	CheckAMR      bool   // if true (or RequiredAMRs/MinAMRCount set), amr is validated
-	CheckNonce    string // if non-empty, token's nonce must equal this value
+	ExpectedNonce string // if non-empty, token's nonce must equal this value
 }
 
 // Validate checks the standard JWT/OIDC claims and returns soft errors.
@@ -531,7 +532,7 @@ func (v *ValidatorLax) Validate(claims Claims, now time.Time) ([]string, error) 
 		checkAuthTime: v.CheckAuthTime || v.MaxAge > 0,
 		checkAMR:      v.CheckAMR || len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
 		checkAzp:      len(v.Azp) > 0,
-		checkNonce:    v.CheckNonce,
+		checkNonce:    v.ExpectedNonce,
 	}, now)
 }
 
@@ -888,10 +889,11 @@ func formatDuration(d time.Duration) string {
 	if minutes > 0 {
 		parts = append(parts, fmt.Sprintf("%dm", minutes))
 	}
-	if seconds > 0 || len(parts) == 0 {
+	if seconds > 0 {
 		parts = append(parts, fmt.Sprintf("%ds", seconds))
 	}
-	if seconds == 0 || len(parts) == 0 {
+	if len(parts) == 0 {
+		// Sub-second duration: fall back to milliseconds.
 		d -= time.Duration(seconds) * time.Second
 		millis := int(d / time.Millisecond)
 		parts = append(parts, fmt.Sprintf("%dms", millis))
