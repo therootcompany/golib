@@ -9,11 +9,13 @@
 package ajwt
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -21,6 +23,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -54,6 +57,90 @@ func (k PublicJWK) EdDSA() (ed25519.PublicKey, bool) {
 	return key, ok
 }
 
+// Thumbprint computes the RFC 7638 JWK Thumbprint (SHA-256 of the canonical
+// key JSON with fields in lexicographic order). The result is base64url-encoded.
+//
+// Canonical forms per RFC 7638:
+//   - EC:  {"crv":…, "kty":"EC", "x":…, "y":…}
+//   - RSA: {"e":…, "kty":"RSA", "n":…}
+//   - OKP: {"crv":"Ed25519", "kty":"OKP", "x":…}
+//
+// Use Thumbprint as KID when none is provided in the JWKS source.
+func (k PublicJWK) Thumbprint() (string, error) {
+	var canonical []byte
+	var err error
+
+	switch key := k.Key.(type) {
+	case *ecdsa.PublicKey:
+		byteLen := (key.Curve.Params().BitSize + 7) / 8
+		xBytes := make([]byte, byteLen)
+		yBytes := make([]byte, byteLen)
+		key.X.FillBytes(xBytes)
+		key.Y.FillBytes(yBytes)
+
+		var crv string
+		switch key.Curve {
+		case elliptic.P256():
+			crv = "P-256"
+		case elliptic.P384():
+			crv = "P-384"
+		case elliptic.P521():
+			crv = "P-521"
+		default:
+			return "", fmt.Errorf("Thumbprint: unsupported EC curve %s", key.Curve.Params().Name)
+		}
+
+		// Fields in lexicographic order: crv, kty, x, y
+		canonical, err = json.Marshal(struct {
+			Crv string `json:"crv"`
+			Kty string `json:"kty"`
+			X   string `json:"x"`
+			Y   string `json:"y"`
+		}{
+			Crv: crv,
+			Kty: "EC",
+			X:   base64.RawURLEncoding.EncodeToString(xBytes),
+			Y:   base64.RawURLEncoding.EncodeToString(yBytes),
+		})
+
+	case *rsa.PublicKey:
+		eInt := big.NewInt(int64(key.E))
+
+		// Fields in lexicographic order: e, kty, n
+		canonical, err = json.Marshal(struct {
+			E   string `json:"e"`
+			Kty string `json:"kty"`
+			N   string `json:"n"`
+		}{
+			E:   base64.RawURLEncoding.EncodeToString(eInt.Bytes()),
+			Kty: "RSA",
+			N:   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+		})
+
+	case ed25519.PublicKey:
+		// Fields in lexicographic order: crv, kty, x
+		canonical, err = json.Marshal(struct {
+			Crv string `json:"crv"`
+			Kty string `json:"kty"`
+			X   string `json:"x"`
+		}{
+			Crv: "Ed25519",
+			Kty: "OKP",
+			X:   base64.RawURLEncoding.EncodeToString([]byte(key)),
+		})
+
+	default:
+		return "", fmt.Errorf("Thumbprint: unsupported key type %T", k.Key)
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("Thumbprint: marshal canonical JSON: %w", err)
+	}
+
+	sum := sha256.Sum256(canonical)
+	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
+}
+
 // PublicJWKJSON is the JSON representation of a single key in a JWKS document.
 type PublicJWKJSON struct {
 	Kty string `json:"kty"`
@@ -71,22 +158,81 @@ type JWKsJSON struct {
 	Keys []PublicJWKJSON `json:"keys"`
 }
 
-// FetchPublicJWKs retrieves and parses a JWKS document from url.
+// FetchJWKs retrieves and parses a JWKS document from jwksURL.
 //
-// For issuer-scoped key management with context support, use
-// [Issuer.FetchKeys] instead.
-func FetchPublicJWKs(url string) ([]PublicJWK, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
+// ctx is used for the HTTP request timeout and cancellation.
+func FetchJWKs(ctx context.Context, jwksURL string) ([]PublicJWK, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
+		return nil, fmt.Errorf("fetch JWKS: %w", err)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch JWKS: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("fetch JWKS: unexpected status %d", resp.StatusCode)
 	}
 	return DecodePublicJWKs(resp.Body)
+}
+
+// FetchJWKsFromOIDC fetches JWKS via OIDC discovery from baseURL.
+//
+// It fetches {baseURL}/.well-known/openid-configuration and reads the jwks_uri field.
+func FetchJWKsFromOIDC(ctx context.Context, baseURL string) ([]PublicJWK, error) {
+	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/openid-configuration"
+	keys, _, err := fetchJWKsFromDiscovery(ctx, discoveryURL)
+	return keys, err
+}
+
+// FetchJWKsFromOAuth2 fetches JWKS via OAuth 2.0 authorization server metadata (RFC 8414)
+// from baseURL.
+//
+// It fetches {baseURL}/.well-known/oauth-authorization-server and reads the jwks_uri field.
+func FetchJWKsFromOAuth2(ctx context.Context, baseURL string) ([]PublicJWK, error) {
+	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/oauth-authorization-server"
+	keys, _, err := fetchJWKsFromDiscovery(ctx, discoveryURL)
+	return keys, err
+}
+
+// fetchJWKsFromDiscovery fetches a discovery document from discoveryURL, then
+// fetches the JWKS from the jwks_uri field. Returns the keys and the issuer
+// URL from the discovery document's "issuer" field.
+func fetchJWKsFromDiscovery(ctx context.Context, discoveryURL string) ([]PublicJWK, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("fetch discovery: %w", err)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("fetch discovery: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("fetch discovery: unexpected status %d", resp.StatusCode)
+	}
+
+	var doc struct {
+		Issuer  string `json:"issuer"`
+		JWKsURI string `json:"jwks_uri"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return nil, "", fmt.Errorf("parse discovery doc: %w", err)
+	}
+	if doc.JWKsURI == "" {
+		return nil, "", fmt.Errorf("discovery doc missing jwks_uri field")
+	}
+
+	keys, err := FetchJWKs(ctx, doc.JWKsURI)
+	if err != nil {
+		return nil, "", err
+	}
+	return keys, doc.Issuer, nil
 }
 
 // ReadPublicJWKs reads and parses a JWKS document from a file path.
@@ -118,12 +264,21 @@ func DecodePublicJWKs(r io.Reader) ([]PublicJWK, error) {
 }
 
 // DecodePublicJWKsJSON converts a parsed [JWKsJSON] into typed public keys.
+//
+// If a key has no kid field in the source document, the KID is auto-populated
+// from [PublicJWK.Thumbprint] per RFC 7638.
 func DecodePublicJWKsJSON(jwks JWKsJSON) ([]PublicJWK, error) {
 	var keys []PublicJWK
 	for _, jwk := range jwks.Keys {
 		key, err := DecodePublicJWK(jwk)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse public jwk %q: %w", jwk.KID, err)
+		}
+		if key.KID == "" {
+			key.KID, err = key.Thumbprint()
+			if err != nil {
+				return nil, fmt.Errorf("compute thumbprint for kid-less key: %w", err)
+			}
 		}
 		keys = append(keys, *key)
 	}

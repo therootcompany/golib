@@ -14,7 +14,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,9 +25,8 @@ import (
 
 // AppClaims embeds StandardClaims and adds application-specific fields.
 //
-// Unlike embeddedjwt and bestjwt, AppClaims does NOT implement a Validate
-// interface — there is none. Validation is explicit: call
-// ValidateStandardClaims or ValidateParams.Validate at the call site.
+// Because StandardClaims is embedded, AppClaims satisfies StandardClaimsSource
+// for free via Go's method promotion — no interface to implement.
 type AppClaims struct {
 	ajwt.StandardClaims
 	Email string   `json:"email"`
@@ -33,9 +34,10 @@ type AppClaims struct {
 }
 
 // validateAppClaims is a plain function — not a method satisfying an interface.
-// Custom validation logic lives here, calling ValidateStandardClaims directly.
-func validateAppClaims(c AppClaims, params ajwt.ValidateParams, now time.Time) ([]string, error) {
-	errs, _ := ajwt.ValidateStandardClaims(c.StandardClaims, params, now)
+// It demonstrates the UnsafeVerify pattern: custom validation logic lives here,
+// calling ValidateStandardClaims directly and adding app-specific checks.
+func validateAppClaims(c AppClaims, v ajwt.Validator, now time.Time) ([]string, error) {
+	errs, _ := ajwt.ValidateStandardClaims(c.StandardClaims, v, now)
 	if c.Email == "" {
 		errs = append(errs, "missing email claim")
 	}
@@ -65,11 +67,11 @@ func goodClaims() AppClaims {
 	}
 }
 
-// goodParams configures the validator. Iss is omitted because Issuer.Verify
-// already enforces the iss claim — no need to check it twice.
-func goodParams() ajwt.ValidateParams {
-	return ajwt.ValidateParams{
-		IgnoreIss:    true, // Issuer.Verify handles iss
+// goodValidator configures the validator. IgnoreIss is true because
+// Issuer.UnsafeVerify already enforces the iss claim — no need to check twice.
+func goodValidator() *ajwt.Validator {
+	return &ajwt.Validator{
+		IgnoreIss:    true, // UnsafeVerify handles iss
 		Sub:          "user123",
 		Aud:          "myapp",
 		Jti:          "abc123",
@@ -80,16 +82,13 @@ func goodParams() ajwt.ValidateParams {
 }
 
 func goodIssuer(pub ajwt.PublicJWK) *ajwt.Issuer {
-	iss := ajwt.NewIssuer("https://example.com")
-	iss.Params = goodParams()
-	iss.SetKeys([]ajwt.PublicJWK{pub})
-	return iss
+	return ajwt.New("https://example.com", []ajwt.PublicJWK{pub}, goodValidator())
 }
 
 // TestRoundTrip is the primary happy path using ES256.
-// It demonstrates the full Issuer-based flow:
+// It demonstrates the full VerifyAndValidate flow:
 //
-//	Decode → Issuer.Verify → UnmarshalClaims → Params.Validate
+//	New → VerifyAndValidate → custom claim access
 //
 // No Claims interface, no Verified flag, no type assertions on jws.
 func TestRoundTrip(t *testing.T) {
@@ -115,20 +114,16 @@ func TestRoundTrip(t *testing.T) {
 
 	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "key-1"})
 
-	jws2, err := ajwt.Decode(token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = iss.Verify(jws2); err != nil {
-		t.Fatalf("Verify failed: %v", err)
-	}
-
 	var decoded AppClaims
-	if err = jws2.UnmarshalClaims(&decoded); err != nil {
-		t.Fatal(err)
+	jws2, errs, err := iss.VerifyAndValidate(token, &decoded, time.Now())
+	if err != nil {
+		t.Fatalf("VerifyAndValidate failed: %v", err)
 	}
-	if errs, err := iss.Params.Validate(decoded.StandardClaims, time.Now()); err != nil {
-		t.Fatalf("validation failed: %v", errs)
+	if len(errs) > 0 {
+		t.Fatalf("claim validation failed: %v", errs)
+	}
+	if jws2.Header.Alg != "ES256" {
+		t.Errorf("expected ES256 alg in jws, got %s", jws2.Header.Alg)
 	}
 	// Direct field access — no type assertion needed, no jws.Claims interface.
 	if decoded.Email != claims.Email {
@@ -160,20 +155,13 @@ func TestRoundTripRS256(t *testing.T) {
 
 	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "key-1"})
 
-	jws2, err := ajwt.Decode(token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = iss.Verify(jws2); err != nil {
-		t.Fatalf("Verify failed: %v", err)
-	}
-
 	var decoded AppClaims
-	if err = jws2.UnmarshalClaims(&decoded); err != nil {
-		t.Fatal(err)
+	_, errs, err := iss.VerifyAndValidate(token, &decoded, time.Now())
+	if err != nil {
+		t.Fatalf("VerifyAndValidate failed: %v", err)
 	}
-	if errs, err := iss.Params.Validate(decoded.StandardClaims, time.Now()); err != nil {
-		t.Fatalf("validation failed: %v", errs)
+	if len(errs) > 0 {
+		t.Fatalf("claim validation failed: %v", errs)
 	}
 }
 
@@ -201,25 +189,47 @@ func TestRoundTripEdDSA(t *testing.T) {
 
 	iss := goodIssuer(ajwt.PublicJWK{Key: pubKeyBytes, KID: "key-1"})
 
-	jws2, err := ajwt.Decode(token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = iss.Verify(jws2); err != nil {
-		t.Fatalf("Verify failed: %v", err)
-	}
-
 	var decoded AppClaims
-	if err = jws2.UnmarshalClaims(&decoded); err != nil {
-		t.Fatal(err)
+	_, errs, err := iss.VerifyAndValidate(token, &decoded, time.Now())
+	if err != nil {
+		t.Fatalf("VerifyAndValidate failed: %v", err)
 	}
-	if errs, err := iss.Params.Validate(decoded.StandardClaims, time.Now()); err != nil {
-		t.Fatalf("validation failed: %v", errs)
+	if len(errs) > 0 {
+		t.Fatalf("claim validation failed: %v", errs)
 	}
 }
 
-// TestCustomValidation demonstrates custom claim validation without any interface.
-// The caller owns the validation logic and calls ValidateStandardClaims directly.
+// TestUnsafeVerifyFlow demonstrates the UnsafeVerify + custom validation pattern.
+// The caller owns the full validation pipeline.
+func TestUnsafeVerifyFlow(t *testing.T) {
+	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+
+	claims := goodClaims()
+	jws, _ := ajwt.NewJWSFromClaims(&claims, "k")
+	_, _ = jws.Sign(privKey)
+	token := jws.Encode()
+
+	// Create issuer without validator — UnsafeVerify only.
+	iss := ajwt.New("https://example.com", []ajwt.PublicJWK{{Key: &privKey.PublicKey, KID: "k"}}, nil)
+
+	jws2, err := iss.UnsafeVerify(token)
+	if err != nil {
+		t.Fatalf("UnsafeVerify failed: %v", err)
+	}
+
+	var decoded AppClaims
+	if err := jws2.UnmarshalClaims(&decoded); err != nil {
+		t.Fatalf("UnmarshalClaims failed: %v", err)
+	}
+
+	errs, err := ajwt.ValidateStandardClaims(decoded.StandardClaims, *goodValidator(), time.Now())
+	if err != nil {
+		t.Fatalf("ValidateStandardClaims failed: %v — errs: %v", err, errs)
+	}
+}
+
+// TestCustomValidation demonstrates that ValidateStandardClaims is called
+// explicitly and custom fields are validated without any Claims interface.
 func TestCustomValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
@@ -231,12 +241,15 @@ func TestCustomValidation(t *testing.T) {
 	token := jws.Encode()
 
 	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "k"})
-	jws2, _ := ajwt.Decode(token)
-	_ = iss.Verify(jws2)
+	jws2, err := iss.UnsafeVerify(token)
+	if err != nil {
+		t.Fatalf("UnsafeVerify failed unexpectedly: %v", err)
+	}
+
 	var decoded AppClaims
 	_ = jws2.UnmarshalClaims(&decoded)
 
-	errs, err := validateAppClaims(decoded, goodParams(), time.Now())
+	errs, err := validateAppClaims(decoded, *goodValidator(), time.Now())
 	if err == nil {
 		t.Fatal("expected validation to fail: email is empty")
 	}
@@ -251,6 +264,23 @@ func TestCustomValidation(t *testing.T) {
 	}
 }
 
+// TestVerifyAndValidateNilValidator confirms that VerifyAndValidate fails loudly
+// when no Validator was provided at construction time.
+func TestVerifyAndValidateNilValidator(t *testing.T) {
+	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	c := goodClaims()
+	jws, _ := ajwt.NewJWSFromClaims(&c, "k")
+	_, _ = jws.Sign(privKey)
+	token := jws.Encode()
+
+	iss := ajwt.New("https://example.com", []ajwt.PublicJWK{{Key: &privKey.PublicKey, KID: "k"}}, nil)
+
+	var claims AppClaims
+	if _, _, err := iss.VerifyAndValidate(token, &claims, time.Now()); err == nil {
+		t.Fatal("expected VerifyAndValidate to error with nil validator")
+	}
+}
+
 // TestIssuerWrongKey confirms that a different key's public key is rejected.
 func TestIssuerWrongKey(t *testing.T) {
 	signingKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -262,10 +292,9 @@ func TestIssuerWrongKey(t *testing.T) {
 	token := jws.Encode()
 
 	iss := goodIssuer(ajwt.PublicJWK{Key: &wrongKey.PublicKey, KID: "k"})
-	jws2, _ := ajwt.Decode(token)
 
-	if err := iss.Verify(jws2); err == nil {
-		t.Fatal("expected Verify to fail with wrong key")
+	if _, err := iss.UnsafeVerify(token); err == nil {
+		t.Fatal("expected UnsafeVerify to fail with wrong key")
 	}
 }
 
@@ -279,10 +308,9 @@ func TestIssuerUnknownKid(t *testing.T) {
 	token := jws.Encode()
 
 	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "known-kid"})
-	jws2, _ := ajwt.Decode(token)
 
-	if err := iss.Verify(jws2); err == nil {
-		t.Fatal("expected Verify to fail for unknown kid")
+	if _, err := iss.UnsafeVerify(token); err == nil {
+		t.Fatal("expected UnsafeVerify to fail for unknown kid")
 	}
 }
 
@@ -299,14 +327,15 @@ func TestIssuerIssMismatch(t *testing.T) {
 
 	// Issuer expects "https://example.com" but token says "https://evil.example.com"
 	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "k"})
-	jws2, _ := ajwt.Decode(token)
 
-	if err := iss.Verify(jws2); err == nil {
-		t.Fatal("expected Verify to fail: iss mismatch")
+	if _, err := iss.UnsafeVerify(token); err == nil {
+		t.Fatal("expected UnsafeVerify to fail: iss mismatch")
 	}
 }
 
-// TestVerifyTamperedAlg confirms that a tampered alg header is rejected.
+// TestVerifyTamperedAlg confirms that a tampered alg header ("none") is rejected.
+// The token is reconstructed with a replaced protected header; the original
+// ES256 signature is kept, making the signing input mismatch detectable.
 func TestVerifyTamperedAlg(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
@@ -316,11 +345,15 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	token := jws.Encode()
 
 	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "k"})
-	jws2, _ := ajwt.Decode(token)
-	jws2.Header.Alg = "none" // tamper
 
-	if err := iss.Verify(jws2); err == nil {
-		t.Fatal("expected Verify to fail for tampered alg")
+	// Replace the protected header with one that has alg:"none".
+	// The original ES256 signature stays — the signing input will mismatch.
+	noneHeader := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","kid":"k","typ":"JWT"}`))
+	parts := strings.SplitN(token, ".", 3)
+	tamperedToken := noneHeader + "." + parts[1] + "." + parts[2]
+
+	if _, err := iss.UnsafeVerify(tamperedToken); err == nil {
+		t.Fatal("expected UnsafeVerify to fail for tampered alg")
 	}
 }
 
@@ -406,5 +439,81 @@ func TestDecodePublicJWKJSON(t *testing.T) {
 	}
 	if rsaCount != 1 {
 		t.Errorf("expected 1 RSA key, got %d", rsaCount)
+	}
+}
+
+// TestThumbprint verifies that Thumbprint returns a non-empty base64url string
+// for EC, RSA, and Ed25519 keys, and that two equal keys produce the same thumbprint.
+func TestThumbprint(t *testing.T) {
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
+
+	tests := []struct {
+		name string
+		jwk  ajwt.PublicJWK
+	}{
+		{"EC P-256", ajwt.PublicJWK{Key: &ecKey.PublicKey}},
+		{"RSA 2048", ajwt.PublicJWK{Key: &rsaKey.PublicKey}},
+		{"Ed25519", ajwt.PublicJWK{Key: edPub}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			thumb, err := tt.jwk.Thumbprint()
+			if err != nil {
+				t.Fatalf("Thumbprint() error: %v", err)
+			}
+			if thumb == "" {
+				t.Fatal("Thumbprint() returned empty string")
+			}
+			// Must be valid base64url (no padding, no +/)
+			if strings.Contains(thumb, "+") || strings.Contains(thumb, "/") || strings.Contains(thumb, "=") {
+				t.Errorf("Thumbprint() contains non-base64url characters: %s", thumb)
+			}
+			// Same key → same thumbprint
+			thumb2, _ := tt.jwk.Thumbprint()
+			if thumb != thumb2 {
+				t.Errorf("Thumbprint() not deterministic: %s != %s", thumb, thumb2)
+			}
+		})
+	}
+}
+
+// TestNoKidAutoThumbprint verifies that a JWKS key without a "kid" field gets
+// its KID auto-populated from the RFC 7638 thumbprint.
+func TestNoKidAutoThumbprint(t *testing.T) {
+	// EC key with no "kid" field in the JWKS
+	jwksJSON := []byte(`{"keys":[
+		{"kty":"EC","crv":"P-256",
+		 "x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+		 "y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+		 "use":"sig"}
+	]}`)
+
+	keys, err := ajwt.UnmarshalPublicJWKs(jwksJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	if keys[0].KID == "" {
+		t.Fatal("KID should be auto-populated from Thumbprint when absent in JWKS")
+	}
+
+	// The auto-KID should be a valid base64url string.
+	kid := keys[0].KID
+	if strings.Contains(kid, "+") || strings.Contains(kid, "/") || strings.Contains(kid, "=") {
+		t.Errorf("auto-KID contains non-base64url characters: %s", kid)
+	}
+
+	// Round-trip: compute Thumbprint directly and compare.
+	thumb, err := keys[0].Thumbprint()
+	if err != nil {
+		t.Fatalf("Thumbprint() error: %v", err)
+	}
+	if kid != thumb {
+		t.Errorf("auto-KID %q != direct Thumbprint %q", kid, thumb)
 	}
 }
