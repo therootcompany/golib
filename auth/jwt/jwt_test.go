@@ -381,19 +381,19 @@ func TestValidatorLax(t *testing.T) {
 		t.Fatalf("expected iat error, got: %v", errs)
 	}
 
-	// Opt-in CheckNonce: mismatch must be caught.
+	// Opt-in CheckNonce: absent nonce must be caught.
 	laxNonce := &jwt.ValidatorLax{
 		ValidatorCore: jwt.ValidatorCore{
 			Iss: []string{"https://example.com"},
 			Aud: []string{"myapp"},
 		},
-		ExpectedNonce: "expected-nonce",
+		CheckNonce: true,
 	}
-	wrongNonce := minimal
-	wrongNonce.Nonce = "wrong-nonce"
-	errs, err = laxNonce.Validate(&wrongNonce, now)
+	noNonce := minimal
+	noNonce.Nonce = ""
+	errs, err = laxNonce.Validate(&noNonce, now)
 	if err == nil {
-		t.Fatal("ValidatorLax should reject nonce mismatch")
+		t.Fatal("ValidatorLax should reject absent nonce when CheckNonce is set")
 	}
 	found = false
 	for _, e := range errs {
@@ -671,10 +671,11 @@ func TestJWKsRoundTrip(t *testing.T) {
 	}
 
 	// Round-trip: parse the JWKS JSON and verify it produces a working Verifier.
-	keys, err := jwk.Decode(jwksBytes)
-	if err != nil {
+	var jwks jwk.JWKs
+	if err := json.Unmarshal(jwksBytes, &jwks); err != nil {
 		t.Fatal(err)
 	}
+	keys := jwks.Keys
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key, got %d", len(keys))
 	}
@@ -749,10 +750,11 @@ func TestDecodePublicJWKJSON(t *testing.T) {
 		 "e":"AQAB","kid":"rsa-2048","use":"sig"}
 	]}`)
 
-	keys, err := jwk.Decode(jwksJSON)
-	if err != nil {
+	var jwks jwk.JWKs
+	if err := json.Unmarshal(jwksJSON, &jwks); err != nil {
 		t.Fatal(err)
 	}
+	keys := jwks.Keys
 	if len(keys) != 2 {
 		t.Fatalf("expected 2 keys, got %d", len(keys))
 	}
@@ -829,10 +831,11 @@ func TestNoKidAutoThumbprint(t *testing.T) {
 		 "use":"sig"}
 	]}`)
 
-	keys, err := jwk.Decode(jwksJSON)
-	if err != nil {
+	var jwks jwk.JWKs
+	if err := json.Unmarshal(jwksJSON, &jwks); err != nil {
 		t.Fatal(err)
 	}
+	keys := jwks.Keys
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key, got %d", len(keys))
 	}

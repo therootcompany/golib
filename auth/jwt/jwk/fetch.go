@@ -57,11 +57,11 @@ func FetchURL(ctx context.Context, jwksURL string, client *http.Client) ([]Publi
 	if err != nil {
 		return nil, 0, fmt.Errorf("fetch JWKS: read body: %w", err)
 	}
-	keys, err := Decode(body)
-	if err != nil {
-		return nil, 0, err
+	var jwks JWKs
+	if err := json.Unmarshal(body, &jwks); err != nil {
+		return nil, 0, fmt.Errorf("parse JWKS: %w", err)
 	}
-	return keys, parseCacheControlMaxAge(resp.Header.Get("Cache-Control")), nil
+	return jwks.Keys, parseCacheControlMaxAge(resp.Header.Get("Cache-Control")), nil
 }
 
 // parseCacheControlMaxAge extracts the max-age value from a Cache-Control header.

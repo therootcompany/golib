@@ -327,18 +327,12 @@ func encode(k PublicKey) (rawKey, error) {
 }
 
 // ReadFile reads and parses a JWKS document from a file path.
+// It is equivalent to os.ReadFile followed by json.Unmarshal into a [JWKs].
 func ReadFile(filePath string) ([]PublicKey, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open JWKS file %q: %w", filePath, err)
 	}
-	return Decode(data)
-}
-
-// Decode parses a JWKS document from raw JSON bytes.
-// Each key's KID is auto-computed via [PublicKey.Thumbprint] if absent.
-// An empty key set is valid (e.g. during key rotation) and returns a nil slice.
-func Decode(data []byte) ([]PublicKey, error) {
 	var jwks JWKs
 	if err := json.Unmarshal(data, &jwks); err != nil {
 		return nil, fmt.Errorf("failed to parse JWKS JSON: %w", err)

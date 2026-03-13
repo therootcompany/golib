@@ -517,7 +517,7 @@ type ValidatorLax struct {
 	CheckJTI      bool   // if true, jti must be present (non-empty)
 	CheckAuthTime bool   // if true (or MaxAge > 0), auth_time is validated
 	CheckAMR      bool   // if true (or RequiredAMRs/MinAMRCount set), amr is validated
-	ExpectedNonce string // if non-empty, token's nonce must equal this value
+	CheckNonce    bool   // if true, nonce must be present (non-empty)
 }
 
 // Validate checks the standard JWT/OIDC claims and returns soft errors.
@@ -532,7 +532,7 @@ func (v *ValidatorLax) Validate(claims Claims, now time.Time) ([]string, error) 
 		checkAuthTime: v.CheckAuthTime || v.MaxAge > 0,
 		checkAMR:      v.CheckAMR || len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
 		checkAzp:      len(v.Azp) > 0,
-		checkNonce:    v.ExpectedNonce,
+		checkNonce:    v.CheckNonce,
 	}, now)
 }
 
@@ -548,7 +548,7 @@ type claimChecks struct {
 	checkAuthTime bool
 	checkAMR      bool
 	checkAzp      bool
-	checkNonce    string
+	checkNonce    bool
 }
 
 func validateClaims(claims StandardClaims, core ValidatorCore, checks claimChecks, now time.Time) ([]string, error) {
@@ -649,8 +649,8 @@ func validateClaims(claims StandardClaims, core ValidatorCore, checks claimCheck
 		errs = append(errs, fmt.Sprintf("'azp' %q not in allowed list", claims.Azp))
 	}
 
-	if checks.checkNonce != "" && claims.Nonce != checks.checkNonce {
-		errs = append(errs, fmt.Sprintf("nonce mismatch: got %q, want %q", claims.Nonce, checks.checkNonce))
+	if checks.checkNonce && claims.Nonce == "" {
+		errs = append(errs, "missing or malformed 'nonce'")
 	}
 
 	if len(errs) > 0 {
