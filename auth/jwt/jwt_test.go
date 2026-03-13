@@ -597,7 +597,7 @@ func TestSignerAutoKID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keys := signer.PublicKeys()
+	keys := signer.Keys
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key, got %d", len(keys))
 	}
@@ -665,7 +665,7 @@ func TestJWKsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jwksBytes, err := json.Marshal(jwk.JWKs{Keys: signer.PublicKeys()})
+	jwksBytes, err := json.Marshal(signer)
 	if err != nil {
 		t.Fatal(err)
 	}

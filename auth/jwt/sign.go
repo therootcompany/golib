@@ -9,6 +9,10 @@
 package jwt
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"fmt"
 	"sync/atomic"
 
@@ -18,21 +22,29 @@ import (
 // Signer manages one or more private signing keys and issues JWTs by
 // round-robining across them. It is the issuing side of a JWT issuer —
 // the party that signs tokens with a private key and publishes the
-// corresponding public keys via [Signer.Verifier] or [Signer.ToJWKs].
+// corresponding public keys.
+//
+// Signer embeds [jwk.JWKs], so the JWKS endpoint response is just:
+//
+//	json.Marshal(&signer)
 //
 // Do not copy a Signer after first use — it contains an atomic counter.
 type Signer struct {
+	jwk.JWKs              // Keys []jwk.PublicKey — promoted; marshals as {"keys":[...]}
 	keys      []jwk.PrivateKey
 	signerIdx atomic.Uint64
 }
 
 // NewSigner creates a Signer from the provided signing keys.
 //
-// Each key must have a non-nil Signer field. If a key's KID is empty it is
-// auto-computed from the RFC 7638 thumbprint of the public key.
+// NewSigner normalises each key:
+//   - Alg: derived from the key type (ES256/ES384/ES512/RS256/EdDSA).
+//     Returns an error if the caller set an incompatible Alg.
+//   - Use: defaults to "sig" if empty.
+//   - KID: auto-computed from the RFC 7638 thumbprint if empty.
 //
-// Returns an error if the slice is empty, any key has no Signer, or a
-// thumbprint cannot be computed.
+// Returns an error if the slice is empty, any key has no Signer,
+// the key type is unsupported, or a thumbprint cannot be computed.
 //
 // https://www.rfc-editor.org/rfc/rfc7638.html
 func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
@@ -42,13 +54,27 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 	// Copy so the caller can't mutate after construction.
 	ss := make([]jwk.PrivateKey, len(keys))
 	copy(ss, keys)
-	for i, k := range ss {
-		if k.Signer == nil {
-			return nil, fmt.Errorf("NewSigner: key[%d] (kid=%q) has no Signer", i, k.KID)
+	for i := range ss {
+		if ss[i].Signer == nil {
+			return nil, fmt.Errorf("NewSigner: key[%d] (kid=%q) has no Signer", i, ss[i].KID)
 		}
-		if _, ok := k.Signer.Public().(jwk.CryptoPublicKey); !ok {
-			return nil, fmt.Errorf("NewSigner: key[%d] public key type %T does not implement jwk.CryptoPublicKey", i, k.Signer.Public())
+
+		// Derive algorithm from key type; validate caller's Alg if already set.
+		alg, err := algForSigner(ss[i].Signer)
+		if err != nil {
+			return nil, fmt.Errorf("NewSigner: key[%d]: %w", i, err)
 		}
+		if ss[i].Alg != "" && ss[i].Alg != alg {
+			return nil, fmt.Errorf("NewSigner: key[%d] Alg %q conflicts with key type (expected %s)", i, ss[i].Alg, alg)
+		}
+		ss[i].Alg = alg
+
+		// Default Use to "sig" for signing keys.
+		if ss[i].Use == "" {
+			ss[i].Use = "sig"
+		}
+
+		// Auto-compute KID from thumbprint if empty.
 		if ss[i].KID == "" {
 			thumb, err := ss[i].Thumbprint()
 			if err != nil {
@@ -57,7 +83,30 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 			ss[i].KID = thumb
 		}
 	}
-	return &Signer{keys: ss}, nil
+
+	pubs := make([]jwk.PublicKey, len(ss))
+	for i := range ss {
+		pubs[i] = *ss[i].PublicKey()
+	}
+	return &Signer{
+		JWKs: jwk.JWKs{Keys: pubs},
+		keys: ss,
+	}, nil
+}
+
+// algForSigner returns the JWS algorithm string for the given crypto.Signer's key type.
+func algForSigner(s crypto.Signer) (string, error) {
+	switch pub := s.Public().(type) {
+	case *ecdsa.PublicKey:
+		alg, _, err := algForECKey(pub)
+		return alg, err
+	case *rsa.PublicKey:
+		return "RS256", nil
+	case ed25519.PublicKey:
+		return "EdDSA", nil
+	default:
+		return "", fmt.Errorf("unsupported key type %T (supported: *ecdsa.PublicKey, *rsa.PublicKey, ed25519.PublicKey)", pub)
+	}
 }
 
 // SignJWS signs jws in-place using the next signing key in round-robin order
@@ -106,24 +155,10 @@ func (s *Signer) SignToString(claims Claims) (string, error) {
 
 // Verifier returns a new [*Verifier] containing the public keys of all signing keys.
 //
-// Use this to construct an Verifier for verifying tokens signed by this Signer.
+// Use this to construct a Verifier for verifying tokens signed by this Signer.
 // For key rotation, combine with old public keys:
 //
-//	iss := jwt.New(append(signer.PublicKeys(), oldKeys...))
+//	iss := jwt.New(append(signer.Keys, oldKeys...))
 func (s *Signer) Verifier() *Verifier {
-	return New(s.PublicKeys())
-}
-
-// PublicKeys returns the public-key side of each signing key, in the same order
-// as the keys were provided to [NewSigner].
-//
-// To serialize as a JWKS JSON document:
-//
-//	json.Marshal(jwk.JWKs{Keys: signer.PublicKeys()})
-func (s *Signer) PublicKeys() []jwk.PublicKey {
-	keys := make([]jwk.PublicKey, len(s.keys))
-	for i, k := range s.keys {
-		keys[i] = *k.PublicKey()
-	}
-	return keys
+	return New(s.Keys)
 }

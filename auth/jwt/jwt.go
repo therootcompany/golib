@@ -15,8 +15,8 @@
 // fetch them at runtime from a canonical JWKS endpoint.
 //
 //   - Issuer: use [NewSigner] → [Signer.Sign]; expose public keys via
-//     json.Marshal(jwk.JWKs{Keys: signer.PublicKeys()}) or hand them directly
-//     to [New] for a co-located verifier.
+//     json.Marshal(&signer) ([Signer] embeds [jwk.JWKs]) or hand them
+//     directly to [New] for a co-located verifier.
 //   - Relying party, known keys: use [New] with a []jwk.PublicKey slice.
 //   - Relying party, remote keys: use [KeyFetcher]; it fetches lazily and caches.
 //
