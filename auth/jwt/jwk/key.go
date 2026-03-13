@@ -17,9 +17,8 @@
 //	json.Unmarshal(data, &jwks)   // parse a JWKS document
 //	json.Marshal(jwks)             // serialize a JWKS document
 //
-// [PublicKey] and [PrivateKey] are the JSON wire structs. Private key fields
-// (d, p, q, etc.) are silently ignored when parsing into [Key]; use [PrivateKey]
-// explicitly when you need to read private key material from JSON.
+// JSON encoding and decoding are handled transparently — there are no exported
+// wire types to deal with.
 package jwk
 
 import (
@@ -98,7 +97,7 @@ func (k Key) KeyType() string {
 }
 
 // MarshalJSON implements [json.Marshaler], encoding the key as a JWK JSON object.
-// Private key fields are never included; use [PrivateKey] for private key material.
+// Private key fields are never included.
 func (k Key) MarshalJSON() ([]byte, error) {
 	pk, err := encode(k)
 	if err != nil {
@@ -108,10 +107,10 @@ func (k Key) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON implements [json.Unmarshaler], parsing a JWK JSON object.
-// Private key fields (d, p, q, etc.) are silently ignored — use [PrivateKey] for those.
+// Private key fields (d, p, q, etc.) are silently ignored.
 // If the JWK has no "kid" field, the KID is auto-computed via [Key.Thumbprint].
 func (k *Key) UnmarshalJSON(data []byte) error {
-	var kj PublicKey
+	var kj rawKey
 	if err := json.Unmarshal(data, &kj); err != nil {
 		return fmt.Errorf("parse JWK: %w", err)
 	}
@@ -221,18 +220,19 @@ func (k Key) Thumbprint() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
-// PublicKey is the JSON representation of a single key in a JWKS document.
-type PublicKey struct {
+// rawKey is the unexported JSON wire representation of a JWK object.
+// It is used internally by [Key.MarshalJSON] and [Key.UnmarshalJSON].
+type rawKey struct {
 	Kty    string   `json:"kty"`
-	KID    string   `json:"kid"`
-	Crv    string   `json:"crv,omitempty"`     // EC / OKP curve
-	X      string   `json:"x,omitempty"`       // EC / OKP public key x (or Ed25519 key bytes)
-	Y      string   `json:"y,omitempty"`       // EC public key y
-	N      string   `json:"n,omitempty"`       // RSA modulus
-	E      string   `json:"e,omitempty"`       // RSA exponent
-	Use    string   `json:"use,omitempty"`     // intended use: "sig" or "enc"
-	Alg    string   `json:"alg,omitempty"`     // algorithm hint, e.g. "RS256", "ES256", "EdDSA"
-	KeyOps []string `json:"key_ops,omitempty"` // allowed operations, e.g. ["sign"], ["verify"]
+	KID    string   `json:"kid,omitempty"`
+	Crv    string   `json:"crv,omitempty"`
+	X      string   `json:"x,omitempty"`
+	Y      string   `json:"y,omitempty"`
+	N      string   `json:"n,omitempty"`
+	E      string   `json:"e,omitempty"`
+	Use    string   `json:"use,omitempty"`
+	Alg    string   `json:"alg,omitempty"`
+	KeyOps []string `json:"key_ops,omitempty"`
 }
 
 // JWKs is a JSON Web Key Set. Use json.Marshal and json.Unmarshal directly —
@@ -241,40 +241,9 @@ type JWKs struct {
 	Keys []Key `json:"keys"`
 }
 
-// PrivateKey is the JSON representation of a private JWK.
-//
-// It embeds [PublicKey] for the public fields and adds the private key
-// material. Use [PrivateKey.PublicJWK] to extract only the public portion —
-// this is the only way to convert a PrivateKey to a PublicKey, making
-// accidental serialization of private key material explicit and visible.
-//
-// Private fields per the respective RFCs:
-//   - EC:  RFC 7518 §6.2.2 https://www.rfc-editor.org/rfc/rfc7518.html#section-6.2.2
-//   - RSA: RFC 7518 §6.3.2 https://www.rfc-editor.org/rfc/rfc7518.html#section-6.3.2
-//   - OKP: RFC 8037        https://www.rfc-editor.org/rfc/rfc8037.html
-//   - D:  EC/OKP private scalar; RSA private exponent
-//   - P, Q: RSA prime factors (optional, for CRT)
-//   - Dp, Dq, Qi: RSA CRT exponents and coefficient (optional)
-type PrivateKey struct {
-	PublicKey
-	D  string `json:"d,omitempty"`  // EC/OKP private scalar; RSA private exponent
-	P  string `json:"p,omitempty"`  // RSA first prime factor (CRT)
-	Q  string `json:"q,omitempty"`  // RSA second prime factor (CRT)
-	Dp string `json:"dp,omitempty"` // RSA first factor CRT exponent
-	Dq string `json:"dq,omitempty"` // RSA second factor CRT exponent
-	Qi string `json:"qi,omitempty"` // RSA first CRT coefficient
-}
-
-// PublicJWK returns the public portion of this private key as a [PublicKey].
-//
-// This is the only way to obtain a PublicKey from a PrivateKey —
-// the conversion is explicit and visible, preventing accidental disclosure
-// of private key material.
-func (k PrivateKey) PublicJWK() PublicKey { return k.PublicKey }
-
-// encode converts a [Key] to its [PublicKey] wire representation.
+// encode converts a [Key] to its [rawKey] wire representation.
 // Used by [Key.MarshalJSON].
-func encode(k Key) (PublicKey, error) {
+func encode(k Key) (rawKey, error) {
 	switch key := k.Key.(type) {
 	case *ecdsa.PublicKey:
 		var crv string
@@ -286,14 +255,14 @@ func encode(k Key) (PublicKey, error) {
 		case elliptic.P521():
 			crv = "P-521"
 		default:
-			return PublicKey{}, fmt.Errorf("Encode: unsupported EC curve %s", key.Curve.Params().Name)
+			return rawKey{}, fmt.Errorf("Encode: unsupported EC curve %s", key.Curve.Params().Name)
 		}
 		b, err := key.Bytes() // uncompressed: 0x04 || X || Y
 		if err != nil {
-			return PublicKey{}, fmt.Errorf("Encode: encode EC key: %w", err)
+			return rawKey{}, fmt.Errorf("Encode: encode EC key: %w", err)
 		}
 		byteLen := (key.Curve.Params().BitSize + 7) / 8
-		return PublicKey{
+		return rawKey{
 			Kty:    "EC",
 			KID:    k.KID,
 			Crv:    crv,
@@ -306,7 +275,7 @@ func encode(k Key) (PublicKey, error) {
 
 	case *rsa.PublicKey:
 		eInt := big.NewInt(int64(key.E))
-		return PublicKey{
+		return rawKey{
 			Kty:    "RSA",
 			KID:    k.KID,
 			N:      base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
@@ -317,7 +286,7 @@ func encode(k Key) (PublicKey, error) {
 		}, nil
 
 	case ed25519.PublicKey:
-		return PublicKey{
+		return rawKey{
 			Kty:    "OKP",
 			KID:    k.KID,
 			Crv:    "Ed25519",
@@ -328,7 +297,7 @@ func encode(k Key) (PublicKey, error) {
 		}, nil
 
 	default:
-		return PublicKey{}, fmt.Errorf("Encode: unsupported key type %T", k.Key)
+		return rawKey{}, fmt.Errorf("Encode: unsupported key type %T", k.Key)
 	}
 }
 
@@ -354,14 +323,14 @@ func Decode(data []byte) ([]Key, error) {
 	return jwks.Keys, nil
 }
 
-// decodeOne parses a single [PublicKey] wire struct into a [Key].
+// decodeOne parses a single rawKey wire struct into a [Key].
 // KID auto-derivation from thumbprint is handled by [Key.UnmarshalJSON].
 //
 // Supported key types:
 //   - "RSA" — minimum 1024-bit (RS256)
 //   - "EC"  — P-256, P-384, P-521 (ES256, ES384, ES512)
 //   - "OKP" — Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
-func decodeOne(kj PublicKey) (*Key, error) {
+func decodeOne(kj rawKey) (*Key, error) {
 	switch kj.Kty {
 	case "RSA":
 		key, err := decodeRSA(kj)
@@ -392,7 +361,7 @@ func decodeOne(kj PublicKey) (*Key, error) {
 	}
 }
 
-func decodeRSA(kj PublicKey) (*rsa.PublicKey, error) {
+func decodeRSA(kj rawKey) (*rsa.PublicKey, error) {
 	n, err := base64.RawURLEncoding.DecodeString(kj.N)
 	if err != nil {
 		return nil, fmt.Errorf("invalid RSA modulus: %w", err)
@@ -417,7 +386,7 @@ func decodeRSA(kj PublicKey) (*rsa.PublicKey, error) {
 	}, nil
 }
 
-func decodeEC(kj PublicKey) (*ecdsa.PublicKey, error) {
+func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 	x, err := base64.RawURLEncoding.DecodeString(kj.X)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ECDSA X: %w", err)
@@ -446,7 +415,7 @@ func decodeEC(kj PublicKey) (*ecdsa.PublicKey, error) {
 	}, nil
 }
 
-func decodeOKP(kj PublicKey) (ed25519.PublicKey, error) {
+func decodeOKP(kj rawKey) (ed25519.PublicKey, error) {
 	if kj.Crv != "Ed25519" {
 		return nil, fmt.Errorf("unsupported OKP curve: %q (only Ed25519 supported)", kj.Crv)
 	}
