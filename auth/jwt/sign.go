@@ -126,8 +126,8 @@ func (s *Signer) Verifier() *Verifier {
 	return New(s.PublicKeys())
 }
 
-// ToJWKsJSON returns the Signer's public keys as a [jwk.SetJSON] struct.
-func (s *Signer) ToJWKsJSON() (jwk.SetJSON, error) {
+// ToJWKsJSON returns the Signer's public keys as a [jwk.KeySetJSON] struct.
+func (s *Signer) ToJWKsJSON() (jwk.KeySetJSON, error) {
 	return jwk.EncodeSet(s.PublicKeys())
 }
 

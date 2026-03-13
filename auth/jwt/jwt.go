@@ -606,8 +606,8 @@ func (iss *Verifier) PublicKeys() []jwk.Key {
 	return iss.pubKeys
 }
 
-// ToJWKsJSON returns the Verifier's public keys as a [jwk.SetJSON] struct.
-func (iss *Verifier) ToJWKsJSON() (jwk.SetJSON, error) {
+// ToJWKsJSON returns the Verifier's public keys as a [jwk.KeySetJSON] struct.
+func (iss *Verifier) ToJWKsJSON() (jwk.KeySetJSON, error) {
 	return jwk.EncodeSet(iss.pubKeys)
 }
 

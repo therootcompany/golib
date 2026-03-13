@@ -582,7 +582,7 @@ func TestVerifierToJWKs(t *testing.T) {
 	}
 
 	// Round-trip: parse the JWKS JSON and verify it produces a working Verifier.
-	keys, err := jwk.Unmarshal(jwksBytes)
+	keys, err := jwk.Decode(jwksBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,7 +660,7 @@ func TestDecodePublicJWKJSON(t *testing.T) {
 		 "e":"AQAB","kid":"rsa-2048","use":"sig"}
 	]}`)
 
-	keys, err := jwk.Unmarshal(jwksJSON)
+	keys, err := jwk.Decode(jwksJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -740,7 +740,7 @@ func TestNoKidAutoThumbprint(t *testing.T) {
 		 "use":"sig"}
 	]}`)
 
-	keys, err := jwk.Unmarshal(jwksJSON)
+	keys, err := jwk.Decode(jwksJSON)
 	if err != nil {
 		t.Fatal(err)
 	}

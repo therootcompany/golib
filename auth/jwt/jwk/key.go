@@ -29,7 +29,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
 	"os"
 )
@@ -167,8 +166,8 @@ type PublicKeyJSON struct {
 	Use string `json:"use,omitempty"`
 }
 
-// SetJSON is the JSON representation of a JWKS document (a set of keys).
-type SetJSON struct {
+// KeySetJSON is the JSON representation of a JWKS document (a set of keys).
+type KeySetJSON struct {
 	Keys []PublicKeyJSON `json:"keys"`
 }
 
@@ -258,17 +257,17 @@ func Encode(k Key) (PublicKeyJSON, error) {
 	}
 }
 
-// EncodeSet converts a slice of [Key] to a [SetJSON] struct.
-func EncodeSet(keys []Key) (SetJSON, error) {
+// EncodeSet converts a slice of [Key] to a [KeySetJSON] struct.
+func EncodeSet(keys []Key) (KeySetJSON, error) {
 	jsonKeys := make([]PublicKeyJSON, 0, len(keys))
 	for _, k := range keys {
 		jk, err := Encode(k)
 		if err != nil {
-			return SetJSON{}, err
+			return KeySetJSON{}, err
 		}
 		jsonKeys = append(jsonKeys, jk)
 	}
-	return SetJSON{Keys: jsonKeys}, nil
+	return KeySetJSON{Keys: jsonKeys}, nil
 }
 
 // Marshal serializes a slice of [Key] as a JWKS JSON document.
@@ -282,39 +281,29 @@ func Marshal(keys []Key) ([]byte, error) {
 
 // ReadFile reads and parses a JWKS document from a file path.
 func ReadFile(filePath string) ([]Key, error) {
-	file, err := os.Open(filePath)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open JWKS file %q: %w", filePath, err)
 	}
-	defer func() { _ = file.Close() }()
-	return Decode(file)
+	return Decode(data)
 }
 
-// Unmarshal parses a JWKS document from raw JSON bytes.
-func Unmarshal(data []byte) ([]Key, error) {
-	var set SetJSON
+// Decode parses a JWKS document from raw JSON bytes.
+func Decode(data []byte) ([]Key, error) {
+	var set KeySetJSON
 	if err := json.Unmarshal(data, &set); err != nil {
 		return nil, fmt.Errorf("failed to parse JWKS JSON: %w", err)
 	}
-	return DecodeSetJSON(set)
+	return DecodeKeySetJSON(set)
 }
 
-// Decode parses a JWKS document from an [io.Reader].
-func Decode(r io.Reader) ([]Key, error) {
-	var set SetJSON
-	if err := json.NewDecoder(r).Decode(&set); err != nil {
-		return nil, fmt.Errorf("failed to parse JWKS JSON: %w", err)
-	}
-	return DecodeSetJSON(set)
-}
-
-// DecodeSetJSON converts a parsed [SetJSON] into typed public keys.
+// DecodeKeySetJSON converts a parsed [KeySetJSON] into typed public keys.
 //
 // If a key has no kid field in the source document, the KID is auto-populated
 // from [Key.Thumbprint] per RFC 7638.
 //
 // https://www.rfc-editor.org/rfc/rfc7638.html
-func DecodeSetJSON(set SetJSON) ([]Key, error) {
+func DecodeKeySetJSON(set KeySetJSON) ([]Key, error) {
 	var keys []Key
 	for _, kj := range set.Keys {
 		key, err := DecodeOne(kj)
