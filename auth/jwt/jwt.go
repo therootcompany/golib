@@ -74,8 +74,8 @@ import (
 // [StandardJWS.UnmarshalClaims], or [Decode] + [Verifier.Verify] for
 // routing by header fields before verifying the signature.
 type JWS interface {
-	GetProtected() string
-	GetPayload() string
+	GetProtected() []byte
+	GetPayload() []byte
 	GetSignature() []byte
 	GetStandardHeader() *StandardHeader
 	StandardClaims() (StandardClaims, error)
@@ -90,17 +90,17 @@ type JWS interface {
 //
 // *StandardJWS implements [JWS].
 type StandardJWS struct {
-	protected string // base64url-encoded header
+	protected []byte // base64url-encoded header
 	header    StandardHeader
-	payload   string // base64url-encoded claims
+	payload   []byte // base64url-encoded claims
 	signature []byte
 }
 
 // GetProtected returns the base64url-encoded protected header.
-func (jws *StandardJWS) GetProtected() string { return jws.protected }
+func (jws *StandardJWS) GetProtected() []byte { return jws.protected }
 
 // GetPayload returns the base64url-encoded payload.
-func (jws *StandardJWS) GetPayload() string { return jws.payload }
+func (jws *StandardJWS) GetPayload() []byte { return jws.payload }
 
 // GetSignature returns the decoded signature bytes.
 func (jws *StandardJWS) GetSignature() []byte { return jws.signature }
@@ -114,7 +114,7 @@ func (jws *StandardJWS) GetStandardHeader() *StandardHeader { return &jws.header
 // It does not verify the signature — always call [Verifier.VerifyJWT] or
 // [Decode]+[Verifier.Verify] before trusting the returned claims.
 func (jws *StandardJWS) StandardClaims() (StandardClaims, error) {
-	payload, err := base64.RawURLEncoding.DecodeString(jws.payload)
+	payload, err := base64.RawURLEncoding.DecodeString(string(jws.payload))
 	if err != nil {
 		return StandardClaims{}, fmt.Errorf("decode payload: %w", err)
 	}
@@ -145,11 +145,15 @@ type StandardHeader struct {
 // Any struct embedding StandardHeader gets this method for free via promotion.
 func (h *StandardHeader) GetStandardHeader() *StandardHeader { return h }
 
-// Audience represents the "aud" JWT claim (RFC 7519 §4.1.3).
+// Audience exists as a workaround for a quirk in the specification of the
+// JWT "aud" claim: RFC 7519 §4.1.3 allows "aud" to be either a plain string
+// or an array of strings, making it impossible to represent with a simple Go type.
 //
 // It unmarshals from both a single string ("foo") and an array of strings
 // (["foo","bar"]). It marshals to a plain string for a single value and to
-// an array for multiple values, per the RFC.
+// an array for multiple values.
+//
+// https://www.rfc-editor.org/rfc/rfc7519.html#section-4.1.3
 type Audience []string
 
 // Contains reports whether s appears in the audience list.
@@ -173,7 +177,7 @@ func (a *Audience) UnmarshalJSON(data []byte) error {
 }
 
 // MarshalJSON encodes the audience as a plain string when there is one value,
-// or as a JSON array for multiple values, per RFC 7519 §4.1.3.
+// or as a JSON array for multiple values.
 func (a Audience) MarshalJSON() ([]byte, error) {
 	if len(a) == 1 {
 		return json.Marshal(a[0])
@@ -183,6 +187,8 @@ func (a Audience) MarshalJSON() ([]byte, error) {
 
 // StandardClaims holds the registered JWT claim names defined in RFC 7519
 // and extended by OpenID Connect Core.
+//
+// https://www.rfc-editor.org/rfc/rfc7519.html
 //
 // Embed StandardClaims in your own claims struct to satisfy [Claims]
 // for free via Go's method promotion — zero boilerplate:
@@ -231,9 +237,9 @@ func Decode(tokenStr string) (*StandardJWS, error) {
 	}
 
 	var jws StandardJWS
-	jws.protected, jws.payload = parts[0], parts[1]
+	jws.protected, jws.payload = []byte(parts[0]), []byte(parts[1])
 
-	header, err := base64.RawURLEncoding.DecodeString(jws.protected)
+	header, err := base64.RawURLEncoding.DecodeString(string(jws.protected))
 	if err != nil {
 		return nil, fmt.Errorf("invalid header encoding: %v", err)
 	}
@@ -255,7 +261,7 @@ func Decode(tokenStr string) (*StandardJWS, error) {
 // [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before UnmarshalClaims to ensure
 // the signature is authenticated before trusting the payload.
 func (jws *StandardJWS) UnmarshalClaims(v any) error {
-	payload, err := base64.RawURLEncoding.DecodeString(jws.payload)
+	payload, err := base64.RawURLEncoding.DecodeString(string(jws.payload))
 	if err != nil {
 		return fmt.Errorf("invalid claims encoding: %v", err)
 	}
@@ -281,13 +287,13 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal header: %w", err)
 	}
-	jws.protected = base64.RawURLEncoding.EncodeToString(headerJSON)
+	jws.protected = []byte(base64.RawURLEncoding.EncodeToString(headerJSON))
 
 	claimsJSON, err := json.Marshal(claims)
 	if err != nil {
 		return nil, fmt.Errorf("marshal claims: %w", err)
 	}
-	jws.payload = base64.RawURLEncoding.EncodeToString(claimsJSON)
+	jws.payload = []byte(base64.RawURLEncoding.EncodeToString(claimsJSON))
 
 	return &jws, nil
 }
@@ -306,6 +312,7 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 //   - *ecdsa.PrivateKey P-521  → ES512 (SHA-512, raw r||s)
 //   - *rsa.PrivateKey           → RS256 (PKCS#1 v1.5 + SHA-256)
 //   - ed25519.PrivateKey         → EdDSA (Ed25519, RFC 8037)
+//     https://www.rfc-editor.org/rfc/rfc8037.html
 func (jws *StandardJWS) Sign(pk *PrivateKey) ([]byte, error) {
 	switch {
 	case jws.header.Kid == "":
@@ -328,9 +335,9 @@ func (jws *StandardJWS) Sign(pk *PrivateKey) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal header: %w", err)
 		}
-		jws.protected = base64.RawURLEncoding.EncodeToString(headerJSON)
+		jws.protected = []byte(base64.RawURLEncoding.EncodeToString(headerJSON))
 
-		digest, err := digestFor(h, jws.protected+"."+jws.payload)
+		digest, err := digestFor(h, jws.signingInput())
 		if err != nil {
 			return nil, err
 		}
@@ -351,9 +358,9 @@ func (jws *StandardJWS) Sign(pk *PrivateKey) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal header: %w", err)
 		}
-		jws.protected = base64.RawURLEncoding.EncodeToString(headerJSON)
+		jws.protected = []byte(base64.RawURLEncoding.EncodeToString(headerJSON))
 
-		digest, err := digestFor(crypto.SHA256, jws.protected+"."+jws.payload)
+		digest, err := digestFor(crypto.SHA256, jws.signingInput())
 		if err != nil {
 			return nil, err
 		}
@@ -370,11 +377,10 @@ func (jws *StandardJWS) Sign(pk *PrivateKey) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal header: %w", err)
 		}
-		jws.protected = base64.RawURLEncoding.EncodeToString(headerJSON)
+		jws.protected = []byte(base64.RawURLEncoding.EncodeToString(headerJSON))
 
 		// Ed25519 signs the raw message with no pre-hashing; pass crypto.Hash(0).
-		signingInput := jws.protected + "." + jws.payload
-		jws.signature, err = pk.Signer.Sign(rand.Reader, []byte(signingInput), crypto.Hash(0))
+		jws.signature, err = pk.Signer.Sign(rand.Reader, jws.signingInput(), crypto.Hash(0))
 		return jws.signature, err
 
 	default:
@@ -387,7 +393,23 @@ func (jws *StandardJWS) Sign(pk *PrivateKey) ([]byte, error) {
 
 // Encode produces the compact JWT string (header.payload.signature).
 func (jws *StandardJWS) Encode() string {
-	return jws.protected + "." + jws.payload + "." + base64.RawURLEncoding.EncodeToString(jws.signature)
+	sig := base64.RawURLEncoding.EncodeToString(jws.signature)
+	out := make([]byte, 0, len(jws.protected)+1+len(jws.payload)+1+len(sig))
+	out = append(out, jws.protected...)
+	out = append(out, '.')
+	out = append(out, jws.payload...)
+	out = append(out, '.')
+	out = append(out, sig...)
+	return string(out)
+}
+
+// signingInput builds the protected.payload byte slice used as the signing input.
+func (jws *StandardJWS) signingInput() []byte {
+	out := make([]byte, 0, len(jws.protected)+1+len(jws.payload))
+	out = append(out, jws.protected...)
+	out = append(out, '.')
+	out = append(out, jws.payload...)
+	return out
 }
 
 // DefaultMaxClockSkew is the tolerance applied to exp, iat, and auth_time checks
@@ -615,7 +637,11 @@ func (iss *Verifier) Verify(jws JWS) error {
 		return fmt.Errorf("unknown kid: %q", h.Kid)
 	}
 
-	signingInput := jws.GetProtected() + "." + jws.GetPayload()
+	protected, payload := jws.GetProtected(), jws.GetPayload()
+	signingInput := make([]byte, 0, len(protected)+1+len(payload))
+	signingInput = append(signingInput, protected...)
+	signingInput = append(signingInput, '.')
+	signingInput = append(signingInput, payload...)
 	if err := verifyWith(signingInput, jws.GetSignature(), h.Alg, key); err != nil {
 		return fmt.Errorf("signature verification failed: %w", err)
 	}
@@ -649,7 +675,7 @@ func (iss *Verifier) VerifyJWT(tokenStr string) (*StandardJWS, error) {
 
 // verifyWith checks a JWS signature using the given algorithm and public key.
 // Returns nil on success, a descriptive error on failure.
-func verifyWith(signingInput string, sig []byte, alg string, key jwk.PublicKey) error {
+func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.PublicKey) error {
 	switch alg {
 	case "ES256", "ES384", "ES512":
 		k, ok := key.(*ecdsa.PublicKey)
@@ -697,7 +723,7 @@ func verifyWith(signingInput string, sig []byte, alg string, key jwk.PublicKey) 
 		if !ok {
 			return fmt.Errorf("alg EdDSA requires ed25519.PublicKey, got %T", key)
 		}
-		if !ed25519.Verify(k, []byte(signingInput), sig) {
+		if !ed25519.Verify(k, signingInput, sig) {
 			return fmt.Errorf("EdDSA signature invalid")
 		}
 		return nil
@@ -722,16 +748,16 @@ func algForECKey(pub *ecdsa.PublicKey) (alg string, h crypto.Hash, err error) {
 	}
 }
 
-func digestFor(h crypto.Hash, data string) ([]byte, error) {
+func digestFor(h crypto.Hash, data []byte) ([]byte, error) {
 	switch h {
 	case crypto.SHA256:
-		d := sha256.Sum256([]byte(data))
+		d := sha256.Sum256(data)
 		return d[:], nil
 	case crypto.SHA384:
-		d := sha512.Sum384([]byte(data))
+		d := sha512.Sum384(data)
 		return d[:], nil
 	case crypto.SHA512:
-		d := sha512.Sum512([]byte(data))
+		d := sha512.Sum512(data)
 		return d[:], nil
 	default:
 		return nil, fmt.Errorf("jwt: unsupported hash %v", h)

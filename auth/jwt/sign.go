@@ -23,6 +23,8 @@ import (
 //
 // If KID is empty, it is auto-computed from the RFC 7638 thumbprint of the
 // public key when passed to [NewSigner].
+//
+// https://www.rfc-editor.org/rfc/rfc7638.html
 type PrivateKey struct {
 	KID    string
 	Signer crypto.Signer
@@ -44,6 +46,8 @@ type Signer struct {
 // If a PrivateKey's KID is empty, it is auto-computed from the RFC 7638
 // thumbprint of the public key. Returns an error if the slice is empty or
 // a thumbprint cannot be computed.
+//
+// https://www.rfc-editor.org/rfc/rfc7638.html
 func NewSigner(signers []PrivateKey) (*Signer, error) {
 	if len(signers) == 0 {
 		return nil, fmt.Errorf("NewSigner: at least one signer is required")
@@ -68,18 +72,45 @@ func NewSigner(signers []PrivateKey) (*Signer, error) {
 	return &Signer{signers: ss}, nil
 }
 
-// Sign creates and signs a compact JWT from claims, using the next signing key
-// in round-robin order. The caller is responsible for setting the "iss" field
-// in claims if issuer identification is needed.
-func (s *Signer) Sign(claims Claims) (string, error) {
+// SignJWS signs jws in-place using the next signing key in round-robin order
+// and returns the signature bytes.
+//
+// The KID and alg header fields are set automatically from the selected key.
+// Use this when you need the full signed *StandardJWS for further processing
+// (e.g., inspecting headers before encoding). For the common one-step cases,
+// prefer [Signer.Sign] or [Signer.SignToString].
+func (s *Signer) SignJWS(jws *StandardJWS) ([]byte, error) {
 	idx := s.signerIdx.Add(1) - 1
 	pk := &s.signers[idx%uint64(len(s.signers))]
+	return jws.Sign(pk)
+}
 
+// Sign creates a StandardJWS from claims, signs it with the next signing key,
+// and returns the signed JWS.
+//
+// Use this when you need access to the signed JWS object (e.g., to inspect
+// headers or read the raw signature). For the common case of producing a
+// compact token string, use [Signer.SignToString].
+func (s *Signer) Sign(claims Claims) (*StandardJWS, error) {
 	jws, err := NewJWS(claims)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if _, err := jws.Sign(pk); err != nil {
+	if _, err := s.SignJWS(jws); err != nil {
+		return nil, err
+	}
+	return jws, nil
+}
+
+// SignToString creates and signs a JWT from claims and returns the compact
+// token string (header.payload.signature).
+//
+// This is the most convenient form for the common case of signing and
+// immediately transmitting a token. The caller is responsible for setting
+// the "iss" field in claims if issuer identification is needed.
+func (s *Signer) SignToString(claims Claims) (string, error) {
+	jws, err := s.Sign(claims)
+	if err != nil {
 		return "", err
 	}
 	return jws.Encode(), nil

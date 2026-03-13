@@ -55,8 +55,10 @@ func FetchOIDC(ctx context.Context, baseURL string, client *http.Client) ([]Key,
 	return keys, err
 }
 
-// FetchOAuth2 fetches JWKS via OAuth 2.0 authorization server metadata (RFC 8414)
-// from the given base URL.
+// FetchOAuth2 fetches JWKS via OAuth 2.0 authorization server metadata from the
+// given base URL.
+//
+// https://www.rfc-editor.org/rfc/rfc8414.html
 //
 // It fetches {baseURL}/.well-known/oauth-authorization-server and reads the jwks_uri field.
 // client is used for all HTTP requests; if nil, a default 30s-timeout client is used.

@@ -75,6 +75,8 @@ func (k Key) EdDSA() (ed25519.PublicKey, bool) {
 // Thumbprint computes the RFC 7638 JWK Thumbprint (SHA-256 of the canonical
 // key JSON with fields in lexicographic order). The result is base64url-encoded.
 //
+// https://www.rfc-editor.org/rfc/rfc7638.html
+//
 // Canonical forms per RFC 7638:
 //   - EC:  {"crv":…, "kty":"EC", "x":…, "y":…}
 //   - RSA: {"e":…, "kty":"RSA", "n":…}
@@ -177,7 +179,10 @@ type SetJSON struct {
 // this is the only way to convert a PrivateKeyJSON to a PublicKeyJSON, making
 // accidental serialization of private key material explicit and visible.
 //
-// Private fields (RFC 7518 §6.2.2 for EC, §6.3.2 for RSA, RFC 8037 for OKP):
+// Private fields per the respective RFCs:
+//   - EC:  RFC 7518 §6.2.2 https://www.rfc-editor.org/rfc/rfc7518.html#section-6.2.2
+//   - RSA: RFC 7518 §6.3.2 https://www.rfc-editor.org/rfc/rfc7518.html#section-6.3.2
+//   - OKP: RFC 8037        https://www.rfc-editor.org/rfc/rfc8037.html
 //   - D:  EC/OKP private scalar; RSA private exponent
 //   - P, Q: RSA prime factors (optional, for CRT)
 //   - Dp, Dq, Qi: RSA CRT exponents and coefficient (optional)
@@ -307,6 +312,8 @@ func Decode(r io.Reader) ([]Key, error) {
 //
 // If a key has no kid field in the source document, the KID is auto-populated
 // from [Key.Thumbprint] per RFC 7638.
+//
+// https://www.rfc-editor.org/rfc/rfc7638.html
 func DecodeSetJSON(set SetJSON) ([]Key, error) {
 	var keys []Key
 	for _, kj := range set.Keys {
@@ -333,7 +340,7 @@ func DecodeSetJSON(set SetJSON) ([]Key, error) {
 // Supported key types:
 //   - "RSA" — minimum 1024-bit (RS256)
 //   - "EC"  — P-256, P-384, P-521 (ES256, ES384, ES512)
-//   - "OKP" — Ed25519 crv (EdDSA / RFC 8037)
+//   - "OKP" — Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
 func DecodeOne(kj PublicKeyJSON) (*Key, error) {
 	switch kj.Kty {
 	case "RSA":

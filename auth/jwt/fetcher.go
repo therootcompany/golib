@@ -38,6 +38,12 @@ type cachedVerifier struct {
 // is not already running. Only when there are no cached keys at all does
 // [KeyFetcher.Verifier] block until the first successful fetch.
 //
+// InitialKeys, if set, pre-populate the cache as immediately stale on the
+// first call to [KeyFetcher.Verifier]. Combined with KeepOnError=true and a
+// positive StaleAge, they are served immediately while a background refresh
+// fetches fresh keys — useful for bootstrapping auth without a blocking fetch
+// at startup.
+//
 // There is no persistent background goroutine: refreshes are started on
 // demand and run until the HTTP client's timeout fires or the fetch succeeds.
 //
@@ -81,8 +87,15 @@ type KeyFetcher struct {
 	// request lifetimes and should be allowed to eventually succeed.
 	HTTPClient *http.Client
 
-	mu         sync.Mutex
+	// InitialKeys pre-populate the cache as immediately stale on the first call
+	// to Verifier. Combined with KeepOnError=true and a positive StaleAge, they
+	// are served immediately while a background refresh fetches fresh keys.
+	InitialKeys []jwk.Key
+
+	fetchMu    sync.Mutex                   // held during HTTP fetch
+	ctrlMu     sync.Mutex                   // held briefly for refreshing/lastErr
 	cached     atomic.Pointer[cachedVerifier]
+	initOnce   sync.Once
 	refreshing bool  // true while a background refresh goroutine is running
 	lastErr    error // last background refresh error; cleared on success
 }
@@ -94,10 +107,12 @@ type KeyFetcher struct {
 // Stale (past MaxAge, within MaxAge+StaleAge, KeepOnError=true): the cached
 // Verifier is returned immediately alongside any error from the most recent
 // failed background refresh. A background refresh is started if one is not
-// already running.
+// already running. The stale path never blocks on an in-progress HTTP fetch.
 //
 // No cache: blocks until the first fetch completes.
 func (f *KeyFetcher) Verifier() (*Verifier, error) {
+	f.maybeInit()
+
 	now := time.Now()
 	ci := f.cached.Load()
 
@@ -107,22 +122,23 @@ func (f *KeyFetcher) Verifier() (*Verifier, error) {
 	}
 
 	// Stale path: return immediately and refresh in the background.
+	// ctrlMu is held only briefly — it never blocks on an in-progress HTTP fetch.
 	if ci != nil && f.KeepOnError && now.Before(ci.expiresAt.Add(f.StaleAge)) {
-		f.mu.Lock()
+		f.ctrlMu.Lock()
 		if !f.refreshing {
 			f.refreshing = true
 			go f.backgroundRefresh()
 		}
 		lastErr := f.lastErr
-		f.mu.Unlock()
+		f.ctrlMu.Unlock()
 		return ci.iss, lastErr
 	}
 
 	// Blocking path: no usable cache — wait for a fetch.
-	// Holds f.mu for the duration of the HTTP request so concurrent callers
-	// queue behind it rather than issuing redundant requests.
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	// fetchMu serializes concurrent blocking callers; the re-check prevents
+	// a redundant fetch if another goroutine already refreshed.
+	f.fetchMu.Lock()
+	defer f.fetchMu.Unlock()
 
 	// Re-check after acquiring lock — another goroutine may have refreshed.
 	now = time.Now()
@@ -134,31 +150,53 @@ func (f *KeyFetcher) Verifier() (*Verifier, error) {
 }
 
 // backgroundRefresh fetches fresh keys without blocking callers.
-// It acquires f.mu for the duration of the HTTP request so that any
+// It acquires fetchMu for the duration of the HTTP request so that any
 // concurrent blocking callers wait for this fetch rather than issuing
 // a redundant request.
 func (f *KeyFetcher) backgroundRefresh() {
-	f.mu.Lock()
-	defer func() {
-		f.refreshing = false
-		f.mu.Unlock()
-	}()
+	f.fetchMu.Lock()
+	defer f.fetchMu.Unlock()
 
 	// Re-check: a blocking caller may have already refreshed while we
 	// were waiting to acquire the lock.
 	now := time.Now()
 	if ci := f.cached.Load(); ci != nil && now.Before(ci.expiresAt) {
+		f.ctrlMu.Lock()
+		f.refreshing = false
+		f.ctrlMu.Unlock()
 		return
 	}
 
-	if _, err := f.fetch(); err != nil {
+	_, err := f.fetch()
+	f.ctrlMu.Lock()
+	f.refreshing = false
+	if err != nil {
 		f.lastErr = err
 	} else {
 		f.lastErr = nil
 	}
+	f.ctrlMu.Unlock()
 }
 
-// fetch performs the HTTP request and stores the result. Must be called with f.mu held.
+// maybeInit seeds the cache with InitialKeys on the first call, if set.
+// The seeded verifier is immediately expired so it is served as stale,
+// triggering a background refresh while being available immediately.
+func (f *KeyFetcher) maybeInit() {
+	if len(f.InitialKeys) == 0 {
+		return
+	}
+	f.initOnce.Do(func() {
+		now := time.Now()
+		ci := &cachedVerifier{
+			iss:       New(f.InitialKeys),
+			fetchedAt: now,
+			expiresAt: now, // immediately expired — served as stale, triggers background refresh
+		}
+		f.cached.Store(ci)
+	})
+}
+
+// fetch performs the HTTP request and stores the result. Must be called with fetchMu held.
 func (f *KeyFetcher) fetch() (*Verifier, error) {
 	client := f.HTTPClient
 	timeout := clientTimeout(client)

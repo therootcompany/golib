@@ -474,7 +474,7 @@ func TestSignerRoundTrip(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	tokenStr, err := signer.Sign(&claims)
+	tokenStr, err := signer.SignToString(&claims)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +518,7 @@ func TestSignerAutoKID(t *testing.T) {
 	// Token should verify with the auto-KID issuer.
 	iss := signer.Verifier()
 	claims := goodClaims()
-	tokenStr, _ := signer.Sign(&claims)
+	tokenStr, _ := signer.SignToString(&claims)
 
 	parsed, err := jwt.Decode(tokenStr)
 	if err != nil {
@@ -548,7 +548,7 @@ func TestSignerRoundRobin(t *testing.T) {
 
 	for i := range 4 {
 		claims := goodClaims()
-		tokenStr, err := signer.Sign(&claims)
+		tokenStr, err := signer.SignToString(&claims)
 		if err != nil {
 			t.Fatalf("Sign[%d] failed: %v", i, err)
 		}
@@ -595,7 +595,7 @@ func TestVerifierToJWKs(t *testing.T) {
 
 	iss2 := jwt.New(keys)
 	claims := goodClaims()
-	tokenStr, _ := signer.Sign(&claims)
+	tokenStr, _ := signer.SignToString(&claims)
 
 	parsed, err := jwt.Decode(tokenStr)
 	if err != nil {
