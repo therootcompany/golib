@@ -59,7 +59,7 @@ func goodClaims() AppClaims {
 			Iat:      now.Unix(),
 			AuthTime: now.Unix(),
 			Amr:      []string{"pwd"},
-			Jti:      "abc123",
+			JTI:      "abc123",
 			Azp:      "myapp",
 			Nonce:    "nonce1",
 		},

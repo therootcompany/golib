@@ -209,7 +209,7 @@ type StandardClaims struct {
 	Nonce    string   `json:"nonce,omitempty"`
 	Amr      []string `json:"amr"`
 	Azp      string   `json:"azp,omitempty"`
-	Jti      string   `json:"jti"`
+	JTI      string   `json:"jti"`
 }
 
 // GetStandardClaims implements [Claims].
@@ -421,7 +421,7 @@ const DefaultMaxClockSkew = 5 * time.Second
 //
 // Configure once at startup and reuse across requests. Iss, Aud, and Azp are
 // slices — the claim value must appear in the configured list if the list is
-// non-empty. Sub and Jti are presence-only checks: if not ignored, the claim
+// non-empty. Sub and JTI are presence-only checks: if not ignored, the claim
 // must be non-empty, but its value is not matched (those are per-token and
 // per-user; value matching must be done by the application).
 //
@@ -440,7 +440,7 @@ type Validator struct {
 	Aud            []string      // token's aud must intersect list (if set)
 	IgnoreExp      bool
 	IgnoreIat      bool
-	IgnoreJti      bool          // if false, jti must be present (non-empty)
+	IgnoreJTI      bool          // if false, jti must be present (non-empty)
 	IgnoreAuthTime bool
 	MaxClockSkew      time.Duration // tolerance for exp/iat/auth_time; 0 = DefaultMaxClockSkew (5s); negative = no tolerance
 	MaxAge         time.Duration
@@ -509,7 +509,7 @@ func validateClaims(claims StandardClaims, v Validator, now time.Time) ([]string
 		}
 	}
 
-	if !v.IgnoreJti && claims.Jti == "" {
+	if !v.IgnoreJTI && claims.JTI == "" {
 		errs = append(errs, "missing or malformed 'jti' (JWT ID)")
 	}
 
