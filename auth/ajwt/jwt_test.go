@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/auth/ajwt"
+	"github.com/therootcompany/golib/auth/ajwt/jwk"
 )
 
 // AppClaims embeds StandardClaims and adds application-specific fields.
@@ -81,8 +82,8 @@ func goodValidator() *ajwt.Validator {
 	}
 }
 
-func goodIssuer(pub ajwt.PublicJWK) *ajwt.Issuer {
-	return ajwt.New([]ajwt.PublicJWK{pub})
+func goodIssuer(pub jwk.Key) *ajwt.Issuer {
+	return ajwt.New([]jwk.Key{pub})
 }
 
 // TestRoundTrip is the primary happy path using ES256.
@@ -110,7 +111,7 @@ func TestRoundTrip(t *testing.T) {
 
 	token := jws.Encode()
 
-	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "key-1"})
+	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
 
 	var decoded AppClaims
 	jws2, errs, err := iss.VerifyAndValidate(token, &decoded, goodValidator(), time.Now())
@@ -151,7 +152,7 @@ func TestRoundTripRS256(t *testing.T) {
 
 	token := jws.Encode()
 
-	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "key-1"})
+	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
 
 	var decoded AppClaims
 	_, errs, err := iss.VerifyAndValidate(token, &decoded, goodValidator(), time.Now())
@@ -185,7 +186,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 
 	token := jws.Encode()
 
-	iss := goodIssuer(ajwt.PublicJWK{Key: pubKeyBytes, KID: "key-1"})
+	iss := goodIssuer(jwk.Key{Key: pubKeyBytes, KID: "key-1"})
 
 	var decoded AppClaims
 	_, errs, err := iss.VerifyAndValidate(token, &decoded, goodValidator(), time.Now())
@@ -207,7 +208,7 @@ func TestUnsafeVerifyFlow(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := ajwt.New([]ajwt.PublicJWK{{Key: &privKey.PublicKey, KID: "k"}})
+	iss := ajwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
 
 	jws2, err := iss.UnsafeVerify(token)
 	if err != nil {
@@ -238,7 +239,7 @@ func TestUnsafeVerifyReturnsJWSOnSigFailure(t *testing.T) {
 	token := jws.Encode()
 
 	// Issuer has wrong public key — sig verification will fail.
-	iss := ajwt.New([]ajwt.PublicJWK{{Key: &wrongKey.PublicKey, KID: "k"}})
+	iss := ajwt.New([]jwk.Key{{Key: &wrongKey.PublicKey, KID: "k"}})
 
 	result, err := iss.UnsafeVerify(token)
 	if err == nil {
@@ -265,7 +266,7 @@ func TestCustomValidation(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
 	jws2, err := iss.UnsafeVerify(token)
 	if err != nil {
 		t.Fatalf("UnsafeVerify failed unexpectedly: %v", err)
@@ -298,7 +299,7 @@ func TestVerifyAndValidateNilValidator(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := ajwt.New([]ajwt.PublicJWK{{Key: &privKey.PublicKey, KID: "k"}})
+	iss := ajwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
 
 	var claims AppClaims
 	jws2, errs, err := iss.VerifyAndValidate(token, &claims, nil, time.Now())
@@ -326,7 +327,7 @@ func TestIssuerWrongKey(t *testing.T) {
 	_, _ = jws.Sign(signingKey)
 	token := jws.Encode()
 
-	iss := goodIssuer(ajwt.PublicJWK{Key: &wrongKey.PublicKey, KID: "k"})
+	iss := goodIssuer(jwk.Key{Key: &wrongKey.PublicKey, KID: "k"})
 
 	if _, err := iss.Verify(token); err == nil {
 		t.Fatal("expected Verify to fail with wrong key")
@@ -342,7 +343,7 @@ func TestIssuerUnknownKid(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "known-kid"})
+	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "known-kid"})
 
 	if _, err := iss.Verify(token); err == nil {
 		t.Fatal("expected Verify to fail for unknown kid")
@@ -361,7 +362,7 @@ func TestIssuerIssMismatch(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
 
 	// UnsafeVerify succeeds — iss is not checked at the Issuer level.
 	if _, err := iss.UnsafeVerify(token); err != nil {
@@ -399,7 +400,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	_, _ = jws.Sign(privKey)
 	token := jws.Encode()
 
-	iss := goodIssuer(ajwt.PublicJWK{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodIssuer(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
 
 	// Replace the protected header with one that has alg:"none".
 	// The original ES256 signature stays — the signing input will mismatch.
@@ -419,7 +420,7 @@ func TestSignerRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, err := ajwt.NewSigner([]ajwt.NamedSigner{{KID: "k1", Signer: privKey}})
+	signer, err := ajwt.NewSigner([]ajwt.PrivateKey{{KID: "k1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,11 +446,11 @@ func TestSignerRoundTrip(t *testing.T) {
 }
 
 // TestSignerAutoKID verifies that KID is auto-computed from the key thumbprint
-// when NamedSigner.KID is empty.
+// when PrivateKey.KID is empty.
 func TestSignerAutoKID(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := ajwt.NewSigner([]ajwt.NamedSigner{{Signer: privKey}})
+	signer, err := ajwt.NewSigner([]ajwt.PrivateKey{{Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +479,7 @@ func TestSignerRoundRobin(t *testing.T) {
 	key1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := ajwt.NewSigner([]ajwt.NamedSigner{
+	signer, err := ajwt.NewSigner([]ajwt.PrivateKey{
 		{KID: "k1", Signer: key1},
 		{KID: "k2", Signer: key2},
 	})
@@ -506,7 +507,7 @@ func TestSignerRoundRobin(t *testing.T) {
 func TestIssuerToJWKs(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := ajwt.NewSigner([]ajwt.NamedSigner{{KID: "k1", Signer: privKey}})
+	signer, err := ajwt.NewSigner([]ajwt.PrivateKey{{KID: "k1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +519,7 @@ func TestIssuerToJWKs(t *testing.T) {
 	}
 
 	// Round-trip: parse the JWKS JSON and verify it produces a working Issuer.
-	keys, err := ajwt.UnmarshalPublicJWKs(jwksBytes)
+	keys, err := jwk.Unmarshal(jwksBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,15 +538,15 @@ func TestIssuerToJWKs(t *testing.T) {
 	}
 }
 
-// TestPublicJWKAccessors confirms the ECDSA, RSA, and EdDSA typed accessor methods.
-func TestPublicJWKAccessors(t *testing.T) {
+// TestKeyAccessors confirms the ECDSA, RSA, and EdDSA typed accessor methods on jwk.Key.
+func TestKeyAccessors(t *testing.T) {
 	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
 
-	ecJWK := ajwt.PublicJWK{Key: &ecKey.PublicKey, KID: "ec-1"}
-	rsaJWK := ajwt.PublicJWK{Key: &rsaKey.PublicKey, KID: "rsa-1"}
-	edJWK := ajwt.PublicJWK{Key: edPub, KID: "ed-1"}
+	ecJWK := jwk.Key{Key: &ecKey.PublicKey, KID: "ec-1"}
+	rsaJWK := jwk.Key{Key: &rsaKey.PublicKey, KID: "rsa-1"}
+	edJWK := jwk.Key{Key: edPub, KID: "ed-1"}
 
 	if k, ok := ecJWK.ECDSA(); !ok || k == nil {
 		t.Error("expected ECDSA() to succeed for EC key")
@@ -591,7 +592,7 @@ func TestDecodePublicJWKJSON(t *testing.T) {
 		 "e":"AQAB","kid":"rsa-2048","use":"sig"}
 	]}`)
 
-	keys, err := ajwt.UnmarshalPublicJWKs(jwksJSON)
+	keys, err := jwk.Unmarshal(jwksJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,11 +632,11 @@ func TestThumbprint(t *testing.T) {
 
 	tests := []struct {
 		name string
-		jwk  ajwt.PublicJWK
+		jwk  jwk.Key
 	}{
-		{"EC P-256", ajwt.PublicJWK{Key: &ecKey.PublicKey}},
-		{"RSA 2048", ajwt.PublicJWK{Key: &rsaKey.PublicKey}},
-		{"Ed25519", ajwt.PublicJWK{Key: edPub}},
+		{"EC P-256", jwk.Key{Key: &ecKey.PublicKey}},
+		{"RSA 2048", jwk.Key{Key: &rsaKey.PublicKey}},
+		{"Ed25519", jwk.Key{Key: edPub}},
 	}
 
 	for _, tt := range tests {
@@ -671,7 +672,7 @@ func TestNoKidAutoThumbprint(t *testing.T) {
 		 "use":"sig"}
 	]}`)
 
-	keys, err := ajwt.UnmarshalPublicJWKs(jwksJSON)
+	keys, err := jwk.Unmarshal(jwksJSON)
 	if err != nil {
 		t.Fatal(err)
 	}

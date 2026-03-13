@@ -20,7 +20,7 @@
 // Typical usage with VerifyAndValidate:
 //
 //	// At startup:
-//	signer, err := ajwt.NewSigner([]ajwt.NamedSigner{{Signer: privKey}})
+//	signer, err := ajwt.NewSigner([]ajwt.PrivateKey{{Signer: privKey}})
 //	iss := signer.Issuer()
 //	v := &ajwt.Validator{Iss: "https://example.com", Aud: "my-app"}
 //
@@ -71,6 +71,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/therootcompany/golib/auth/ajwt/jwk"
 )
 
 // JWS is a decoded JSON Web Signature / JWT.
@@ -221,9 +223,10 @@ func (jws *JWS) UnmarshalClaims(v any) error {
 
 // NewJWSFromClaims creates an unsigned JWS from the provided claims.
 //
-// kid identifies the signing key. The "alg" header field is set automatically
-// when [JWS.Sign] is called. Call [JWS.Encode] to produce the compact JWT
-// string after signing.
+// kid identifies the signing key; pass "" when using [JWS.Sign] with a
+// [*PrivateKey], which sets the KID automatically from the key. The "alg"
+// header field is always set when [JWS.Sign] is called. Call [JWS.Encode]
+// to produce the compact JWT string after signing.
 func NewJWSFromClaims(claims any, kid string) (*JWS, error) {
 	var jws JWS
 
@@ -248,9 +251,13 @@ func NewJWSFromClaims(claims any, kid string) (*JWS, error) {
 }
 
 // Sign signs the JWS in-place using the provided [crypto.Signer].
-// It sets the "alg" header field based on the public key type and re-encodes
-// the protected header before signing, so the signed input is always
-// consistent with the token header.
+//
+// If key is a [*PrivateKey], the KID is taken from it: if jws.Header.Kid is
+// empty it is set automatically; if it is already set to a different value,
+// Sign returns an error.
+//
+// If jws.Header.Alg is already set to a value that is incompatible with the
+// provided key type, Sign returns an error.
 //
 // Supported algorithms (inferred from key type):
 //   - *ecdsa.PublicKey P-256  → ES256 (SHA-256, raw r||s)
@@ -259,11 +266,24 @@ func NewJWSFromClaims(claims any, kid string) (*JWS, error) {
 //   - *rsa.PublicKey           → RS256 (PKCS#1 v1.5 + SHA-256)
 //   - ed25519.PublicKey         → EdDSA (Ed25519, RFC 8037)
 func (jws *JWS) Sign(key crypto.Signer) ([]byte, error) {
+	// If the signer is a *PrivateKey, apply its KID to the header.
+	if pk, ok := key.(*PrivateKey); ok {
+		switch {
+		case jws.Header.Kid == "":
+			jws.Header.Kid = pk.KID
+		case jws.Header.Kid != pk.KID:
+			return nil, fmt.Errorf("Sign: header kid %q conflicts with PrivateKey KID %q", jws.Header.Kid, pk.KID)
+		}
+	}
+
 	switch pub := key.Public().(type) {
 	case *ecdsa.PublicKey:
 		alg, h, err := algForECKey(pub)
 		if err != nil {
 			return nil, err
+		}
+		if jws.Header.Alg != "" && jws.Header.Alg != alg {
+			return nil, fmt.Errorf("Sign: key alg %s incompatible with header alg %q", alg, jws.Header.Alg)
 		}
 		jws.Header.Alg = alg
 		headerJSON, err := json.Marshal(jws.Header)
@@ -285,6 +305,9 @@ func (jws *JWS) Sign(key crypto.Signer) ([]byte, error) {
 		return jws.Signature, err
 
 	case *rsa.PublicKey:
+		if jws.Header.Alg != "" && jws.Header.Alg != "RS256" {
+			return nil, fmt.Errorf("Sign: RSA key incompatible with header alg %q (expected RS256)", jws.Header.Alg)
+		}
 		jws.Header.Alg = "RS256"
 		headerJSON, err := json.Marshal(jws.Header)
 		if err != nil {
@@ -301,6 +324,9 @@ func (jws *JWS) Sign(key crypto.Signer) ([]byte, error) {
 		return jws.Signature, err
 
 	case ed25519.PublicKey:
+		if jws.Header.Alg != "" && jws.Header.Alg != "EdDSA" {
+			return nil, fmt.Errorf("Sign: Ed25519 key incompatible with header alg %q (expected EdDSA)", jws.Header.Alg)
+		}
 		jws.Header.Alg = "EdDSA"
 		headerJSON, err := json.Marshal(jws.Header)
 		if err != nil {
@@ -583,16 +609,16 @@ func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) (
 // Use [New] to construct with a fixed key set, or use [Signer.Issuer] or
 // [JWKsFetcher.Issuer] to obtain one from a signer or remote JWKS endpoint.
 type Issuer struct {
-	pubKeys []PublicJWK
-	keys    map[string]crypto.PublicKey // kid → key
+	pubKeys []jwk.Key
+	keys    map[string]jwk.PublicKey // kid → key
 }
 
 // New creates an Issuer with an explicit set of public keys.
 //
 // The returned Issuer is immutable — keys cannot be added or removed after
 // construction. For dynamic key rotation, see [JWKsFetcher].
-func New(keys []PublicJWK) *Issuer {
-	m := make(map[string]crypto.PublicKey, len(keys))
+func New(keys []jwk.Key) *Issuer {
+	m := make(map[string]jwk.PublicKey, len(keys))
 	for _, k := range keys {
 		m[k.KID] = k.Key
 	}
@@ -603,18 +629,18 @@ func New(keys []PublicJWK) *Issuer {
 }
 
 // PublicKeys returns the public keys held by this Issuer.
-func (iss *Issuer) PublicKeys() []PublicJWK {
+func (iss *Issuer) PublicKeys() []jwk.Key {
 	return iss.pubKeys
 }
 
-// ToJWKsJSON returns the Issuer's public keys as a [JWKsJSON] struct.
-func (iss *Issuer) ToJWKsJSON() (JWKsJSON, error) {
-	return ToJWKsJSON(iss.pubKeys)
+// ToJWKsJSON returns the Issuer's public keys as a [jwk.SetJSON] struct.
+func (iss *Issuer) ToJWKsJSON() (jwk.SetJSON, error) {
+	return jwk.EncodeSet(iss.pubKeys)
 }
 
 // ToJWKs serializes the Issuer's public keys as a JWKS JSON document.
 func (iss *Issuer) ToJWKs() ([]byte, error) {
-	return ToJWKs(iss.pubKeys)
+	return jwk.Marshal(iss.pubKeys)
 }
 
 // Verify decodes tokenStr and verifies its signature.
@@ -692,7 +718,7 @@ func (iss *Issuer) VerifyAndValidate(tokenStr string, claims StandardClaimsSourc
 
 // verifyWith checks a JWS signature using the given algorithm and public key.
 // Returns nil on success, a descriptive error on failure.
-func verifyWith(signingInput string, sig []byte, alg string, key crypto.PublicKey) error {
+func verifyWith(signingInput string, sig []byte, alg string, key jwk.PublicKey) error {
 	switch alg {
 	case "ES256", "ES384", "ES512":
 		k, ok := key.(*ecdsa.PublicKey)

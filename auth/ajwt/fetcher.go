@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/therootcompany/golib/auth/ajwt/jwk"
 )
 
 // cachedIssuer bundles an [*Issuer] with its freshness window.
@@ -95,7 +97,7 @@ func (f *JWKsFetcher) Issuer(ctx context.Context) (*Issuer, error) {
 		return ci.iss, nil
 	}
 
-	keys, err := FetchJWKsURL(ctx, f.URL)
+	keys, err := jwk.FetchURL(ctx, f.URL)
 	if err != nil {
 		// On error, serve stale keys within the stale window.
 		if ci := f.cached.Load(); ci != nil && f.KeepOnError {

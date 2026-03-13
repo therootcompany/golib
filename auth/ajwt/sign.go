@@ -11,16 +11,34 @@ package ajwt
 import (
 	"crypto"
 	"fmt"
+	"io"
 	"sync/atomic"
+
+	"github.com/therootcompany/golib/auth/ajwt/jwk"
 )
 
-// NamedSigner pairs a [crypto.Signer] with a key ID (KID).
+// PrivateKey pairs a [crypto.Signer] with a key ID (KID).
+//
+// PrivateKey implements [crypto.Signer] so it can be passed directly to
+// [JWS.Sign], which auto-sets the KID from [PrivateKey.KID].
 //
 // If KID is empty, it is auto-computed from the RFC 7638 thumbprint of the
 // public key when passed to [NewSigner].
-type NamedSigner struct {
+type PrivateKey struct {
 	KID    string
 	Signer crypto.Signer
+}
+
+// Public returns the public key for this PrivateKey.
+// Implements [crypto.Signer].
+func (pk *PrivateKey) Public() crypto.PublicKey {
+	return pk.Signer.Public()
+}
+
+// Sign signs digest with the underlying signer.
+// Implements [crypto.Signer].
+func (pk *PrivateKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	return pk.Signer.Sign(rand, digest, opts)
 }
 
 // Signer manages one or more private signing keys and issues JWTs by
@@ -28,26 +46,30 @@ type NamedSigner struct {
 //
 // Do not copy a Signer after first use — it contains an atomic counter.
 type Signer struct {
-	signers   []NamedSigner
+	signers   []PrivateKey
 	signerIdx atomic.Uint64
 }
 
 // NewSigner creates a Signer from the provided signing keys.
 //
-// If a NamedSigner's KID is empty, it is auto-computed from the RFC 7638
+// If a PrivateKey's KID is empty, it is auto-computed from the RFC 7638
 // thumbprint of the public key. Returns an error if the slice is empty or
 // a thumbprint cannot be computed.
-func NewSigner(signers []NamedSigner) (*Signer, error) {
+func NewSigner(signers []PrivateKey) (*Signer, error) {
 	if len(signers) == 0 {
 		return nil, fmt.Errorf("NewSigner: at least one signer is required")
 	}
 	// Copy so the caller can't mutate after construction.
-	ss := make([]NamedSigner, len(signers))
+	ss := make([]PrivateKey, len(signers))
 	copy(ss, signers)
 	for i, ns := range ss {
 		if ns.KID == "" {
-			jwk := PublicJWK{Key: ns.Signer.Public()}
-			thumb, err := jwk.Thumbprint()
+			pub, ok := ns.Signer.Public().(jwk.PublicKey)
+			if !ok {
+				return nil, fmt.Errorf("NewSigner: signer[%d] public key type %T does not implement jwk.PublicKey", i, ns.Signer.Public())
+			}
+			k := jwk.Key{Key: pub}
+			thumb, err := k.Thumbprint()
 			if err != nil {
 				return nil, fmt.Errorf("NewSigner: compute thumbprint for signer[%d]: %w", i, err)
 			}
@@ -62,13 +84,13 @@ func NewSigner(signers []NamedSigner) (*Signer, error) {
 // in claims if issuer identification is needed.
 func (s *Signer) Sign(claims any) (string, error) {
 	idx := s.signerIdx.Add(1) - 1
-	ns := s.signers[idx%uint64(len(s.signers))]
+	pk := &s.signers[idx%uint64(len(s.signers))]
 
-	jws, err := NewJWSFromClaims(claims, ns.KID)
+	jws, err := NewJWSFromClaims(claims, "")
 	if err != nil {
 		return "", err
 	}
-	if _, err := jws.Sign(ns.Signer); err != nil {
+	if _, err := jws.Sign(pk); err != nil {
 		return "", err
 	}
 	return jws.Encode(), nil
@@ -84,23 +106,24 @@ func (s *Signer) Issuer() *Issuer {
 	return New(s.PublicKeys())
 }
 
-// ToJWKsJSON returns the Signer's public keys as a [JWKsJSON] struct.
-func (s *Signer) ToJWKsJSON() (JWKsJSON, error) {
-	return ToJWKsJSON(s.PublicKeys())
+// ToJWKsJSON returns the Signer's public keys as a [jwk.SetJSON] struct.
+func (s *Signer) ToJWKsJSON() (jwk.SetJSON, error) {
+	return jwk.EncodeSet(s.PublicKeys())
 }
 
 // ToJWKs serializes the Signer's public keys as a JWKS JSON document.
 func (s *Signer) ToJWKs() ([]byte, error) {
-	return ToJWKs(s.PublicKeys())
+	return jwk.Marshal(s.PublicKeys())
 }
 
 // PublicKeys returns the public-key side of each signing key, in the same order
 // as the signers were provided to [NewSigner].
-func (s *Signer) PublicKeys() []PublicJWK {
-	keys := make([]PublicJWK, len(s.signers))
+func (s *Signer) PublicKeys() []jwk.Key {
+	keys := make([]jwk.Key, len(s.signers))
 	for i, ns := range s.signers {
-		keys[i] = PublicJWK{
-			Key: ns.Signer.Public(),
+		pub, _ := ns.Signer.Public().(jwk.PublicKey)
+		keys[i] = jwk.Key{
+			Key: pub,
 			KID: ns.KID,
 		}
 	}
