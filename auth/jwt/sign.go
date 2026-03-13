@@ -23,40 +23,35 @@ import (
 //
 // Do not copy a Signer after first use — it contains an atomic counter.
 type Signer struct {
-	keys      []jwk.Key
+	keys      []jwk.PrivateKey
 	signerIdx atomic.Uint64
 }
 
 // NewSigner creates a Signer from the provided signing keys.
 //
 // Each key must have a non-nil Signer field. If a key's KID is empty it is
-// auto-computed from the RFC 7638 thumbprint of the public key. If Key (the
-// public side) is not set, it is derived from key.Signer.Public().
+// auto-computed from the RFC 7638 thumbprint of the public key.
 //
 // Returns an error if the slice is empty, any key has no Signer, or a
 // thumbprint cannot be computed.
 //
 // https://www.rfc-editor.org/rfc/rfc7638.html
-func NewSigner(keys []jwk.Key) (*Signer, error) {
+func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("NewSigner: at least one key is required")
 	}
 	// Copy so the caller can't mutate after construction.
-	ss := make([]jwk.Key, len(keys))
+	ss := make([]jwk.PrivateKey, len(keys))
 	copy(ss, keys)
 	for i, k := range ss {
 		if k.Signer == nil {
 			return nil, fmt.Errorf("NewSigner: key[%d] (kid=%q) has no Signer", i, k.KID)
 		}
-		pub, ok := k.Signer.Public().(jwk.CryptoPublicKey)
-		if !ok {
+		if _, ok := k.Signer.Public().(jwk.CryptoPublicKey); !ok {
 			return nil, fmt.Errorf("NewSigner: key[%d] public key type %T does not implement jwk.CryptoPublicKey", i, k.Signer.Public())
 		}
-		if ss[i].Key == nil {
-			ss[i].Key = pub
-		}
 		if ss[i].KID == "" {
-			thumb, err := jwk.Key{Key: pub}.Thumbprint()
+			thumb, err := ss[i].Thumbprint()
 			if err != nil {
 				return nil, fmt.Errorf("NewSigner: compute thumbprint for key[%d]: %w", i, err)
 			}
@@ -126,17 +121,11 @@ func (s *Signer) ToJWKs() ([]byte, error) {
 }
 
 // PublicKeys returns the public-key side of each signing key, in the same order
-// as the keys were provided to [NewSigner]. The returned keys have no Signer set.
-func (s *Signer) PublicKeys() []jwk.Key {
-	keys := make([]jwk.Key, len(s.keys))
+// as the keys were provided to [NewSigner].
+func (s *Signer) PublicKeys() []jwk.PublicKey {
+	keys := make([]jwk.PublicKey, len(s.keys))
 	for i, k := range s.keys {
-		keys[i] = jwk.Key{
-			Key:    k.Key,
-			KID:    k.KID,
-			Use:    k.Use,
-			Alg:    k.Alg,
-			KeyOps: k.KeyOps,
-		}
+		keys[i] = *k.PublicKey()
 	}
 	return keys
 }

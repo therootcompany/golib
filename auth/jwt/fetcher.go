@@ -90,7 +90,7 @@ type KeyFetcher struct {
 	// InitialKeys pre-populate the cache as immediately stale on the first call
 	// to Verifier. Combined with KeepOnError=true and a positive StaleAge, they
 	// are served immediately while a background refresh fetches fresh keys.
-	InitialKeys []jwk.Key
+	InitialKeys []jwk.PublicKey
 
 	fetchMu    sync.Mutex                   // held during HTTP fetch
 	ctrlMu     sync.Mutex                   // held briefly for refreshing/lastErr

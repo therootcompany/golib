@@ -16,13 +16,13 @@
 //
 //   - Issuer: use [NewSigner] → [Signer.Sign]; expose public keys via [Signer.ToJWKs]
 //     or hand them directly to [New] for a co-located verifier.
-//   - Relying party, known keys: use [New] with a []jwk.Key slice.
+//   - Relying party, known keys: use [New] with a []jwk.PublicKey slice.
 //   - Relying party, remote keys: use [KeyFetcher]; it fetches lazily and caches.
 //
 // # Design choices
 //
 // You'll almost never need a custom JOSE header. The algorithm is inferred
-// automatically from the key type; KID comes from [jwk.Key.KID]; typ is
+// automatically from the key type; KID comes from [jwk.PrivateKey.KID]; typ is
 // always "JWT". [StandardJWS.Sign] handles all of this — you do not configure alg.
 //
 // You'll almost always need custom claims. [StandardJWS.UnmarshalClaims] accepts any
@@ -273,13 +273,13 @@ func (jws *StandardJWS) UnmarshalClaims(v any) error {
 // NewJWS creates an unsigned StandardJWS from the provided claims.
 //
 // The "alg" and "kid" header fields are set automatically by [StandardJWS.Sign]
-// based on the key type and [PrivateKey.KID]. Call [StandardJWS.Encode] to
+// based on the key type and [jwk.PrivateKey.KID]. Call [StandardJWS.Encode] to
 // produce the compact JWT string after signing.
 func NewJWS(claims Claims) (*StandardJWS, error) {
 	var jws StandardJWS
 
 	jws.header = StandardHeader{
-		// Alg and KID are set by Sign from the key type and PrivateKey.KID.
+		// Alg and KID are set by Sign from the key type and jwk.PrivateKey.KID.
 		Typ: "JWT",
 	}
 	headerJSON, err := json.Marshal(jws.header)
@@ -299,7 +299,7 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 
 // Sign signs the JWS in-place using pk.
 //
-// pk must be a [jwk.Key] with a non-nil Signer. The KID is taken from pk.KID:
+// pk must be a non-nil [jwk.PrivateKey]. The KID is taken from pk.KID:
 // if jws.Header.KID is empty it is set automatically; if it is already set to a
 // different value, Sign returns an error.
 //
@@ -313,9 +313,9 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 //   - *rsa.PrivateKey           → RS256 (PKCS#1 v1.5 + SHA-256)
 //   - ed25519.PrivateKey         → EdDSA (Ed25519, RFC 8037)
 //     https://www.rfc-editor.org/rfc/rfc8037.html
-func (jws *StandardJWS) Sign(pk *jwk.Key) ([]byte, error) {
+func (jws *StandardJWS) Sign(pk *jwk.PrivateKey) ([]byte, error) {
 	if pk.Signer == nil {
-		return nil, fmt.Errorf("Sign: key %q has no Signer (public key only)", pk.KID)
+		return nil, fmt.Errorf("Sign: key %q has no Signer", pk.KID)
 	}
 	switch {
 	case jws.header.KID == "":
@@ -674,7 +674,7 @@ func validateClaims(claims StandardClaims, core ValidatorCore, checks claimCheck
 // Use [New] to construct with a fixed key set, or use [Signer.Verifier] or
 // [KeyFetcher.Verifier] to obtain one from a signer or remote JWKS endpoint.
 type Verifier struct {
-	pubKeys []jwk.Key
+	pubKeys []jwk.PublicKey
 	keys    map[string]jwk.CryptoPublicKey // kid → key
 }
 
@@ -682,10 +682,10 @@ type Verifier struct {
 //
 // The returned Verifier is immutable — keys cannot be added or removed after
 // construction. For dynamic key rotation, see [KeyFetcher].
-func New(keys []jwk.Key) *Verifier {
+func New(keys []jwk.PublicKey) *Verifier {
 	m := make(map[string]jwk.CryptoPublicKey, len(keys))
 	for _, k := range keys {
-		m[k.KID] = k.Key
+		m[k.KID] = k.CryptoPublicKey
 	}
 	return &Verifier{
 		pubKeys: keys,
@@ -694,7 +694,7 @@ func New(keys []jwk.Key) *Verifier {
 }
 
 // PublicKeys returns the public keys held by this Verifier.
-func (iss *Verifier) PublicKeys() []jwk.Key {
+func (iss *Verifier) PublicKeys() []jwk.PublicKey {
 	return iss.pubKeys
 }
 

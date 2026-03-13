@@ -81,8 +81,8 @@ func goodValidator() *jwt.ValidatorStrict {
 	}
 }
 
-func goodVerifier(pub jwk.Key) *jwt.Verifier {
-	return jwt.New([]jwk.Key{pub})
+func goodVerifier(pub jwk.PublicKey) *jwt.Verifier {
+	return jwt.New([]jwk.PublicKey{pub})
 }
 
 // TestRoundTrip is the primary happy path using ES256.
@@ -94,7 +94,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	pk := &jwk.Key{KID: "key-1", Signer: privKey}
+	pk := &jwk.PrivateKey{KID: "key-1", Signer: privKey}
 	jws, err := jwt.NewJWS(&claims)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestRoundTrip(t *testing.T) {
 
 	token := jws.Encode()
 
-	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
+	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -141,7 +141,7 @@ func TestRoundTripRS256(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	pk := &jwk.Key{KID: "key-1", Signer: privKey}
+	pk := &jwk.PrivateKey{KID: "key-1", Signer: privKey}
 	jws, err := jwt.NewJWS(&claims)
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestRoundTripRS256(t *testing.T) {
 
 	token := jws.Encode()
 
-	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "key-1"})
+	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -180,7 +180,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 	}
 
 	claims := goodClaims()
-	pk := &jwk.Key{KID: "key-1", Signer: privKey}
+	pk := &jwk.PrivateKey{KID: "key-1", Signer: privKey}
 	jws, err := jwt.NewJWS(&claims)
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +195,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 
 	token := jws.Encode()
 
-	iss := goodVerifier(jwk.Key{Key: pubKeyBytes, KID: "key-1"})
+	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: pubKeyBytes, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -217,12 +217,12 @@ func TestDecodeVerifyFlow(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	pk := &jwk.Key{KID: "k", Signer: privKey}
+	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
-	iss := jwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
+	iss := jwt.New([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
 
 	jws2, err := jwt.Decode(token)
 	if err != nil {
@@ -251,13 +251,13 @@ func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	pk := &jwk.Key{KID: "k", Signer: signingKey}
+	pk := &jwk.PrivateKey{KID: "k", Signer: signingKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
 	// Verifier has wrong public key — sig verification will fail.
-	iss := jwt.New([]jwk.Key{{Key: &wrongKey.PublicKey, KID: "k"}})
+	iss := jwt.New([]jwk.PublicKey{{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"}})
 
 	// Decode always succeeds for well-formed tokens.
 	result, err := jwt.Decode(token)
@@ -285,12 +285,12 @@ func TestCustomValidation(t *testing.T) {
 	// Token with empty Email — our custom validator should reject it.
 	claims := goodClaims()
 	claims.Email = ""
-	pk := &jwk.Key{KID: "k", Signer: privKey}
+	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
-	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 	jws2, err := jwt.Decode(token)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
@@ -410,12 +410,12 @@ func TestValidatorLax(t *testing.T) {
 func TestVerifyWithoutValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	c := goodClaims()
-	pk := &jwk.Key{KID: "k", Signer: privKey}
+	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&c)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
-	iss := jwt.New([]jwk.Key{{Key: &privKey.PublicKey, KID: "k"}})
+	iss := jwt.New([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -436,12 +436,12 @@ func TestVerifierWrongKey(t *testing.T) {
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	pk := &jwk.Key{KID: "k", Signer: signingKey}
+	pk := &jwk.PrivateKey{KID: "k", Signer: signingKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
-	iss := goodVerifier(jwk.Key{Key: &wrongKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"})
 
 	parsed, err := jwt.Decode(token)
 	if err != nil {
@@ -457,12 +457,12 @@ func TestVerifierUnknownKid(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	pk := &jwk.Key{KID: "unknown-kid", Signer: privKey}
+	pk := &jwk.PrivateKey{KID: "unknown-kid", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
-	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "known-kid"})
+	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "known-kid"})
 
 	parsed, err := jwt.Decode(token)
 	if err != nil {
@@ -481,12 +481,12 @@ func TestVerifierIssMismatch(t *testing.T) {
 
 	claims := goodClaims()
 	claims.Iss = "https://evil.example.com"
-	pk := &jwk.Key{KID: "k", Signer: privKey}
+	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
-	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 
 	// Decode+Verify succeeds — iss is not checked at the Verifier level.
 	parsed, err := jwt.Decode(token)
@@ -528,12 +528,12 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	claims := goodClaims()
-	pk := &jwk.Key{KID: "k", Signer: privKey}
+	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
 	_, _ = jws.Sign(pk)
 	token := jws.Encode()
 
-	iss := goodVerifier(jwk.Key{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 
 	// Replace the protected header with one that has alg:"none".
 	// The original ES256 signature stays — the signing input will mismatch.
@@ -557,7 +557,7 @@ func TestSignerRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, err := jwt.NewSigner([]jwk.Key{{KID: "k1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "k1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +591,7 @@ func TestSignerRoundTrip(t *testing.T) {
 func TestSignerAutoKID(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := jwt.NewSigner([]jwk.Key{{Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{{Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,7 +624,7 @@ func TestSignerRoundRobin(t *testing.T) {
 	key1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := jwt.NewSigner([]jwk.Key{
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{
 		{KID: "k1", Signer: key1},
 		{KID: "k2", Signer: key2},
 	})
@@ -659,7 +659,7 @@ func TestSignerRoundRobin(t *testing.T) {
 func TestVerifierToJWKs(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := jwt.NewSigner([]jwk.Key{{KID: "k1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "k1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -701,9 +701,9 @@ func TestKeyAccessors(t *testing.T) {
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
 
-	ecJWK := jwk.Key{Key: &ecKey.PublicKey, KID: "ec-1"}
-	rsaJWK := jwk.Key{Key: &rsaKey.PublicKey, KID: "rsa-1"}
-	edJWK := jwk.Key{Key: edPub, KID: "ed-1"}
+	ecJWK := jwk.PublicKey{CryptoPublicKey: &ecKey.PublicKey, KID: "ec-1"}
+	rsaJWK := jwk.PublicKey{CryptoPublicKey: &rsaKey.PublicKey, KID: "rsa-1"}
+	edJWK := jwk.PublicKey{CryptoPublicKey: edPub, KID: "ed-1"}
 
 	if k, ok := ecJWK.ECDSA(); !ok || k == nil {
 		t.Error("expected ECDSA() to succeed for EC key")
@@ -789,11 +789,11 @@ func TestThumbprint(t *testing.T) {
 
 	tests := []struct {
 		name string
-		jwk  jwk.Key
+		jwk  jwk.PublicKey
 	}{
-		{"EC P-256", jwk.Key{Key: &ecKey.PublicKey}},
-		{"RSA 2048", jwk.Key{Key: &rsaKey.PublicKey}},
-		{"Ed25519", jwk.Key{Key: edPub}},
+		{"EC P-256", jwk.PublicKey{CryptoPublicKey: &ecKey.PublicKey}},
+		{"RSA 2048", jwk.PublicKey{CryptoPublicKey: &rsaKey.PublicKey}},
+		{"Ed25519", jwk.PublicKey{CryptoPublicKey: edPub}},
 	}
 
 	for _, tt := range tests {

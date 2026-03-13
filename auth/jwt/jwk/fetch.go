@@ -35,7 +35,7 @@ var defaultClient = &http.Client{Timeout: 30 * time.Second}
 //
 // The response body is limited to [maxResponseBody] bytes. client is the HTTP
 // client to use; if nil, a default client with a 30s timeout is used.
-func FetchURL(ctx context.Context, jwksURL string, client *http.Client) ([]Key, time.Duration, error) {
+func FetchURL(ctx context.Context, jwksURL string, client *http.Client) ([]PublicKey, time.Duration, error) {
 	if client == nil {
 		client = defaultClient
 	}
@@ -83,7 +83,7 @@ func parseCacheControlMaxAge(header string) time.Duration {
 //
 // It fetches {baseURL}/.well-known/openid-configuration and reads the jwks_uri field.
 // client is used for all HTTP requests; if nil, a default 30s-timeout client is used.
-func FetchOIDC(ctx context.Context, baseURL string, client *http.Client) ([]Key, error) {
+func FetchOIDC(ctx context.Context, baseURL string, client *http.Client) ([]PublicKey, error) {
 	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/openid-configuration"
 	keys, _, err := fetchFromDiscovery(ctx, discoveryURL, client)
 	return keys, err
@@ -96,7 +96,7 @@ func FetchOIDC(ctx context.Context, baseURL string, client *http.Client) ([]Key,
 //
 // It fetches {baseURL}/.well-known/oauth-authorization-server and reads the jwks_uri field.
 // client is used for all HTTP requests; if nil, a default 30s-timeout client is used.
-func FetchOAuth2(ctx context.Context, baseURL string, client *http.Client) ([]Key, error) {
+func FetchOAuth2(ctx context.Context, baseURL string, client *http.Client) ([]PublicKey, error) {
 	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/oauth-authorization-server"
 	keys, _, err := fetchFromDiscovery(ctx, discoveryURL, client)
 	return keys, err
@@ -105,7 +105,7 @@ func FetchOAuth2(ctx context.Context, baseURL string, client *http.Client) ([]Ke
 // fetchFromDiscovery fetches a discovery document from discoveryURL, then
 // fetches the JWKS from the jwks_uri field. Returns the keys and the issuer
 // URL from the discovery document's "issuer" field.
-func fetchFromDiscovery(ctx context.Context, discoveryURL string, client *http.Client) ([]Key, string, error) {
+func fetchFromDiscovery(ctx context.Context, discoveryURL string, client *http.Client) ([]PublicKey, string, error) {
 	if client == nil {
 		client = defaultClient
 	}
