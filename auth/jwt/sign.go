@@ -42,7 +42,9 @@ func (pk *PrivateKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts
 }
 
 // Signer manages one or more private signing keys and issues JWTs by
-// round-robining across them.
+// round-robining across them. It is the issuing side of a JWT issuer —
+// the party that signs tokens with a private key and publishes the
+// corresponding public keys via [Signer.Verifier] or [Signer.ToJWKs].
 //
 // Do not copy a Signer after first use — it contains an atomic counter.
 type Signer struct {

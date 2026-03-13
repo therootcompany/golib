@@ -603,7 +603,12 @@ func ValidateStandardClaims(claims StandardClaims, v Validator, now time.Time) (
 	return nil, nil
 }
 
-// Verifier holds public keys for a trusted token issuer.
+// Verifier holds the public keys of a JWT issuer and verifies token signatures.
+//
+// In OIDC terminology, the "issuer" is the identity provider that both signs
+// tokens and publishes its public keys. Verifier represents that issuer from
+// the relying party's perspective — you hold its public keys and use them to
+// verify that tokens were legitimately signed by it.
 //
 // Verifier is immutable after construction — safe for concurrent use with no locking.
 // Use [New] to construct with a fixed key set, or use [Signer.Verifier] or
@@ -613,7 +618,7 @@ type Verifier struct {
 	keys    map[string]jwk.PublicKey // kid → key
 }
 
-// New creates an Verifier with an explicit set of public keys.
+// New creates a Verifier with an explicit set of public keys.
 //
 // The returned Verifier is immutable — keys cannot be added or removed after
 // construction. For dynamic key rotation, see [KeyFetcher].
