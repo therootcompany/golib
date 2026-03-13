@@ -583,7 +583,7 @@ func validateClaims(claims StandardClaims, v Validator, now time.Time) ([]string
 // [KeyFetcher.Verifier] to obtain one from a signer or remote JWKS endpoint.
 type Verifier struct {
 	pubKeys []jwk.Key
-	keys    map[string]jwk.PublicKey // kid → key
+	keys    map[string]jwk.CryptoPublicKey // kid → key
 }
 
 // New creates a Verifier with an explicit set of public keys.
@@ -591,7 +591,7 @@ type Verifier struct {
 // The returned Verifier is immutable — keys cannot be added or removed after
 // construction. For dynamic key rotation, see [KeyFetcher].
 func New(keys []jwk.Key) *Verifier {
-	m := make(map[string]jwk.PublicKey, len(keys))
+	m := make(map[string]jwk.CryptoPublicKey, len(keys))
 	for _, k := range keys {
 		m[k.KID] = k.Key
 	}
@@ -679,7 +679,7 @@ func (iss *Verifier) VerifyJWT(tokenStr string) (*StandardJWS, error) {
 
 // verifyWith checks a JWS signature using the given algorithm and public key.
 // Returns nil on success, a descriptive error on failure.
-func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.PublicKey) error {
+func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPublicKey) error {
 	switch alg {
 	case "ES256", "ES384", "ES512":
 		k, ok := key.(*ecdsa.PublicKey)

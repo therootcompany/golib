@@ -10,13 +10,13 @@
 // encoding, decoding, and key management utilities.
 //
 // The [Key] type is the primary in-memory representation of a public key with
-// its JWKS metadata (KID, Use). Encoding converts [Key] to [PublicKeyJSON] or
+// its JWKS metadata (KID, Use). Encoding converts [Key] to [PublicKey] or
 // JSON bytes; decoding parses them back. Fetching retrieves JWKS documents from
 // remote endpoints.
 //
-// [PublicKeyJSON] and [PrivateKeyJSON] are kept separate so that private keys
+// [PublicKey] and [PrivateKey] are kept separate so that private keys
 // can never be accidentally marshalled where a public key is expected. Use
-// [PrivateKeyJSON.PublicJWK] to explicitly extract the public portion.
+// [PrivateKey.PublicJWK] to explicitly extract the public portion.
 package jwk
 
 import (
@@ -33,12 +33,12 @@ import (
 	"os"
 )
 
-// PublicKey is the constraint for public key types stored in [Key].
+// CryptoPublicKey is the constraint for public key types stored in [Key].
 //
 // All standard Go public key types (*ecdsa.PublicKey, *rsa.PublicKey,
 // ed25519.PublicKey) implement this interface per the Go standard library
 // recommendation.
-type PublicKey interface {
+type CryptoPublicKey interface {
 	Equal(x crypto.PublicKey) bool
 }
 
@@ -48,7 +48,7 @@ type PublicKey interface {
 // [Key.ECDSA], [Key.RSA], and [Key.EdDSA] to assert the underlying type
 // without a raw type switch.
 type Key struct {
-	Key PublicKey
+	Key CryptoPublicKey
 	KID string
 	Use string
 }
@@ -69,6 +69,21 @@ func (k Key) RSA() (*rsa.PublicKey, bool) {
 func (k Key) EdDSA() (ed25519.PublicKey, bool) {
 	key, ok := k.Key.(ed25519.PublicKey)
 	return key, ok
+}
+
+// KeyType returns the JWK "kty" string for the key: "EC", "RSA", or "OKP".
+// Returns "" if the key type is unrecognized.
+func (k Key) KeyType() string {
+	switch k.Key.(type) {
+	case *ecdsa.PublicKey:
+		return "EC"
+	case *rsa.PublicKey:
+		return "RSA"
+	case ed25519.PublicKey:
+		return "OKP"
+	default:
+		return ""
+	}
 }
 
 // Thumbprint computes the RFC 7638 JWK Thumbprint (SHA-256 of the canonical
@@ -154,8 +169,8 @@ func (k Key) Thumbprint() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
-// PublicKeyJSON is the JSON representation of a single key in a JWKS document.
-type PublicKeyJSON struct {
+// PublicKey is the JSON representation of a single key in a JWKS document.
+type PublicKey struct {
 	Kty string `json:"kty"`
 	KID string `json:"kid"`
 	Crv string `json:"crv,omitempty"` // EC / OKP curve
@@ -168,14 +183,14 @@ type PublicKeyJSON struct {
 
 // KeySetJSON is the JSON representation of a JWKS document (a set of keys).
 type KeySetJSON struct {
-	Keys []PublicKeyJSON `json:"keys"`
+	Keys []PublicKey `json:"keys"`
 }
 
-// PrivateKeyJSON is the JSON representation of a private JWK.
+// PrivateKey is the JSON representation of a private JWK.
 //
-// It embeds [PublicKeyJSON] for the public fields and adds the private key
-// material. Use [PrivateKeyJSON.PublicJWK] to extract only the public portion —
-// this is the only way to convert a PrivateKeyJSON to a PublicKeyJSON, making
+// It embeds [PublicKey] for the public fields and adds the private key
+// material. Use [PrivateKey.PublicJWK] to extract only the public portion —
+// this is the only way to convert a PrivateKey to a PublicKey, making
 // accidental serialization of private key material explicit and visible.
 //
 // Private fields per the respective RFCs:
@@ -185,8 +200,8 @@ type KeySetJSON struct {
 //   - D:  EC/OKP private scalar; RSA private exponent
 //   - P, Q: RSA prime factors (optional, for CRT)
 //   - Dp, Dq, Qi: RSA CRT exponents and coefficient (optional)
-type PrivateKeyJSON struct {
-	PublicKeyJSON
+type PrivateKey struct {
+	PublicKey
 	D  string `json:"d,omitempty"`  // EC/OKP private scalar; RSA private exponent
 	P  string `json:"p,omitempty"`  // RSA first prime factor (CRT)
 	Q  string `json:"q,omitempty"`  // RSA second prime factor (CRT)
@@ -195,17 +210,17 @@ type PrivateKeyJSON struct {
 	Qi string `json:"qi,omitempty"` // RSA first CRT coefficient
 }
 
-// PublicJWK returns the public portion of this private key as a [PublicKeyJSON].
+// PublicJWK returns the public portion of this private key as a [PublicKey].
 //
-// This is the only way to obtain a PublicKeyJSON from a PrivateKeyJSON —
+// This is the only way to obtain a PublicKey from a PrivateKey —
 // the conversion is explicit and visible, preventing accidental disclosure
 // of private key material.
-func (k PrivateKeyJSON) PublicJWK() PublicKeyJSON { return k.PublicKeyJSON }
+func (k PrivateKey) PublicJWK() PublicKey { return k.PublicKey }
 
-// Encode converts a [Key] to its [PublicKeyJSON] representation.
+// Encode converts a [Key] to its [PublicKey] representation.
 //
 // Supported key types: *ecdsa.PublicKey (EC), *rsa.PublicKey (RSA), ed25519.PublicKey (OKP).
-func Encode(k Key) (PublicKeyJSON, error) {
+func Encode(k Key) (PublicKey, error) {
 	switch key := k.Key.(type) {
 	case *ecdsa.PublicKey:
 		var crv string
@@ -217,14 +232,14 @@ func Encode(k Key) (PublicKeyJSON, error) {
 		case elliptic.P521():
 			crv = "P-521"
 		default:
-			return PublicKeyJSON{}, fmt.Errorf("Encode: unsupported EC curve %s", key.Curve.Params().Name)
+			return PublicKey{}, fmt.Errorf("Encode: unsupported EC curve %s", key.Curve.Params().Name)
 		}
 		byteLen := (key.Curve.Params().BitSize + 7) / 8
 		xBytes := make([]byte, byteLen)
 		yBytes := make([]byte, byteLen)
 		key.X.FillBytes(xBytes)
 		key.Y.FillBytes(yBytes)
-		return PublicKeyJSON{
+		return PublicKey{
 			Kty: "EC",
 			KID: k.KID,
 			Crv: crv,
@@ -235,7 +250,7 @@ func Encode(k Key) (PublicKeyJSON, error) {
 
 	case *rsa.PublicKey:
 		eInt := big.NewInt(int64(key.E))
-		return PublicKeyJSON{
+		return PublicKey{
 			Kty: "RSA",
 			KID: k.KID,
 			N:   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
@@ -244,7 +259,7 @@ func Encode(k Key) (PublicKeyJSON, error) {
 		}, nil
 
 	case ed25519.PublicKey:
-		return PublicKeyJSON{
+		return PublicKey{
 			Kty: "OKP",
 			KID: k.KID,
 			Crv: "Ed25519",
@@ -253,13 +268,13 @@ func Encode(k Key) (PublicKeyJSON, error) {
 		}, nil
 
 	default:
-		return PublicKeyJSON{}, fmt.Errorf("Encode: unsupported key type %T", k.Key)
+		return PublicKey{}, fmt.Errorf("Encode: unsupported key type %T", k.Key)
 	}
 }
 
 // EncodeSet converts a slice of [Key] to a [KeySetJSON] struct.
 func EncodeSet(keys []Key) (KeySetJSON, error) {
-	jsonKeys := make([]PublicKeyJSON, 0, len(keys))
+	jsonKeys := make([]PublicKey, 0, len(keys))
 	for _, k := range keys {
 		jk, err := Encode(k)
 		if err != nil {
@@ -324,13 +339,13 @@ func DecodeKeySetJSON(set KeySetJSON) ([]Key, error) {
 	return keys, nil
 }
 
-// DecodeOne parses a single [PublicKeyJSON] into a [Key].
+// DecodeOne parses a single [PublicKey] into a [Key].
 //
 // Supported key types:
 //   - "RSA" — minimum 1024-bit (RS256)
 //   - "EC"  — P-256, P-384, P-521 (ES256, ES384, ES512)
 //   - "OKP" — Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
-func DecodeOne(kj PublicKeyJSON) (*Key, error) {
+func DecodeOne(kj PublicKey) (*Key, error) {
 	switch kj.Kty {
 	case "RSA":
 		key, err := decodeRSA(kj)
@@ -361,7 +376,7 @@ func DecodeOne(kj PublicKeyJSON) (*Key, error) {
 	}
 }
 
-func decodeRSA(kj PublicKeyJSON) (*rsa.PublicKey, error) {
+func decodeRSA(kj PublicKey) (*rsa.PublicKey, error) {
 	n, err := base64.RawURLEncoding.DecodeString(kj.N)
 	if err != nil {
 		return nil, fmt.Errorf("invalid RSA modulus: %w", err)
@@ -386,7 +401,7 @@ func decodeRSA(kj PublicKeyJSON) (*rsa.PublicKey, error) {
 	}, nil
 }
 
-func decodeEC(kj PublicKeyJSON) (*ecdsa.PublicKey, error) {
+func decodeEC(kj PublicKey) (*ecdsa.PublicKey, error) {
 	x, err := base64.RawURLEncoding.DecodeString(kj.X)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ECDSA X: %w", err)
@@ -415,7 +430,7 @@ func decodeEC(kj PublicKeyJSON) (*ecdsa.PublicKey, error) {
 	}, nil
 }
 
-func decodeOKP(kj PublicKeyJSON) (ed25519.PublicKey, error) {
+func decodeOKP(kj PublicKey) (ed25519.PublicKey, error) {
 	if kj.Crv != "Ed25519" {
 		return nil, fmt.Errorf("unsupported OKP curve: %q (only Ed25519 supported)", kj.Crv)
 	}

@@ -57,9 +57,9 @@ func NewSigner(signers []PrivateKey) (*Signer, error) {
 	copy(ss, signers)
 	for i, ns := range ss {
 		if ns.KID == "" {
-			pub, ok := ns.Signer.Public().(jwk.PublicKey)
+			pub, ok := ns.Signer.Public().(jwk.CryptoPublicKey)
 			if !ok {
-				return nil, fmt.Errorf("NewSigner: signer[%d] public key type %T does not implement jwk.PublicKey", i, ns.Signer.Public())
+				return nil, fmt.Errorf("NewSigner: signer[%d] public key type %T does not implement jwk.CryptoPublicKey", i, ns.Signer.Public())
 			}
 			k := jwk.Key{Key: pub}
 			thumb, err := k.Thumbprint()
@@ -141,7 +141,7 @@ func (s *Signer) ToJWKs() ([]byte, error) {
 func (s *Signer) PublicKeys() []jwk.Key {
 	keys := make([]jwk.Key, len(s.signers))
 	for i, ns := range s.signers {
-		pub, _ := ns.Signer.Public().(jwk.PublicKey)
+		pub, _ := ns.Signer.Public().(jwk.CryptoPublicKey)
 		keys[i] = jwk.Key{
 			Key: pub,
 			KID: ns.KID,
