@@ -117,12 +117,6 @@ func (k *PublicKey) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if decoded.KID == "" {
-		decoded.KID, err = decoded.Thumbprint()
-		if err != nil {
-			return fmt.Errorf("parse JWK: compute thumbprint: %w", err)
-		}
-	}
 	*k = *decoded
 	return nil
 }
@@ -281,18 +275,9 @@ func (k *PrivateKey) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &kj); err != nil {
 		return fmt.Errorf("parse JWK: %w", err)
 	}
-	if kj.D == "" {
-		return fmt.Errorf("parse JWK: \"d\" field missing: %w", jose.ErrMissingKeyData)
-	}
 	decoded, err := decodePrivate(kj)
 	if err != nil {
 		return err
-	}
-	if decoded.KID == "" {
-		decoded.KID, err = decoded.Thumbprint()
-		if err != nil {
-			return fmt.Errorf("parse JWK: compute thumbprint: %w", err)
-		}
 	}
 	*k = *decoded
 	return nil
@@ -426,39 +411,51 @@ func ReadFile(filePath string) ([]PublicKey, error) {
 //   - "EC"  - P-256, P-384, P-521 (ES256, ES384, ES512)
 //   - "OKP" - Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
 func decodeOne(kj rawKey) (*PublicKey, error) {
+	var pk *PublicKey
 	switch kj.Kty {
 	case "RSA":
 		key, err := decodeRSA(kj)
 		if err != nil {
 			return nil, fmt.Errorf("parse RSA key %q: %w", kj.KID, err)
 		}
-		if key.Size() < 128 { // 1024 bits minimum
-			return nil, fmt.Errorf("RSA key %q: %d bits: %w", kj.KID, key.Size()*8, jose.ErrKeyTooSmall)
-		}
-		return kj.newPublicKey(key), nil
+		pk = kj.newPublicKey(key)
 
 	case "EC":
 		key, err := decodeEC(kj)
 		if err != nil {
 			return nil, fmt.Errorf("parse EC key %q: %w", kj.KID, err)
 		}
-		return kj.newPublicKey(key), nil
+		pk = kj.newPublicKey(key)
 
 	case "OKP":
 		key, err := decodeOKP(kj)
 		if err != nil {
 			return nil, fmt.Errorf("parse OKP key %q: %w", kj.KID, err)
 		}
-		return kj.newPublicKey(key), nil
+		pk = kj.newPublicKey(key)
 
 	default:
 		return nil, fmt.Errorf("kid %q: kty %q: %w", kj.KID, kj.Kty, jose.ErrUnsupportedKeyType)
 	}
+
+	if pk.KID == "" {
+		kid, err := pk.Thumbprint()
+		if err != nil {
+			return nil, fmt.Errorf("compute thumbprint: %w", err)
+		}
+		pk.KID = kid
+	}
+	return pk, nil
 }
 
 // decodePrivate parses a rawKey wire struct that contains private key material
 // into a [PrivateKey]. KID auto-derivation is handled by [PrivateKey.UnmarshalJSON].
 func decodePrivate(kj rawKey) (*PrivateKey, error) {
+	if kj.D == "" {
+		return nil, fmt.Errorf("\"d\" field missing: %w", jose.ErrMissingKeyData)
+	}
+
+	var pk *PrivateKey
 	switch kj.Kty {
 	case "EC":
 		ci, err := jwa.ECInfoByCrv(kj.Crv)
@@ -474,15 +471,12 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse EC private key %q: %w: %w", kj.KID, jose.ErrInvalidKey, err)
 		}
-		return kj.newPrivateKey(priv), nil
+		pk = kj.newPrivateKey(priv)
 
 	case "RSA":
 		pub, err := decodeRSA(kj)
 		if err != nil {
 			return nil, fmt.Errorf("parse RSA private key %q: %w", kj.KID, err)
-		}
-		if pub.Size() < 128 { // 1024 bits minimum
-			return nil, fmt.Errorf("RSA private key %q: %d bits: %w", kj.KID, pub.Size()*8, jose.ErrKeyTooSmall)
 		}
 		dBytes, err := decodeB64Field("RSA", kj.KID, "d", kj.D)
 		if err != nil {
@@ -510,7 +504,7 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 		if err := priv.Validate(); err != nil {
 			return nil, fmt.Errorf("parse RSA private key %q: %w: %w", kj.KID, jose.ErrInvalidKey, err)
 		}
-		return kj.newPrivateKey(priv), nil
+		pk = kj.newPrivateKey(priv)
 
 	case "OKP":
 		if kj.Crv != "Ed25519" {
@@ -524,11 +518,20 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 			return nil, fmt.Errorf("parse Ed25519 private key %q: seed size %d, want %d: %w", kj.KID, len(seed), ed25519.SeedSize, jose.ErrInvalidKey)
 		}
 		priv := ed25519.NewKeyFromSeed(seed)
-		return kj.newPrivateKey(priv), nil
+		pk = kj.newPrivateKey(priv)
 
 	default:
 		return nil, fmt.Errorf("kid %q: kty %q: %w", kj.KID, kj.Kty, jose.ErrUnsupportedKeyType)
 	}
+
+	if pk.KID == "" {
+		kid, err := pk.Thumbprint()
+		if err != nil {
+			return nil, fmt.Errorf("compute thumbprint: %w", err)
+		}
+		pk.KID = kid
+	}
+	return pk, nil
 }
 
 // newPublicKey creates a [PublicKey] from a crypto key, copying metadata
@@ -556,11 +559,11 @@ func decodeB64Field(kty, kid, field, value string) ([]byte, error) {
 func decodeRSA(kj rawKey) (*rsa.PublicKey, error) {
 	n, err := base64.RawURLEncoding.DecodeString(kj.N)
 	if err != nil {
-		return nil, fmt.Errorf("invalid RSA modulus (n): %w: %w", jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("invalid n: %w: %w", jose.ErrInvalidKey, err)
 	}
 	e, err := base64.RawURLEncoding.DecodeString(kj.E)
 	if err != nil {
-		return nil, fmt.Errorf("invalid RSA exponent (e): %w: %w", jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("invalid e: %w: %w", jose.ErrInvalidKey, err)
 	}
 
 	eInt := new(big.Int).SetBytes(e)
@@ -577,10 +580,14 @@ func decodeRSA(kj rawKey) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("RSA exponent too large for 32-bit platforms: %d: %w", eVal, jose.ErrInvalidKey)
 	}
 
-	return &rsa.PublicKey{
+	key := &rsa.PublicKey{
 		N: new(big.Int).SetBytes(n),
 		E: int(eVal),
-	}, nil
+	}
+	if key.Size() < 128 { // 1024 bits minimum
+		return nil, fmt.Errorf("%d bits: %w", key.Size()*8, jose.ErrKeyTooSmall)
+	}
+	return key, nil
 }
 
 func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
