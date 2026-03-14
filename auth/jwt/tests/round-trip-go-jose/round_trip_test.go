@@ -100,7 +100,7 @@ func assertGoJoseSignOurVerify(t *testing.T, ks testkeys.KeySet, sub string) {
 		t.Fatalf("go-jose Serialize: %v", err)
 	}
 
-	verifier := jwt.New([]jwk.PublicKey{ks.PubKey})
+	verifier := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
 	verifiedJWS, err := verifier.VerifyJWT(tokenStr)
 	if err != nil {
 		t.Fatalf("our verify: %v", err)
@@ -232,7 +232,7 @@ func TestJWKInterop_OurJSONToGoJose(t *testing.T) {
 				t.Fatalf("go-jose sign with our-JSON-parsed key: %v", err)
 			}
 
-			verifier := jwt.New([]jwk.PublicKey{ks.PubKey})
+			verifier := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
 			if _, err := verifier.VerifyJWT(tokenStr); err != nil {
 				t.Fatalf("our verify: %v", err)
 			}
@@ -272,7 +272,7 @@ func TestJWKInterop_GoJoseJSONToOur(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			verifier := jwt.New([]jwk.PublicKey{recovered})
+			verifier := jwt.NewVerifier([]jwk.PublicKey{recovered})
 			if _, err := verifier.VerifyJWT(tokenStr); err != nil {
 				t.Fatalf("verify with go-jose-JSON-parsed key: %v", err)
 			}
@@ -394,7 +394,7 @@ func TestJWKSInterop_GoJoseToOur(t *testing.T) {
 		t.Fatalf("expected 5 keys, got %d", len(ourJWKS.Keys))
 	}
 
-	verifier := jwt.New(ourJWKS.Keys)
+	verifier := jwt.NewVerifier(ourJWKS.Keys)
 
 	// Sign tokens with go-jose, verify with our library.
 	for _, ks := range sets {
@@ -464,7 +464,7 @@ func TestAudienceStringInterop_GoJose(t *testing.T) {
 	}
 	joseToken, _ := josejwt.Signed(joseSigner).Claims(jClaims).Serialize()
 
-	verifier := jwt.New([]jwk.PublicKey{ks.PubKey})
+	verifier := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
 	verifiedJWS, err := verifier.VerifyJWT(joseToken)
 	if err != nil {
 		t.Fatal(err)
@@ -586,7 +586,7 @@ func TestNumericDatePrecision_GoJose(t *testing.T) {
 	}
 	joseToken, _ := josejwt.Signed(joseSigner).Claims(jClaims).Serialize()
 
-	verifier := jwt.New([]jwk.PublicKey{ks.PubKey})
+	verifier := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
 	verifiedJWS, _ := verifier.VerifyJWT(joseToken)
 	var decoded jwt.IDTokenClaims
 	jwt.UnmarshalClaims(verifiedJWS, &decoded)
@@ -651,7 +651,7 @@ func TestStress_GoJose(t *testing.T) {
 				if err != nil {
 					t.Fatalf("iter %d: go-jose sign: %v", i, err)
 				}
-				verifier := jwt.New([]jwk.PublicKey{ks.PubKey})
+				verifier := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
 				if _, err := verifier.VerifyJWT(joseToken); err != nil {
 					t.Fatalf("iter %d: our verify: %v", i, err)
 				}
