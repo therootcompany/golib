@@ -41,25 +41,25 @@ func FetchURL(ctx context.Context, jwksURL string, client *http.Client) ([]Publi
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
-		return nil, 0, fmt.Errorf("fetch JWKS: %w", err)
+		return nil, 0, fmt.Errorf("fetch JWKS: %w: %w", ErrFetchFailed, err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("fetch JWKS: %w", err)
+		return nil, 0, fmt.Errorf("fetch JWKS: %w: %w", ErrFetchFailed, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, 0, fmt.Errorf("fetch JWKS: unexpected status %d", resp.StatusCode)
+		return nil, 0, fmt.Errorf("fetch JWKS: status %d: %w", resp.StatusCode, ErrUnexpectedStatus)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
-		return nil, 0, fmt.Errorf("fetch JWKS: read body: %w", err)
+		return nil, 0, fmt.Errorf("fetch JWKS: read body: %w: %w", ErrFetchFailed, err)
 	}
 	var jwks JWKs
 	if err := json.Unmarshal(body, &jwks); err != nil {
-		return nil, 0, fmt.Errorf("parse JWKS: %w", err)
+		return nil, 0, fmt.Errorf("parse JWKS: %w: %w", ErrFetchFailed, err)
 	}
 	return jwks.Keys, parseCacheControlMaxAge(resp.Header.Get("Cache-Control")), nil
 }
@@ -111,16 +111,16 @@ func fetchFromDiscovery(ctx context.Context, discoveryURL string, client *http.C
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch discovery: %w", err)
+		return nil, "", fmt.Errorf("fetch discovery: %w: %w", ErrFetchFailed, err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch discovery: %w", err)
+		return nil, "", fmt.Errorf("fetch discovery: %w: %w", ErrFetchFailed, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("fetch discovery: unexpected status %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("fetch discovery: status %d: %w", resp.StatusCode, ErrUnexpectedStatus)
 	}
 
 	var doc struct {
@@ -128,10 +128,10 @@ func fetchFromDiscovery(ctx context.Context, discoveryURL string, client *http.C
 		JWKsURI string `json:"jwks_uri"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBody)).Decode(&doc); err != nil {
-		return nil, "", fmt.Errorf("parse discovery doc: %w", err)
+		return nil, "", fmt.Errorf("parse discovery doc: %w: %w", ErrFetchFailed, err)
 	}
 	if doc.JWKsURI == "" {
-		return nil, "", fmt.Errorf("discovery doc missing jwks_uri field")
+		return nil, "", fmt.Errorf("discovery doc missing jwks_uri: %w", ErrFetchFailed)
 	}
 
 	keys, _, err := FetchURL(ctx, doc.JWKsURI, client)

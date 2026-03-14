@@ -983,7 +983,7 @@ func algForECKey(pub *ecdsa.PublicKey) (alg string, h crypto.Hash, err error) {
 
 func digestFor(h crypto.Hash, data []byte) ([]byte, error) {
 	if !h.Available() {
-		return nil, fmt.Errorf("jwt: unsupported hash %v", h)
+		return nil, fmt.Errorf("hash %v: %w", h, ErrUnsupportedAlg)
 	}
 	hh := h.New()
 	hh.Write(data)
@@ -997,7 +997,7 @@ func ecdsaDERToRaw(der []byte, curve elliptic.Curve) ([]byte, error) {
 		return nil, fmt.Errorf("ecdsaDERToRaw: %w", err)
 	}
 	if len(rest) > 0 {
-		return nil, fmt.Errorf("ecdsaDERToRaw: %d unexpected trailing bytes after signature", len(rest))
+		return nil, fmt.Errorf("ecdsaDERToRaw: %d trailing bytes: %w", len(rest), ErrInvalidSignature)
 	}
 	byteLen := (curve.Params().BitSize + 7) / 8
 	out := make([]byte, 2*byteLen)
