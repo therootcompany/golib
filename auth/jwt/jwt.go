@@ -371,8 +371,11 @@ type Claims interface {
 // [Verifier.VerifyJWT] or [Verifier.Verify] to populate a typed claims struct.
 func Decode(tokenStr string) (*JWS, error) {
 	parts := strings.Split(tokenStr, ".")
+	if len(parts) == 1 && parts[0] == "" {
+		parts = nil
+	}
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("%w", ErrMalformedToken)
+		return nil, fmt.Errorf("%w: expected 3 segments but got %d", ErrMalformedToken, len(parts))
 	}
 
 	var jws JWS
@@ -913,7 +916,7 @@ func (iss *Verifier) PublicKeys() []jwk.PublicKey {
 func (iss *Verifier) Verify(jws VerifiableJWS) error {
 	h := jws.GetHeader()
 	if h.KID == "" {
-		return fmt.Errorf("%w", ErrMissingKID)
+		return fmt.Errorf("%w: alg %q", ErrMissingKID, h.Alg)
 	}
 	key, ok := iss.keys[h.KID]
 	if !ok {
