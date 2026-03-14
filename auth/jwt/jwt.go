@@ -69,8 +69,8 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	_ "crypto/sha256" // register SHA-256 with crypto.Hash
-	_ "crypto/sha512" // register SHA-384 and SHA-512 with crypto.Hash
+	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
@@ -144,12 +144,12 @@ func (raw *RawJWT) GetSignature() []byte { return raw.signature }
 // *TodoJWS implements [JWS].
 type TodoJWS struct {
 	RawJWT
-	header Header
+	header jwsHeader
 }
 
 // GetHeader returns a copy of the decoded JOSE header fields.
 // Implements [JWS]. The returned value is a copy — mutations do not affect the JWS.
-func (jws *TodoJWS) GetHeader() Header { return jws.header }
+func (jws *TodoJWS) GetHeader() Header { return jws.header.Header }
 
 // MarshalHeader encodes hdr as the protected header, stores it internally,
 // and returns the base64url-encoded bytes. Implements [SignableJWS].
@@ -157,7 +157,7 @@ func (jws *TodoJWS) GetHeader() Header { return jws.header }
 // Custom JWS types override this to merge hdr with their own additional
 // header fields before encoding.
 func (jws *TodoJWS) MarshalHeader(hdr Header) ([]byte, error) {
-	jws.header = hdr
+	jws.header.Header = hdr
 	data, err := json.Marshal(hdr)
 	if err != nil {
 		return nil, fmt.Errorf("MarshalHeader: %w", err)
@@ -191,6 +191,11 @@ func UnmarshalStandardClaims(jws VerifiableJWS) (StandardClaims, error) {
 	return claims, UnmarshalClaims(jws, &claims)
 }
 
+// just so that we use the same pattern internally as anyone would use externally
+type jwsHeader struct {
+	Header
+}
+
 // Header holds the standard JOSE header fields.
 //
 // Embed Header in a custom JWS struct to satisfy [JWS.GetHeader]
@@ -206,11 +211,6 @@ type Header struct {
 	KID string `json:"kid"`
 	Typ string `json:"typ"`
 }
-
-// GetHeader implements [VerifiableJWS].
-// Any struct embedding Header gets this method for free via promotion.
-// Returns a copy — mutations do not propagate back to the embedding struct.
-func (h Header) GetHeader() Header { return h }
 
 // Audience exists as a workaround for a quirk in the specification of the
 // JWT "aud" claim: RFC 7519 §4.1.3 allows "aud" to be either a plain string
@@ -962,12 +962,19 @@ func algForECKey(pub *ecdsa.PublicKey) (alg string, h crypto.Hash, err error) {
 }
 
 func digestFor(h crypto.Hash, data []byte) ([]byte, error) {
-	if !h.Available() {
+	switch h {
+	case crypto.SHA256:
+		d := sha256.Sum256(data)
+		return d[:], nil
+	case crypto.SHA384:
+		d := sha512.Sum384(data)
+		return d[:], nil
+	case crypto.SHA512:
+		d := sha512.Sum512(data)
+		return d[:], nil
+	default:
 		return nil, fmt.Errorf("jwt: unsupported hash %v", h)
 	}
-	hh := h.New()
-	hh.Write(data)
-	return hh.Sum(nil), nil
 }
 
 func ecdsaDERToRaw(der []byte, curve elliptic.Curve) ([]byte, error) {
