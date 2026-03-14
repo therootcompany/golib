@@ -38,22 +38,11 @@ var defaultClient = &http.Client{Timeout: 30 * time.Second}
 // The response body is limited to [maxResponseBody] bytes. client is the HTTP
 // client to use; if nil, a default client with a 30s timeout is used.
 func FetchURL(ctx context.Context, jwksURL string, client *http.Client) ([]PublicKey, time.Duration, error) {
-	if client == nil {
-		client = defaultClient
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
+	resp, err := doGET(ctx, jwksURL, client)
 	if err != nil {
-		return nil, 0, fmt.Errorf("fetch JWKS: %w: %w", jose.ErrFetchFailed, err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, fmt.Errorf("fetch JWKS: %w: %w", jose.ErrFetchFailed, err)
+		return nil, 0, fmt.Errorf("fetch JWKS: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, 0, fmt.Errorf("fetch JWKS: status %d: %w", resp.StatusCode, jose.ErrUnexpectedStatus)
-	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
@@ -109,22 +98,11 @@ func FetchOAuth2(ctx context.Context, baseURL string, client *http.Client) ([]Pu
 // URL from the discovery document's "issuer" field.
 // TODO this should return the URL, not the keys
 func fetchFromDiscovery(ctx context.Context, discoveryURL string, client *http.Client) ([]PublicKey, string, error) {
-	if client == nil {
-		client = defaultClient
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
+	resp, err := doGET(ctx, discoveryURL, client)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch discovery: %w: %w", jose.ErrFetchFailed, err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("fetch discovery: %w: %w", jose.ErrFetchFailed, err)
+		return nil, "", fmt.Errorf("fetch discovery: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("fetch discovery: status %d: %w", resp.StatusCode, jose.ErrUnexpectedStatus)
-	}
 
 	var doc struct {
 		Issuer  string `json:"issuer"`
@@ -143,4 +121,25 @@ func fetchFromDiscovery(ctx context.Context, discoveryURL string, client *http.C
 		return nil, "", err
 	}
 	return keys, doc.Issuer, nil
+}
+
+// doGET performs an HTTP GET request and returns the response. It handles
+// nil client defaults and status code checking. Callers must close resp.Body.
+func doGET(ctx context.Context, url string, client *http.Client) (*http.Response, error) {
+	if client == nil {
+		client = defaultClient
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", jose.ErrFetchFailed, err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", jose.ErrFetchFailed, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("status %d: %w", resp.StatusCode, jose.ErrUnexpectedStatus)
+	}
+	return resp, nil
 }

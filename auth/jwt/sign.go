@@ -127,7 +127,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 
 	alg, hash, ecKeySize, err := jwa.SigningParams(pk.Signer)
 	if err != nil {
-		return fmt.Errorf("signWith: %w", err)
+		return err
 	}
 
 	// Validate and set header algorithm.

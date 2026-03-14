@@ -247,7 +247,7 @@ func (jws *JWS) MarshalHeader(hdr Header) ([]byte, error) {
 	jws.header.Header = hdr
 	data, err := json.Marshal(jws.header)
 	if err != nil {
-		return nil, fmt.Errorf("MarshalHeader: %w", err)
+		return nil, err
 	}
 	jws.protected = []byte(base64.RawURLEncoding.EncodeToString(data))
 	return jws.protected, nil
@@ -906,22 +906,22 @@ func (iss *Verifier) VerifyJWT(tokenStr string) (*JWS, error) {
 
 // verifyWith checks a JWS signature using the given algorithm and public key.
 // Returns nil on success, a descriptive error on failure.
+//
+// The caller (Verify) wraps the error with kid and alg context, so errors
+// here do not redundantly include the algorithm.
 func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPublicKey) error {
 	switch alg {
 	case "ES256", "ES384", "ES512":
 		k, ok := key.(*ecdsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("alg %s requires *ecdsa.PublicKey, got %T: %w", alg, key, jose.ErrAlgConflict)
+			return fmt.Errorf("key type %T: %w", key, jose.ErrAlgConflict)
 		}
-		ci, err := jwa.ECInfo(k.Curve)
+		ci, err := jwa.ECInfoForAlg(k.Curve, alg)
 		if err != nil {
 			return err
 		}
-		if ci.Alg != alg {
-			return fmt.Errorf("key is %s, token alg is %s: %w", ci.Alg, alg, jose.ErrAlgConflict)
-		}
 		if len(sig) != 2*ci.KeySize {
-			return fmt.Errorf("%s sig len %d, want %d: %w", alg, len(sig), 2*ci.KeySize, jose.ErrSignatureInvalid)
+			return fmt.Errorf("sig len %d, want %d: %w", len(sig), 2*ci.KeySize, jose.ErrSignatureInvalid)
 		}
 		digest, err := digestFor(ci.Hash, signingInput)
 		if err != nil {
@@ -930,31 +930,31 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 		r := new(big.Int).SetBytes(sig[:ci.KeySize])
 		s := new(big.Int).SetBytes(sig[ci.KeySize:])
 		if !ecdsa.Verify(k, digest, r, s) {
-			return fmt.Errorf("%s: %w", alg, jose.ErrSignatureInvalid)
+			return jose.ErrSignatureInvalid
 		}
 		return nil
 
 	case "RS256":
 		k, ok := key.(*rsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("alg RS256 requires *rsa.PublicKey, got %T: %w", key, jose.ErrAlgConflict)
+			return fmt.Errorf("key type %T: %w", key, jose.ErrAlgConflict)
 		}
 		digest, err := digestFor(crypto.SHA256, signingInput)
 		if err != nil {
 			return err
 		}
 		if err := rsa.VerifyPKCS1v15(k, crypto.SHA256, digest, sig); err != nil {
-			return fmt.Errorf("RS256: %w: %w", jose.ErrSignatureInvalid, err)
+			return fmt.Errorf("%w: %w", jose.ErrSignatureInvalid, err)
 		}
 		return nil
 
 	case "EdDSA":
 		k, ok := key.(ed25519.PublicKey)
 		if !ok {
-			return fmt.Errorf("alg EdDSA requires ed25519.PublicKey, got %T: %w", key, jose.ErrAlgConflict)
+			return fmt.Errorf("key type %T: %w", key, jose.ErrAlgConflict)
 		}
 		if !ed25519.Verify(k, signingInput, sig) {
-			return fmt.Errorf("EdDSA: %w", jose.ErrSignatureInvalid)
+			return jose.ErrSignatureInvalid
 		}
 		return nil
 
@@ -978,10 +978,10 @@ func ecdsaDERToRaw(der []byte, keySize int) ([]byte, error) {
 	var sig struct{ R, S *big.Int }
 	rest, err := asn1.Unmarshal(der, &sig)
 	if err != nil {
-		return nil, fmt.Errorf("ecdsaDERToRaw: %w", err)
+		return nil, err
 	}
 	if len(rest) > 0 {
-		return nil, fmt.Errorf("ecdsaDERToRaw: %d trailing bytes: %w", len(rest), jose.ErrSignatureInvalid)
+		return nil, fmt.Errorf("%d trailing ASN.1 bytes: %w", len(rest), jose.ErrSignatureInvalid)
 	}
 	out := make([]byte, 2*keySize)
 	sig.R.FillBytes(out[:keySize])

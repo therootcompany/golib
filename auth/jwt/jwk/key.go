@@ -137,64 +137,36 @@ func (k *PublicKey) UnmarshalJSON(data []byte) error {
 //   - RSA: {"e":..., "kty":"RSA", "n":...}
 //   - OKP: {"crv":"Ed25519", "kty":"OKP", "x":...}
 func (k PublicKey) Thumbprint() (string, error) {
+	rk, err := encode(k)
+	if err != nil {
+		return "", err
+	}
+
+	// Build canonical JSON with fields in lexicographic order per RFC 7638.
 	var canonical []byte
-	var err error
-
-	switch key := k.CryptoPublicKey.(type) {
-	case *ecdsa.PublicKey:
-		ci, err := jwa.ECInfo(key.Curve)
-		if err != nil {
-			return "", fmt.Errorf("Thumbprint: %w", err)
-		}
-		b, err := key.Bytes() // uncompressed: 0x04 || X || Y
-		if err != nil {
-			return "", fmt.Errorf("Thumbprint: encode EC key: %w", err)
-		}
-
-		// Fields in lexicographic order: crv, kty, x, y
+	switch rk.Kty {
+	case "EC":
 		canonical, err = json.Marshal(struct {
 			Crv string `json:"crv"`
 			Kty string `json:"kty"`
 			X   string `json:"x"`
 			Y   string `json:"y"`
-		}{
-			Crv: ci.Crv,
-			Kty: "EC",
-			X:   base64.RawURLEncoding.EncodeToString(b[1 : 1+ci.KeySize]),
-			Y:   base64.RawURLEncoding.EncodeToString(b[1+ci.KeySize:]),
-		})
-
-	case *rsa.PublicKey:
-		eInt := big.NewInt(int64(key.E))
-		// Fields in lexicographic order: e, kty, n
+		}{Crv: rk.Crv, Kty: rk.Kty, X: rk.X, Y: rk.Y})
+	case "RSA":
 		canonical, err = json.Marshal(struct {
 			E   string `json:"e"`
 			Kty string `json:"kty"`
 			N   string `json:"n"`
-		}{
-			E:   base64.RawURLEncoding.EncodeToString(eInt.Bytes()),
-			Kty: "RSA",
-			N:   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
-		})
-
-	case ed25519.PublicKey:
-		// Fields in lexicographic order: crv, kty, x
+		}{E: rk.E, Kty: rk.Kty, N: rk.N})
+	case "OKP":
 		canonical, err = json.Marshal(struct {
 			Crv string `json:"crv"`
 			Kty string `json:"kty"`
 			X   string `json:"x"`
-		}{
-			Crv: "Ed25519",
-			Kty: "OKP",
-			X:   base64.RawURLEncoding.EncodeToString([]byte(key)),
-		})
-
-	default:
-		return "", fmt.Errorf("Thumbprint: %T: %w", k.CryptoPublicKey, jose.ErrUnsupportedKeyType)
+		}{Crv: rk.Crv, Kty: rk.Kty, X: rk.X})
 	}
-
 	if err != nil {
-		return "", fmt.Errorf("Thumbprint: marshal canonical JSON: %w", err)
+		return "", fmt.Errorf("thumbprint: marshal canonical JSON: %w", err)
 	}
 
 	sum := sha256.Sum256(canonical)
@@ -354,54 +326,41 @@ type JWKs struct {
 }
 
 // encode converts a [PublicKey] to its [rawKey] wire representation.
-// Used by [PublicKey.MarshalJSON].
+// Used by [PublicKey.MarshalJSON] and [PublicKey.Thumbprint].
 func encode(k PublicKey) (rawKey, error) {
+	rk := rawKey{KID: k.KID, Use: k.Use, Alg: k.Alg, KeyOps: k.KeyOps}
+
 	switch key := k.CryptoPublicKey.(type) {
 	case *ecdsa.PublicKey:
 		ci, err := jwa.ECInfo(key.Curve)
 		if err != nil {
-			return rawKey{}, fmt.Errorf("Encode: %w", err)
+			return rawKey{}, err
 		}
 		b, err := key.Bytes() // uncompressed: 0x04 || X || Y
 		if err != nil {
-			return rawKey{}, fmt.Errorf("Encode: encode EC key: %w", err)
+			return rawKey{}, fmt.Errorf("encode EC key: %w", err)
 		}
-		return rawKey{
-			Kty:    "EC",
-			KID:    k.KID,
-			Crv:    ci.Crv,
-			X:      base64.RawURLEncoding.EncodeToString(b[1 : 1+ci.KeySize]),
-			Y:      base64.RawURLEncoding.EncodeToString(b[1+ci.KeySize:]),
-			Use:    k.Use,
-			Alg:    k.Alg,
-			KeyOps: k.KeyOps,
-		}, nil
+		rk.Kty = "EC"
+		rk.Crv = ci.Crv
+		rk.X = base64.RawURLEncoding.EncodeToString(b[1 : 1+ci.KeySize])
+		rk.Y = base64.RawURLEncoding.EncodeToString(b[1+ci.KeySize:])
+		return rk, nil
 
 	case *rsa.PublicKey:
 		eInt := big.NewInt(int64(key.E))
-		return rawKey{
-			Kty:    "RSA",
-			KID:    k.KID,
-			N:      base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
-			E:      base64.RawURLEncoding.EncodeToString(eInt.Bytes()),
-			Use:    k.Use,
-			Alg:    k.Alg,
-			KeyOps: k.KeyOps,
-		}, nil
+		rk.Kty = "RSA"
+		rk.N = base64.RawURLEncoding.EncodeToString(key.N.Bytes())
+		rk.E = base64.RawURLEncoding.EncodeToString(eInt.Bytes())
+		return rk, nil
 
 	case ed25519.PublicKey:
-		return rawKey{
-			Kty:    "OKP",
-			KID:    k.KID,
-			Crv:    "Ed25519",
-			X:      base64.RawURLEncoding.EncodeToString([]byte(key)),
-			Use:    k.Use,
-			Alg:    k.Alg,
-			KeyOps: k.KeyOps,
-		}, nil
+		rk.Kty = "OKP"
+		rk.Crv = "Ed25519"
+		rk.X = base64.RawURLEncoding.EncodeToString([]byte(key))
+		return rk, nil
 
 	default:
-		return rawKey{}, fmt.Errorf("Encode: %T: %w", k.CryptoPublicKey, jose.ErrUnsupportedKeyType)
+		return rawKey{}, fmt.Errorf("encode: %T: %w", k.CryptoPublicKey, jose.ErrUnsupportedKeyType)
 	}
 }
 
@@ -409,66 +368,40 @@ func encode(k PublicKey) (rawKey, error) {
 // including private key material (d, and RSA CRT components p/q/dp/dq/qi).
 // Used by [PrivateKey.MarshalJSON].
 func encodePrivate(k PrivateKey) (rawKey, error) {
+	rk, err := encode(*k.PublicKey())
+	if err != nil {
+		return rawKey{}, err
+	}
+
 	switch priv := k.Signer.(type) {
 	case *ecdsa.PrivateKey:
-		pub, err := encode(PublicKey{
-			CryptoPublicKey: &priv.PublicKey,
-			KID:             k.KID,
-			Use:             k.Use,
-			Alg:             k.Alg,
-			KeyOps:          k.KeyOps,
-		})
-		if err != nil {
-			return rawKey{}, err
-		}
 		dBytes, err := priv.Bytes()
 		if err != nil {
-			return rawKey{}, fmt.Errorf("encodePrivate: encode EC private key: %w", err)
+			return rawKey{}, fmt.Errorf("encode EC private key: %w", err)
 		}
-		pub.D = base64.RawURLEncoding.EncodeToString(dBytes)
-		return pub, nil
+		rk.D = base64.RawURLEncoding.EncodeToString(dBytes)
 
 	case *rsa.PrivateKey:
-		pub, err := encode(PublicKey{
-			CryptoPublicKey: &priv.PublicKey,
-			KID:             k.KID,
-			Use:             k.Use,
-			Alg:             k.Alg,
-			KeyOps:          k.KeyOps,
-		})
-		if err != nil {
-			return rawKey{}, err
-		}
-		pub.D = base64.RawURLEncoding.EncodeToString(priv.D.Bytes())
+		rk.D = base64.RawURLEncoding.EncodeToString(priv.D.Bytes())
 		if len(priv.Primes) >= 2 {
 			priv.Precompute()
-			pub.P = base64.RawURLEncoding.EncodeToString(priv.Primes[0].Bytes())
-			pub.Q = base64.RawURLEncoding.EncodeToString(priv.Primes[1].Bytes())
+			rk.P = base64.RawURLEncoding.EncodeToString(priv.Primes[0].Bytes())
+			rk.Q = base64.RawURLEncoding.EncodeToString(priv.Primes[1].Bytes())
 			if priv.Precomputed.Dp != nil {
-				pub.DP = base64.RawURLEncoding.EncodeToString(priv.Precomputed.Dp.Bytes())
-				pub.DQ = base64.RawURLEncoding.EncodeToString(priv.Precomputed.Dq.Bytes())
-				pub.QI = base64.RawURLEncoding.EncodeToString(priv.Precomputed.Qinv.Bytes())
+				rk.DP = base64.RawURLEncoding.EncodeToString(priv.Precomputed.Dp.Bytes())
+				rk.DQ = base64.RawURLEncoding.EncodeToString(priv.Precomputed.Dq.Bytes())
+				rk.QI = base64.RawURLEncoding.EncodeToString(priv.Precomputed.Qinv.Bytes())
 			}
 		}
-		return pub, nil
 
 	case ed25519.PrivateKey:
-		pub, err := encode(PublicKey{
-			CryptoPublicKey: priv.Public().(ed25519.PublicKey),
-			KID:             k.KID,
-			Use:             k.Use,
-			Alg:             k.Alg,
-			KeyOps:          k.KeyOps,
-		})
-		if err != nil {
-			return rawKey{}, err
-		}
-		pub.D = base64.RawURLEncoding.EncodeToString(priv.Seed())
-		return pub, nil
+		rk.D = base64.RawURLEncoding.EncodeToString(priv.Seed())
 
 	default:
-		return rawKey{}, fmt.Errorf("encodePrivate: %T: %w", k.Signer, jose.ErrUnsupportedKeyType)
+		return rawKey{}, fmt.Errorf("encode: %T: %w", k.Signer, jose.ErrUnsupportedKeyType)
 	}
+
+	return rk, nil
 }
 
 // ReadFile reads and parses a JWKS document from a file path.
@@ -492,7 +425,6 @@ func ReadFile(filePath string) ([]PublicKey, error) {
 //   - "RSA" - minimum 1024-bit (RS256)
 //   - "EC"  - P-256, P-384, P-521 (ES256, ES384, ES512)
 //   - "OKP" - Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
-//
 func decodeOne(kj rawKey) (*PublicKey, error) {
 	switch kj.Kty {
 	case "RSA":
@@ -503,21 +435,21 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 		if key.Size() < 128 { // 1024 bits minimum
 			return nil, fmt.Errorf("RSA key %q: %d bits: %w", kj.KID, key.Size()*8, jose.ErrKeyTooSmall)
 		}
-		return &PublicKey{CryptoPublicKey: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
+		return kj.newPublicKey(key), nil
 
 	case "EC":
 		key, err := decodeEC(kj)
 		if err != nil {
 			return nil, fmt.Errorf("parse EC key %q: %w", kj.KID, err)
 		}
-		return &PublicKey{CryptoPublicKey: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
+		return kj.newPublicKey(key), nil
 
 	case "OKP":
 		key, err := decodeOKP(kj)
 		if err != nil {
 			return nil, fmt.Errorf("parse OKP key %q: %w", kj.KID, err)
 		}
-		return &PublicKey{CryptoPublicKey: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
+		return kj.newPublicKey(key), nil
 
 	default:
 		return nil, fmt.Errorf("kid %q: kty %q: %w", kj.KID, kj.Kty, jose.ErrUnsupportedKeyType)
@@ -533,16 +465,16 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse EC private key %q: %w", kj.KID, err)
 		}
-		dBytes, err := base64.RawURLEncoding.DecodeString(kj.D)
+		dBytes, err := decodeB64Field("EC", kj.KID, "d", kj.D)
 		if err != nil {
-			return nil, fmt.Errorf("parse EC private key %q: invalid d: %w: %w", kj.KID, jose.ErrInvalidKey, err)
+			return nil, err
 		}
 		// ParseRawPrivateKey validates the scalar and derives the public key.
 		priv, err := ecdsa.ParseRawPrivateKey(ci.Curve, dBytes)
 		if err != nil {
 			return nil, fmt.Errorf("parse EC private key %q: %w: %w", kj.KID, jose.ErrInvalidKey, err)
 		}
-		return &PrivateKey{Signer: priv, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
+		return kj.newPrivateKey(priv), nil
 
 	case "RSA":
 		pub, err := decodeRSA(kj)
@@ -552,22 +484,22 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 		if pub.Size() < 128 { // 1024 bits minimum
 			return nil, fmt.Errorf("RSA private key %q: %d bits: %w", kj.KID, pub.Size()*8, jose.ErrKeyTooSmall)
 		}
-		dBytes, err := base64.RawURLEncoding.DecodeString(kj.D)
+		dBytes, err := decodeB64Field("RSA", kj.KID, "d", kj.D)
 		if err != nil {
-			return nil, fmt.Errorf("parse RSA private key %q: invalid d: %w: %w", kj.KID, jose.ErrInvalidKey, err)
+			return nil, err
 		}
 		priv := &rsa.PrivateKey{
 			PublicKey: *pub,
 			D:         new(big.Int).SetBytes(dBytes),
 		}
 		if kj.P != "" && kj.Q != "" {
-			p, err := base64.RawURLEncoding.DecodeString(kj.P)
+			p, err := decodeB64Field("RSA", kj.KID, "p", kj.P)
 			if err != nil {
-				return nil, fmt.Errorf("parse RSA private key %q: invalid p: %w: %w", kj.KID, jose.ErrInvalidKey, err)
+				return nil, err
 			}
-			q, err := base64.RawURLEncoding.DecodeString(kj.Q)
+			q, err := decodeB64Field("RSA", kj.KID, "q", kj.Q)
 			if err != nil {
-				return nil, fmt.Errorf("parse RSA private key %q: invalid q: %w: %w", kj.KID, jose.ErrInvalidKey, err)
+				return nil, err
 			}
 			priv.Primes = []*big.Int{
 				new(big.Int).SetBytes(p),
@@ -578,25 +510,47 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 		if err := priv.Validate(); err != nil {
 			return nil, fmt.Errorf("parse RSA private key %q: %w: %w", kj.KID, jose.ErrInvalidKey, err)
 		}
-		return &PrivateKey{Signer: priv, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
+		return kj.newPrivateKey(priv), nil
 
 	case "OKP":
 		if kj.Crv != "Ed25519" {
 			return nil, fmt.Errorf("parse OKP private key %q: crv %q: %w", kj.KID, kj.Crv, jose.ErrUnsupportedCurve)
 		}
-		seed, err := base64.RawURLEncoding.DecodeString(kj.D)
+		seed, err := decodeB64Field("Ed25519", kj.KID, "d", kj.D)
 		if err != nil {
-			return nil, fmt.Errorf("parse Ed25519 private key %q: invalid d: %w: %w", kj.KID, jose.ErrInvalidKey, err)
+			return nil, err
 		}
 		if len(seed) != ed25519.SeedSize {
 			return nil, fmt.Errorf("parse Ed25519 private key %q: seed size %d, want %d: %w", kj.KID, len(seed), ed25519.SeedSize, jose.ErrInvalidKey)
 		}
 		priv := ed25519.NewKeyFromSeed(seed)
-		return &PrivateKey{Signer: priv, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
+		return kj.newPrivateKey(priv), nil
 
 	default:
-		return nil, fmt.Errorf("parse private key: kid %q: kty %q: %w", kj.KID, kj.Kty, jose.ErrUnsupportedKeyType)
+		return nil, fmt.Errorf("kid %q: kty %q: %w", kj.KID, kj.Kty, jose.ErrUnsupportedKeyType)
 	}
+}
+
+// newPublicKey creates a [PublicKey] from a crypto key, copying metadata
+// (KID, Use, Alg, KeyOps) from the rawKey.
+func (kj rawKey) newPublicKey(key CryptoPublicKey) *PublicKey {
+	return &PublicKey{CryptoPublicKey: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}
+}
+
+// newPrivateKey creates a [PrivateKey] from a crypto.Signer, copying metadata
+// (KID, Use, Alg, KeyOps) from the rawKey.
+func (kj rawKey) newPrivateKey(signer crypto.Signer) *PrivateKey {
+	return &PrivateKey{Signer: signer, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}
+}
+
+// decodeB64Field decodes a base64url-encoded JWK field value, returning a
+// descriptive error that includes the key type, KID, and field name.
+func decodeB64Field(kty, kid, field, value string) ([]byte, error) {
+	b, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s private key %q: invalid %s: %w: %w", kty, kid, field, jose.ErrInvalidKey, err)
+	}
+	return b, nil
 }
 
 func decodeRSA(kj rawKey) (*rsa.PublicKey, error) {

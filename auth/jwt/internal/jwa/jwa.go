@@ -33,6 +33,20 @@ var (
 	p521 = CurveInfo{elliptic.P521(), "P-521", "ES512", crypto.SHA512, 66}
 )
 
+// ECInfoForAlg returns the CurveInfo for the given elliptic curve and validates
+// that the curve's algorithm matches expectedAlg. This is the verification-side
+// check: the key's curve must produce the algorithm the token claims.
+func ECInfoForAlg(curve elliptic.Curve, expectedAlg string) (CurveInfo, error) {
+	ci, err := ECInfo(curve)
+	if err != nil {
+		return ci, err
+	}
+	if ci.Alg != expectedAlg {
+		return CurveInfo{}, fmt.Errorf("key curve %s vs token alg %s: %w", ci.Alg, expectedAlg, jose.ErrAlgConflict)
+	}
+	return ci, nil
+}
+
 // ECInfo returns the CurveInfo for the given elliptic curve.
 func ECInfo(curve elliptic.Curve) (CurveInfo, error) {
 	switch curve {
