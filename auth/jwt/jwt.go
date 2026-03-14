@@ -43,14 +43,14 @@
 // automatically from the key type; KID comes from [jwk.PrivateKey.KID]; typ is
 // always "JWT". [Signer.SignJWS] handles all of this — you do not configure alg.
 //
-// You'll almost always need custom claims. [StandardJWS.UnmarshalClaims] accepts any
-// pointer — no interface to implement for decoding. Embed [IDTokenClaims] in
+// You'll almost always need custom claims. [UnmarshalClaims] accepts any JWS and
+// any pointer — no interface to implement for decoding. Embed [IDTokenClaims] in
 // your struct to get the registered fields and satisfy [Claims] for free via
 // Go method promotion, with zero boilerplate. For OIDC UserInfo profile fields
 // (name, email, phone, etc.) embed [StandardClaims] instead.
 //
 // Your custom claims validation logic is your own. [Verifier.VerifyJWT] authenticates the
-// signature; [StandardJWS.UnmarshalClaims] decodes the payload; [IDTokenValidator.Validate]
+// signature; [UnmarshalClaims] decodes the payload; [IDTokenValidator.Validate]
 // or [RFCValidator.Validate] checks the registered claim values (iss, aud, exp, etc.). These are three
 // separate calls — you compose them in whatever order your application needs.
 //
@@ -90,9 +90,9 @@ import (
 // [JWS.GetStandardHeader] for free via Go method promotion — similar to
 // how embedding [IDTokenClaims] satisfies [Claims].
 //
-// Use [Verifier.VerifyJWT] to get a [*StandardJWS] with access to
-// [StandardJWS.UnmarshalClaims], or [Decode] + [Verifier.Verify] for
-// routing by header fields before verifying the signature.
+// Use [Verifier.VerifyJWT] to get a verified [*StandardJWS], then call
+// [UnmarshalClaims] to decode the payload. Or use [Decode] + [Verifier.Verify]
+// for routing by header fields before verifying the signature.
 type JWS interface {
 	GetProtected() []byte
 	GetPayload() []byte
@@ -124,7 +124,7 @@ type SignableJWS interface {
 // It holds only the parsed structure — header, raw base64url fields, and
 // decoded signature bytes. It carries no Claims interface and no Verified flag;
 // use [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] to authenticate the token
-// and [StandardJWS.UnmarshalClaims] to decode the payload into a typed struct.
+// and [UnmarshalClaims] to decode the payload into a typed struct.
 //
 // *StandardJWS implements [JWS].
 type StandardJWS struct {
@@ -167,36 +167,24 @@ func (jws *StandardJWS) SetSignature(sig []byte) {
 	jws.signature = sig
 }
 
-// IDTokenClaims decodes the JWT payload into an [IDTokenClaims] struct.
+// UnmarshalIDTokenClaims decodes the payload of jws into an [IDTokenClaims] struct.
 //
-// It does not verify the signature — always call [Verifier.VerifyJWT] or
-// [Decode]+[Verifier.Verify] before trusting the returned claims.
-func (jws *StandardJWS) IDTokenClaims() (IDTokenClaims, error) {
-	payload, err := base64.RawURLEncoding.DecodeString(string(jws.payload))
-	if err != nil {
-		return IDTokenClaims{}, fmt.Errorf("decode payload: %w", err)
-	}
+// Always call [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before
+// UnmarshalIDTokenClaims — the signature must be authenticated before trusting
+// the payload. Works with any [JWS] implementation, not just [*StandardJWS].
+func UnmarshalIDTokenClaims(jws JWS) (IDTokenClaims, error) {
 	var claims IDTokenClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return IDTokenClaims{}, fmt.Errorf("unmarshal ID token claims: %w", err)
-	}
-	return claims, nil
+	return claims, UnmarshalClaims(jws, &claims)
 }
 
-// StandardClaims decodes the JWT payload into a [StandardClaims] struct.
+// UnmarshalStandardClaims decodes the payload of jws into a [StandardClaims] struct.
 //
-// It does not verify the signature — always call [Verifier.VerifyJWT] or
-// [Decode]+[Verifier.Verify] before trusting the returned claims.
-func (jws *StandardJWS) StandardClaims() (StandardClaims, error) {
-	payload, err := base64.RawURLEncoding.DecodeString(string(jws.payload))
-	if err != nil {
-		return StandardClaims{}, fmt.Errorf("decode payload: %w", err)
-	}
+// Always call [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before
+// UnmarshalStandardClaims — the signature must be authenticated before trusting
+// the payload. Works with any [JWS] implementation, not just [*StandardJWS].
+func UnmarshalStandardClaims(jws JWS) (StandardClaims, error) {
 	var claims StandardClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return StandardClaims{}, fmt.Errorf("unmarshal standard claims: %w", err)
-	}
-	return claims, nil
+	return claims, UnmarshalClaims(jws, &claims)
 }
 
 // StandardHeader holds the standard JOSE header fields.
@@ -347,7 +335,7 @@ type Claims interface {
 
 // Decode parses a compact JWT string (header.payload.signature) into a StandardJWS.
 //
-// It does not unmarshal the claims payload — call [StandardJWS.UnmarshalClaims] after
+// It does not unmarshal the claims payload — call [UnmarshalClaims] after
 // [Verifier.VerifyJWT] or [Verifier.Verify] to populate a typed claims struct.
 func Decode(tokenStr string) (*StandardJWS, error) {
 	parts := strings.Split(tokenStr, ".")
@@ -374,18 +362,19 @@ func Decode(tokenStr string) (*StandardJWS, error) {
 	return &jws, nil
 }
 
-// UnmarshalClaims decodes the JWT payload into v.
+// UnmarshalClaims decodes the payload of jws into v.
 //
 // v must be a pointer to a struct (e.g. *AppClaims). Always call
 // [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before UnmarshalClaims to ensure
-// the signature is authenticated before trusting the payload.
-func (jws *StandardJWS) UnmarshalClaims(v any) error {
-	payload, err := base64.RawURLEncoding.DecodeString(string(jws.payload))
+// the signature is authenticated before trusting the payload. Works with any
+// [JWS] implementation, not just [*StandardJWS].
+func UnmarshalClaims(jws JWS, v any) error {
+	payload, err := base64.RawURLEncoding.DecodeString(string(jws.GetPayload()))
 	if err != nil {
-		return fmt.Errorf("invalid claims encoding: %v", err)
+		return fmt.Errorf("invalid claims encoding: %w", err)
 	}
 	if err := json.Unmarshal(payload, v); err != nil {
-		return fmt.Errorf("invalid claims JSON: %v", err)
+		return fmt.Errorf("invalid claims JSON: %w", err)
 	}
 	return nil
 }
@@ -580,17 +569,19 @@ func (v *ValidatorCore) Validate(claims Claims, now time.Time) ([]string, error)
 	}, now)
 }
 
-// IDTokenValidator checks all standard JWT/OIDC ID Token claims by default.
+// IDTokenValidator checks the OIDC Core §2 unconditionally required claims by default.
 // It is the strict counterpart to [RFCValidator].
 //
-// Configure once at startup and reuse across requests. All OIDC-required fields
-// (iss, sub, aud, exp, iat, jti, auth_time, amr, azp) are checked unless
-// explicitly disabled with Ignore* fields. IgnoreExp and IgnoreIat are promoted
-// from [ValidatorCore]. Sub and JTI are presence-only: if not ignored, the
-// claim must be non-empty, but its value is not matched — that is
-// per-token/per-user logic and belongs in the application.
+// OIDC unconditionally requires iss, sub, aud, exp, and iat — these are checked
+// unless explicitly disabled with Ignore* fields. Exp and Iat are promoted from
+// [ValidatorCore]. JTI and AuthTime are opt-in (Expect* fields) because OIDC
+// only requires auth_time when max_age was requested. Azp and AMR are driven
+// by allowlists in [ValidatorCore] (Azp and RequiredAMRs/MinAMRCount).
 //
-// Call [IDTokenValidator.Validate] to check all standard fields.
+// Sub is presence-only: it must be non-empty, but its value is not matched —
+// per-token/per-user identity checks belong in the application.
+//
+// Call [IDTokenValidator.Validate] to check the standard fields.
 //
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 type IDTokenValidator struct {
@@ -598,13 +589,11 @@ type IDTokenValidator struct {
 	IgnoreIss      bool
 	IgnoreSub      bool // if false, sub must be present (non-empty)
 	IgnoreAud      bool
-	IgnoreJTI      bool // if false, jti must be present (non-empty)
-	IgnoreAuthTime bool
-	IgnoreAMR      bool
-	IgnoreAzp      bool
+	ExpectJTI      bool // if true, jti must be present (non-empty)
+	ExpectAuthTime bool // if true (or MaxAge > 0), auth_time is validated
 }
 
-// Validate checks the standard JWT/OIDC ID Token claims and returns soft errors.
+// Validate checks the OIDC Core §2 ID Token claims and returns soft errors.
 func (v *IDTokenValidator) Validate(claims Claims, now time.Time) ([]string, error) {
 	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      !v.IgnoreIss,
@@ -613,10 +602,10 @@ func (v *IDTokenValidator) Validate(claims Claims, now time.Time) ([]string, err
 		checkExp:      !v.IgnoreExp,
 		checkNBF:      !v.IgnoreNBF,
 		checkIat:      !v.IgnoreIat,
-		checkJTI:      !v.IgnoreJTI,
-		checkAuthTime: !v.IgnoreAuthTime,
-		checkAMR:      !v.IgnoreAMR,
-		checkAzp:      !v.IgnoreAzp,
+		checkJTI:      v.ExpectJTI,
+		checkAuthTime: v.ExpectAuthTime || v.MaxAge > 0,
+		checkAMR:      len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
+		checkAzp:      len(v.Azp) > 0,
 	}, now)
 }
 
@@ -627,7 +616,7 @@ func (v *IDTokenValidator) Validate(claims Claims, now time.Time) ([]string, err
 // Exp and Iat are checked by default (IgnoreExp and IgnoreIat from the embedded
 // [ValidatorCore] can disable them, but this is rarely appropriate). Iss, Aud,
 // and Azp are checked automatically when their value lists are configured.
-// Everything else (Sub, JTI, AuthTime, AMR, Nonce) requires explicit opt-in via
+// Everything else (Sub, JTI, AuthTime, AMR) requires explicit opt-in via
 // Expect* fields, expressing that the claim is expected and it is an error if
 // it is absent or invalid.
 //
@@ -642,7 +631,6 @@ type RFCValidator struct {
 	ExpectJTI      bool // if true, jti must be present (non-empty)
 	ExpectAuthTime bool // if true (or MaxAge > 0), auth_time is validated
 	ExpectAMR      bool // if true (or RequiredAMRs/MinAMRCount set), amr is validated
-	ExpectNonce    bool // if true, nonce must be present (non-empty)
 }
 
 // Validate checks claims against RFC 7519 rules and returns soft errors.
@@ -658,7 +646,6 @@ func (v *RFCValidator) Validate(claims Claims, now time.Time) ([]string, error) 
 		checkAuthTime: v.ExpectAuthTime || v.MaxAge > 0,
 		checkAMR:      v.ExpectAMR || len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
 		checkAzp:      len(v.Azp) > 0,
-		checkNonce:    v.ExpectNonce,
 	}, now)
 }
 
@@ -675,7 +662,6 @@ type claimChecks struct {
 	checkAuthTime bool
 	checkAMR      bool
 	checkAzp      bool
-	checkNonce    bool
 }
 
 func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks, now time.Time) ([]string, error) {
@@ -786,10 +772,6 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 		errs = append(errs, fmt.Sprintf("'azp' %q not in allowed list", claims.Azp))
 	}
 
-	if checks.checkNonce && claims.Nonce == "" {
-		errs = append(errs, "missing or malformed 'nonce'")
-	}
-
 	if len(errs) > 0 {
 		// time.Local is loaded once at process start — no LoadLocation syscall needed.
 		serverTime := fmt.Sprintf("info: server time is %s (%s)", now.Format("2006-01-02 15:04:05 MST"), time.Local)
@@ -884,7 +866,7 @@ func (iss *Verifier) Verify(jws JWS) error {
 //	jws, err := iss.VerifyJWT(tokenStr)
 //	if err != nil { /* bad sig, malformed token, unknown kid */ }
 //	var claims AppClaims
-//	if err := jws.UnmarshalClaims(&claims); err != nil { /* ... */ }
+//	if err := jwt.UnmarshalClaims(jws, &claims); err != nil { /* ... */ }
 //	errs, _ := v.Validate(&claims, time.Now())
 //
 // For routing by kid/iss before verifying, use [Decode] then [Verifier.Verify].

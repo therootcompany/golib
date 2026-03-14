@@ -121,7 +121,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 
 	var decoded AppClaims
-	if err := jws2.UnmarshalClaims(&decoded); err != nil {
+	if err := jwt.UnmarshalClaims(jws2, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 	errs, _ := goodValidator().Validate(&decoded, time.Now())
@@ -164,7 +164,7 @@ func TestRoundTripRS256(t *testing.T) {
 		t.Fatalf("VerifyJWT failed: %v", err)
 	}
 	var decoded AppClaims
-	if err := jws2.UnmarshalClaims(&decoded); err != nil {
+	if err := jwt.UnmarshalClaims(jws2, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 	errs, _ := goodValidator().Validate(&decoded, time.Now())
@@ -203,7 +203,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 		t.Fatalf("VerifyJWT failed: %v", err)
 	}
 	var decoded AppClaims
-	if err := jws2.UnmarshalClaims(&decoded); err != nil {
+	if err := jwt.UnmarshalClaims(jws2, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 	errs, _ := goodValidator().Validate(&decoded, time.Now())
@@ -232,7 +232,7 @@ func TestDecodeVerifyFlow(t *testing.T) {
 	}
 
 	var decoded AppClaims
-	if err := jws2.UnmarshalClaims(&decoded); err != nil {
+	if err := jwt.UnmarshalClaims(jws2, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 
@@ -295,7 +295,7 @@ func TestCustomValidation(t *testing.T) {
 	}
 
 	var decoded AppClaims
-	_ = jws2.UnmarshalClaims(&decoded)
+	_ = jwt.UnmarshalClaims(jws2, &decoded)
 
 	errs, err := validateAppClaims(decoded, goodValidator(), time.Now())
 	if err == nil {
@@ -426,29 +426,6 @@ func TestRFCValidator(t *testing.T) {
 		t.Fatalf("expected iat error, got: %v", errs)
 	}
 
-	// Opt-in ExpectNonce: absent nonce must be caught.
-	rfcNonce := &jwt.RFCValidator{
-		ValidatorCore: jwt.ValidatorCore{
-			Iss: []string{"https://example.com"},
-			Aud: []string{"myapp"},
-		},
-		ExpectNonce: true,
-	}
-	noNonce := minimal
-	noNonce.Nonce = ""
-	errs, err = rfcNonce.Validate(&noNonce, now)
-	if err == nil {
-		t.Fatal("RFCValidator should reject absent nonce when ExpectNonce is set")
-	}
-	found = false
-	for _, e := range errs {
-		if strings.Contains(e, "nonce") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected nonce error, got: %v", errs)
-	}
 }
 
 // TestVerifyWithoutValidation confirms that Verify + UnmarshalClaims succeeds
@@ -466,7 +443,7 @@ func TestVerifyWithoutValidation(t *testing.T) {
 		t.Fatalf("VerifyJWT failed: %v", err)
 	}
 	var claims AppClaims
-	if err := jws2.UnmarshalClaims(&claims); err != nil {
+	if err := jwt.UnmarshalClaims(jws2, &claims); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 	if claims.Email != c.Email {
@@ -541,7 +518,7 @@ func TestVerifierIssMismatch(t *testing.T) {
 		t.Fatalf("unexpected hard error from VerifyJWT: %v", err)
 	}
 	var decoded AppClaims
-	if err := jws2.UnmarshalClaims(&decoded); err != nil {
+	if err := jwt.UnmarshalClaims(jws2, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 	errs, _ := goodValidator().Validate(&decoded, time.Now())
@@ -610,7 +587,7 @@ func TestSignerRoundTrip(t *testing.T) {
 		t.Fatalf("VerifyJWT failed: %v", err)
 	}
 	var decoded AppClaims
-	if err := jws.UnmarshalClaims(&decoded); err != nil {
+	if err := jwt.UnmarshalClaims(jws, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 	errs, _ := goodValidator().Validate(&decoded, time.Now())
@@ -682,7 +659,7 @@ func TestSignerRoundRobin(t *testing.T) {
 			t.Fatalf("VerifyJWT[%d] failed: %v", i, err)
 		}
 		var decoded AppClaims
-		if err := jws.UnmarshalClaims(&decoded); err != nil {
+		if err := jwt.UnmarshalClaims(jws, &decoded); err != nil {
 			t.Fatalf("UnmarshalClaims[%d] failed: %v", i, err)
 		}
 		if errs, _ := v.Validate(&decoded, time.Now()); len(errs) > 0 {
