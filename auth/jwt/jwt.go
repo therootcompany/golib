@@ -139,6 +139,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/therootcompany/golib/auth/jwt/internal/ecutil"
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
@@ -963,13 +964,12 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 
 // --- Internal helpers ---
 
-// ecKeyInfo returns the JWK curve metadata for an ECDSA public key.
-// It delegates to [jwk.ECCurveInfo] and re-wraps the error with the
-// jwt-package sentinel [ErrUnsupportedKey].
-func ecKeyInfo(pub *ecdsa.PublicKey) (jwk.CurveInfo, error) {
-	ci, err := jwk.ECCurveInfo(pub.Curve)
+// ecKeyInfo returns the curve metadata for an ECDSA public key,
+// wrapping any error with the jwt-package sentinel [ErrUnsupportedKey].
+func ecKeyInfo(pub *ecdsa.PublicKey) (ecutil.CurveInfo, error) {
+	ci, err := ecutil.Info(pub.Curve)
 	if err != nil {
-		return jwk.CurveInfo{}, fmt.Errorf("EC curve %s: %w", pub.Curve.Params().Name, ErrUnsupportedKey)
+		return ci, fmt.Errorf("EC curve %s: %w", pub.Curve.Params().Name, ErrUnsupportedKey)
 	}
 	return ci, nil
 }

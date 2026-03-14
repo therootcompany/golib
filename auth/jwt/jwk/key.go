@@ -28,6 +28,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -36,6 +37,8 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+
+	"github.com/therootcompany/golib/auth/jwt/internal/ecutil"
 )
 
 // CryptoPublicKey is the constraint for public key types stored in [PublicKey].
@@ -139,7 +142,7 @@ func (k PublicKey) Thumbprint() (string, error) {
 
 	switch key := k.CryptoPublicKey.(type) {
 	case *ecdsa.PublicKey:
-		ci, err := ECCurveInfo(key.Curve)
+		ci, err := curveInfo(key.Curve)
 		if err != nil {
 			return "", fmt.Errorf("Thumbprint: %w", err)
 		}
@@ -355,7 +358,7 @@ type JWKs struct {
 func encode(k PublicKey) (rawKey, error) {
 	switch key := k.CryptoPublicKey.(type) {
 	case *ecdsa.PublicKey:
-		ci, err := ECCurveInfo(key.Curve)
+		ci, err := curveInfo(key.Curve)
 		if err != nil {
 			return rawKey{}, fmt.Errorf("Encode: %w", err)
 		}
@@ -526,7 +529,7 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 func decodePrivate(kj rawKey) (*PrivateKey, error) {
 	switch kj.Kty {
 	case "EC":
-		ci, err := ECCurveInfoByCrv(kj.Crv)
+		ci, err := curveInfoByCrv(kj.Crv)
 		if err != nil {
 			return nil, fmt.Errorf("parse EC private key %q: %w", kj.KID, err)
 		}
@@ -636,7 +639,7 @@ func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("invalid ECDSA Y: %w: %w", ErrInvalidKey, err)
 	}
 
-	ci, err := ECCurveInfoByCrv(kj.Crv)
+	ci, err := curveInfoByCrv(kj.Crv)
 	if err != nil {
 		return nil, err
 	}
@@ -673,4 +676,22 @@ func decodeOKP(kj rawKey) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("Ed25519 key size %d bytes, want %d: %w", len(x), ed25519.PublicKeySize, ErrInvalidKey)
 	}
 	return ed25519.PublicKey(x), nil
+}
+
+// curveInfo wraps ecutil.Info with jwk sentinel errors.
+func curveInfo(curve elliptic.Curve) (ecutil.CurveInfo, error) {
+	ci, err := ecutil.Info(curve)
+	if err != nil {
+		return ci, fmt.Errorf("EC curve %s: %w", curve.Params().Name, ErrUnsupportedCurve)
+	}
+	return ci, nil
+}
+
+// curveInfoByCrv wraps ecutil.InfoByCrv with jwk sentinel errors.
+func curveInfoByCrv(crv string) (ecutil.CurveInfo, error) {
+	ci, err := ecutil.InfoByCrv(crv)
+	if err != nil {
+		return ci, fmt.Errorf("EC crv %q: %w", crv, ErrUnsupportedCurve)
+	}
+	return ci, nil
 }
