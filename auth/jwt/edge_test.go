@@ -66,24 +66,33 @@ func TestPrivateKeyMissingD(t *testing.T) {
 }
 
 func TestRSAKeyTooSmall(t *testing.T) {
-	// Construct a 512-bit RSA JWK directly (Go 1.24+ refuses to generate
-	// small keys, so we build the JSON by hand).
-	n := make([]byte, 64) // 512-bit modulus
-	n[0] = 0x80           // set MSB so modulus is actually 512 bits
-	data, _ := json.Marshal(map[string]string{
-		"kty": "RSA",
-		"kid": "small",
-		"n":   base64.RawURLEncoding.EncodeToString(n),
-		"e":   "AQAB",
-	})
-
-	var decoded jwk.PublicKey
-	err := decoded.UnmarshalJSON(data)
-	if err == nil {
-		t.Fatal("expected error for small RSA key")
+	tests := []struct {
+		name string
+		nLen int // modulus byte length
+	}{
+		{"all_zeros_1024bit", 128}, // 1024 bits of zeros — Size() returns 0
+		{"all_zeros_64byte", 64},   // 512 bits of zeros
+		{"all_zeros_1byte", 1},     // 8 bits of zeros
 	}
-	if !errors.Is(err, jose.ErrKeyTooSmall) {
-		t.Fatalf("expected ErrKeyTooSmall, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := make([]byte, tt.nLen) // all zeros
+			data, _ := json.Marshal(map[string]string{
+				"kty": "RSA",
+				"kid": "small",
+				"n":   base64.RawURLEncoding.EncodeToString(n),
+				"e":   "AQAB",
+			})
+
+			var decoded jwk.PublicKey
+			err := decoded.UnmarshalJSON(data)
+			if err == nil {
+				t.Fatal("expected error for all-zeros RSA modulus")
+			}
+			if !errors.Is(err, jose.ErrKeyTooSmall) {
+				t.Fatalf("expected ErrKeyTooSmall, got: %v", err)
+			}
+		})
 	}
 }
 
@@ -636,27 +645,34 @@ func TestDecodeFourParts(t *testing.T) {
 // --- RSA private key edge cases ---
 
 func TestRSAPrivateKeyTooSmall(t *testing.T) {
-	// Construct a 512-bit RSA private JWK directly (Go 1.24+ refuses to
-	// generate small keys).
-	n := make([]byte, 64) // 512-bit modulus
-	n[0] = 0x80
-	d := make([]byte, 64)
-	d[0] = 0x01
-	data, _ := json.Marshal(map[string]string{
-		"kty": "RSA",
-		"kid": "small",
-		"n":   base64.RawURLEncoding.EncodeToString(n),
-		"e":   "AQAB",
-		"d":   base64.RawURLEncoding.EncodeToString(d),
-	})
-
-	var decoded jwk.PrivateKey
-	err := decoded.UnmarshalJSON(data)
-	if err == nil {
-		t.Fatal("expected error for small RSA private key")
+	tests := []struct {
+		name string
+		nLen int
+	}{
+		{"all_zeros_1024bit", 128},
+		{"all_zeros_64byte", 64},
 	}
-	if !errors.Is(err, jose.ErrKeyTooSmall) {
-		t.Fatalf("expected ErrKeyTooSmall, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := make([]byte, tt.nLen) // all zeros
+			d := make([]byte, tt.nLen) // all zeros
+			data, _ := json.Marshal(map[string]string{
+				"kty": "RSA",
+				"kid": "small",
+				"n":   base64.RawURLEncoding.EncodeToString(n),
+				"e":   "AQAB",
+				"d":   base64.RawURLEncoding.EncodeToString(d),
+			})
+
+			var decoded jwk.PrivateKey
+			err := decoded.UnmarshalJSON(data)
+			if err == nil {
+				t.Fatal("expected error for all-zeros RSA private key")
+			}
+			if !errors.Is(err, jose.ErrKeyTooSmall) {
+				t.Fatalf("expected ErrKeyTooSmall, got: %v", err)
+			}
+		})
 	}
 }
 
