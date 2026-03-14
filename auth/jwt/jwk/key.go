@@ -675,6 +675,13 @@ func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 	// coordinate to the expected byte length. ParseUncompressedPublicKey
 	// validates that the point is on the curve.
 	byteLen := (curve.Params().BitSize + 7) / 8
+	// TODO(review): confirm test coverage for over-length coordinates.
+	if len(x) > byteLen {
+		return nil, fmt.Errorf("ECDSA X coordinate too long for %s: got %d bytes, want %d", kj.Crv, len(x), byteLen)
+	}
+	if len(y) > byteLen {
+		return nil, fmt.Errorf("ECDSA Y coordinate too long for %s: got %d bytes, want %d", kj.Crv, len(y), byteLen)
+	}
 	uncompressed := make([]byte, 1+2*byteLen)
 	uncompressed[0] = 0x04
 	copy(uncompressed[1+byteLen-len(x):1+byteLen], x) // left-pad X
