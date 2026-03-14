@@ -53,29 +53,27 @@
 // a framework: it gives you composable pieces you call and control, not
 // scaffolding you must conform to.
 //
-// We use very simple, embedded types to make it effortless to provide your own Claims,
+// Simple embedded types to make it effortless to provide your own Claims.
 // and easy to use custom a Header if needed, or use any part of the system independently.
 //
-// Sane defaults for everything.
+// Sane defaults for everything, without hiding any information you may need for testing or debugging.
 //
-// You don't need to be a crypto export to use this library - but if you are, hopefully
-// you find it to be the best you've ever used.
-//
-// You'll almost always need custom claims. [UnmarshalClaims] decodes the payload
-// into a [Claims] value. Embed [StandardClaims] or [IDTokenClaims] in your struct to get the
-// registered fields and satisfy [Claims] "for free" via Go method promotion -
-// zero boilerplate. For OIDC UserInfo profile fields (name, email, phone, etc.)
-// embed [StandardClaims] instead.
+// Embed [StandardClaims] (typical user info) or [IDTokenClaims] (minimal auth info) in
+// your struct to satisfy [Claims] "for free" via Go method promotion.
 //
 // Your custom claims validation logic is your own. [Verifier.VerifyJWT] authenticates the
 // signature; [UnmarshalClaims] decodes the payload; [IDTokenValidator.Validate]
 // or [RFCValidator.Validate] checks the registered claim values (iss, aud, exp, etc.). These are three
 // separate calls - you compose them in whatever order your application needs.
 //
-// [Decode] always succeeds for a well-formed token - inspect the header (kid,
-// alg) before calling [Verifier.Verify] for multi-issuer routing.
+// Embed [RawJWT] in your own JWS type and provide [VerifiableJWS.GetHeader] to be able to access
+// custom Header values, and add [SignableJWS.MarshalHeader] and [SignableJWS.SetSignature] to sign
+// your own custom tokens.
 //
 // # Security
+//
+// You don't need to be a crypto export to use this library - but if you are, hopefully
+// you find it to be the best you've ever used.
 //
 // 1. YAGNI: Don't implement what you don't need = less surface area = greater security.
 //
@@ -184,9 +182,17 @@ type RawJWT struct {
 	signature []byte
 }
 
+// GetProtected implements [VerifiableJWS].
 func (raw *RawJWT) GetProtected() []byte { return raw.protected }
-func (raw *RawJWT) GetPayload() []byte   { return raw.payload }
+
+// GetPayload implements [VerifiableJWS].
+func (raw *RawJWT) GetPayload() []byte { return raw.payload }
+
+// GetSignature implements [VerifiableJWS].
 func (raw *RawJWT) GetSignature() []byte { return raw.signature }
+
+// SetSignature implements [SignableJWS].
+func (raw *RawJWT) SetSignature(sig []byte) { raw.signature = sig }
 
 // JWS is a decoded JSON Web Signature / JWT.
 //
@@ -218,11 +224,6 @@ func (jws *JWS) MarshalHeader(hdr Header) ([]byte, error) {
 	}
 	jws.protected = []byte(base64.RawURLEncoding.EncodeToString(data))
 	return jws.protected, nil
-}
-
-// SetSignature implements [SignableJWS].
-func (jws *JWS) SetSignature(sig []byte) {
-	jws.signature = sig
 }
 
 // UnmarshalIDTokenClaims decodes the payload of jws into an [IDTokenClaims] struct.
