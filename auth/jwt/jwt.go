@@ -261,7 +261,7 @@ func (a *Audience) UnmarshalJSON(data []byte) error {
 	}
 	var ss []string
 	if err := json.Unmarshal(data, &ss); err != nil {
-		return fmt.Errorf("aud must be a string or array of strings: %w: %w", err, ErrInvalidPayload)
+		return fmt.Errorf("aud must be a string or array of strings: %w: %w", ErrInvalidPayload, err)
 	}
 	*a = ss
 	return nil
@@ -380,15 +380,15 @@ func Decode(tokenStr string) (*JWS, error) {
 
 	header, err := base64.RawURLEncoding.DecodeString(string(jws.protected))
 	if err != nil {
-		return nil, fmt.Errorf("header base64: %w: %w", err, ErrInvalidHeader)
+		return nil, fmt.Errorf("header base64: %w: %w", ErrInvalidHeader, err)
 	}
 	if err := json.Unmarshal(header, &jws.header); err != nil {
-		return nil, fmt.Errorf("header json: %w: %w", err, ErrInvalidHeader)
+		return nil, fmt.Errorf("header json: %w: %w", ErrInvalidHeader, err)
 	}
 
 	jws.signature, err = base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return nil, fmt.Errorf("signature base64: %w: %w", err, ErrInvalidSignature)
+		return nil, fmt.Errorf("signature base64: %w: %w", ErrInvalidSignature, err)
 	}
 
 	return &jws, nil
@@ -402,10 +402,10 @@ func Decode(tokenStr string) (*JWS, error) {
 func UnmarshalClaims(jws VerifiableJWS, claims Claims) error {
 	payload, err := base64.RawURLEncoding.DecodeString(string(jws.GetPayload()))
 	if err != nil {
-		return fmt.Errorf("payload base64: %w: %w", err, ErrInvalidPayload)
+		return fmt.Errorf("payload base64: %w: %w", ErrInvalidPayload, err)
 	}
 	if err := json.Unmarshal(payload, claims); err != nil {
-		return fmt.Errorf("payload json: %w: %w", err, ErrInvalidPayload)
+		return fmt.Errorf("payload json: %w: %w", ErrInvalidPayload, err)
 	}
 	return nil
 }
@@ -999,7 +999,7 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 			return err
 		}
 		if err := rsa.VerifyPKCS1v15(k, crypto.SHA256, digest, sig); err != nil {
-			return fmt.Errorf("RS256: %w: %w", err, ErrSignatureInvalid)
+			return fmt.Errorf("RS256: %w: %w", ErrSignatureInvalid, err)
 		}
 		return nil
 
