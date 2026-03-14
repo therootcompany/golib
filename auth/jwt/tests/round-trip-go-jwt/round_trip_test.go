@@ -27,6 +27,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"testing"
@@ -37,6 +38,8 @@ import (
 	"github.com/therootcompany/golib/auth/jwt"
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
+
+var longTests = flag.Bool("long", false, "run extended stress tests (100 RSA iterations instead of 10)")
 
 // --- helpers ---
 
@@ -371,8 +374,8 @@ func TestKnownKeys(t *testing.T) {
 // conversion (ECDSA r/s values that are shorter than the field size and
 // need left-padding) and any key-dependent encoding quirks.
 //
-// RSA keygen is inherently slow (~10ms per 2048-bit key); use -short to
-// reduce RSA iterations to 10.
+// RSA keygen is inherently slow (~10ms per 2048-bit key); RSA defaults to
+// 10 iterations. Use -long to run 100.
 
 func TestStress(t *testing.T) {
 	t.Run("EdDSA", func(t *testing.T) {
@@ -438,9 +441,9 @@ func TestStress(t *testing.T) {
 
 	t.Run("RS256", func(t *testing.T) {
 		t.Parallel()
-		n := 1000
-		if testing.Short() {
-			n = 10
+		n := 10
+		if *longTests {
+			n = 100
 		}
 		for i := range n {
 			priv, err := rsa.GenerateKey(rand.Reader, 2048)

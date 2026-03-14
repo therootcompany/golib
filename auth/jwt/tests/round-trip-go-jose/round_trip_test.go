@@ -8,6 +8,7 @@ import (
 	"crypto"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"testing"
 	"time"
@@ -19,6 +20,8 @@ import (
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 	"github.com/therootcompany/golib/auth/jwt/tests/testkeys"
 )
+
+var longTests = flag.Bool("long", false, "run extended stress tests (100 RSA iterations instead of 10)")
 
 // joseAlg maps our algorithm name to a go-jose SignatureAlgorithm constant.
 func joseAlg(name string) jose.SignatureAlgorithm {
@@ -603,8 +606,11 @@ func TestStress_GoJose(t *testing.T) {
 		t.Run(ag.Name, func(t *testing.T) {
 			t.Parallel()
 			n := 1000
-			if testing.Short() && ag.Name == "RS256" {
+			if ag.Name == "RS256" {
 				n = 10
+				if *longTests {
+					n = 100
+				}
 			}
 			for i := range n {
 				ks := ag.Generate(fmt.Sprintf("s%d", i))
