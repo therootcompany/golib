@@ -79,7 +79,9 @@ type JWS interface {
 	GetProtected() []byte
 	GetPayload() []byte
 	GetSignature() []byte
-	GetStandardHeader() *StandardHeader
+	// GetStandardHeader returns a copy of the decoded JOSE header fields.
+	// Callers cannot mutate the JWS's internal header through the returned value.
+	GetStandardHeader() StandardHeader
 }
 
 // SignableJWS extends [JWS] with the two hooks [Signer.SignJWS] needs.
@@ -123,9 +125,9 @@ func (jws *StandardJWS) GetPayload() []byte { return jws.payload }
 // GetSignature returns the decoded signature bytes.
 func (jws *StandardJWS) GetSignature() []byte { return jws.signature }
 
-// GetStandardHeader returns the decoded JOSE header fields.
-// Implements [JWS].
-func (jws *StandardJWS) GetStandardHeader() *StandardHeader { return &jws.header }
+// GetStandardHeader returns a copy of the decoded JOSE header fields.
+// Implements [JWS]. The returned value is a copy — mutations do not affect the JWS.
+func (jws *StandardJWS) GetStandardHeader() StandardHeader { return jws.header }
 
 // MarshalHeader encodes hdr as the protected header, stores it internally,
 // and returns the base64url-encoded bytes. Implements [SignableJWS].
@@ -181,7 +183,8 @@ type StandardHeader struct {
 
 // GetStandardHeader implements [JWS].
 // Any struct embedding StandardHeader gets this method for free via promotion.
-func (h *StandardHeader) GetStandardHeader() *StandardHeader { return h }
+// Returns a copy — mutations do not propagate back to the embedding struct.
+func (h StandardHeader) GetStandardHeader() StandardHeader { return h }
 
 // Audience exists as a workaround for a quirk in the specification of the
 // JWT "aud" claim: RFC 7519 §4.1.3 allows "aud" to be either a plain string
@@ -196,7 +199,7 @@ type Audience []string
 
 // Contains reports whether s appears in the audience list.
 func (a Audience) Contains(s string) bool {
-	return slices.Contains([]string(a), s)
+	return slices.Contains(a, s)
 }
 
 // UnmarshalJSON decodes both the string and []string forms of the "aud" claim.
@@ -247,9 +250,9 @@ type IDTokenClaims struct {
 	Iat      int64    `json:"iat"`
 	AuthTime int64    `json:"auth_time"`
 	Nonce    string   `json:"nonce,omitempty"`
-	AMR      []string `json:"amr"`
+	AMR      []string `json:"amr,omitempty"`
 	Azp      string   `json:"azp,omitempty"`
-	JTI      string   `json:"jti"`
+	JTI      string   `json:"jti,omitempty"`
 }
 
 // GetIDTokenClaims implements [Claims].
@@ -281,15 +284,15 @@ func Decode(tokenStr string) (*StandardJWS, error) {
 
 	header, err := base64.RawURLEncoding.DecodeString(string(jws.protected))
 	if err != nil {
-		return nil, fmt.Errorf("invalid header encoding: %v", err)
+		return nil, fmt.Errorf("invalid header encoding: %w", err)
 	}
 	if err := json.Unmarshal(header, &jws.header); err != nil {
-		return nil, fmt.Errorf("invalid header JSON: %v", err)
+		return nil, fmt.Errorf("invalid header JSON: %w", err)
 	}
 
 	jws.signature, err = base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return nil, fmt.Errorf("invalid signature encoding: %v", err)
+		return nil, fmt.Errorf("invalid signature encoding: %w", err)
 	}
 
 	return &jws, nil
@@ -374,7 +377,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) ([]byte, error) {
 	if pk.Signer == nil {
 		return nil, fmt.Errorf("signWith: key %q has no Signer", pk.KID)
 	}
-	hdr := *jws.GetStandardHeader()
+	hdr := jws.GetStandardHeader()
 	switch {
 	case hdr.KID == "":
 		hdr.KID = pk.KID
@@ -468,7 +471,7 @@ func signingInputBytes(protected, payload []byte) []byte {
 }
 
 // DefaultGracePeriod is the tolerance applied to exp, iat, and auth_time checks
-// when ValidatorCore.GracePeriod is zero. It covers common sub-second clock drift
+// when ValidatorCore.GracePeriod is zero. It accommodates typical clock skew
 // between distributed systems.
 const DefaultGracePeriod = 5 * time.Second
 
@@ -668,8 +671,8 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 			if authTime.After(now.Add(skew)) {
 				fromNow := authTime.Sub(now)
 				errs = append(errs, fmt.Sprintf(
-					"'auth_time' of %s is %s in the future (server time %s)",
-					authTimeStr, formatDuration(fromNow), now.Format("2006-01-02 15:04:05 MST")),
+					"'auth_time' of %s is %s in the future",
+					authTimeStr, formatDuration(fromNow)),
 				)
 			} else if core.MaxAge > 0 && age > core.MaxAge {
 				diff := age - core.MaxAge
@@ -705,12 +708,7 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 	}
 
 	if len(errs) > 0 {
-		timeInfo := fmt.Sprintf("info: server time is %s", now.Format("2006-01-02 15:04:05 MST"))
-		if loc, err := time.LoadLocation("Local"); err == nil {
-			timeInfo += fmt.Sprintf(" %s", loc)
-		}
-		errs = append(errs, timeInfo)
-		return errs, fmt.Errorf("has errors")
+		return errs, fmt.Errorf("jwt: validation failed")
 	}
 	return nil, nil
 }
@@ -818,6 +816,11 @@ func (iss *Verifier) VerifyJWT(tokenStr string) (*StandardJWS, error) {
 // verifyWith checks a JWS signature using the given algorithm and public key.
 // Returns nil on success, a descriptive error on failure.
 func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPublicKey) error {
+	// Explicitly reject "none" and empty alg before the switch so the default
+	// case can't accidentally accept them through a gap in the allow-list.
+	if alg == "" || alg == "none" {
+		return fmt.Errorf("alg %q is not permitted", alg)
+	}
 	switch alg {
 	case "ES256", "ES384", "ES512":
 		k, ok := key.(*ecdsa.PublicKey)
@@ -908,8 +911,12 @@ func digestFor(h crypto.Hash, data []byte) ([]byte, error) {
 
 func ecdsaDERToRaw(der []byte, curve elliptic.Curve) ([]byte, error) {
 	var sig struct{ R, S *big.Int }
-	if _, err := asn1.Unmarshal(der, &sig); err != nil {
+	rest, err := asn1.Unmarshal(der, &sig)
+	if err != nil {
 		return nil, fmt.Errorf("ecdsaDERToRaw: %w", err)
+	}
+	if len(rest) > 0 {
+		return nil, fmt.Errorf("ecdsaDERToRaw: %d unexpected trailing bytes after signature", len(rest))
 	}
 	byteLen := (curve.Params().BitSize + 7) / 8
 	out := make([]byte, 2*byteLen)
