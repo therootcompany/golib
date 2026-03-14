@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/auth/jwt"
+	"github.com/therootcompany/golib/auth/jwt/jose"
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
@@ -342,7 +343,7 @@ func TestNBFValidation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for future nbf")
 	}
-	if !errors.Is(err, jwt.ErrBeforeNbf) {
+	if !errors.Is(err, jose.ErrBeforeNbf) {
 		t.Fatalf("expected ErrBeforeNbf, got: %v", err)
 	}
 }
@@ -378,14 +379,14 @@ func TestRFCValidator(t *testing.T) {
 	// Expired token must still be rejected.
 	expired := minimal
 	expired.Exp = now.Add(-time.Hour).Unix()
-	if _, err := rfc.Validate(&expired, now); !errors.Is(err, jwt.ErrAfterExp) {
+	if _, err := rfc.Validate(&expired, now); !errors.Is(err, jose.ErrAfterExp) {
 		t.Fatalf("expected ErrAfterExp, got: %v", err)
 	}
 
 	// Future iat must be rejected.
 	futureIat := minimal
 	futureIat.Iat = now.Add(time.Hour).Unix()
-	if _, err := rfc.Validate(&futureIat, now); !errors.Is(err, jwt.ErrBeforeIat) {
+	if _, err := rfc.Validate(&futureIat, now); !errors.Is(err, jose.ErrBeforeIat) {
 		t.Fatalf("expected ErrBeforeIat, got: %v", err)
 	}
 }
@@ -428,7 +429,7 @@ func TestVerifierWrongKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := iss.Verify(parsed); !errors.Is(err, jwt.ErrSignatureInvalid) {
+	if err := iss.Verify(parsed); !errors.Is(err, jose.ErrSignatureInvalid) {
 		t.Fatalf("expected ErrSignatureInvalid, got: %v", err)
 	}
 }
@@ -447,7 +448,7 @@ func TestVerifierUnknownKid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := iss.Verify(parsed); !errors.Is(err, jwt.ErrUnknownKID) {
+	if err := iss.Verify(parsed); !errors.Is(err, jose.ErrUnknownKID) {
 		t.Fatalf("expected ErrUnknownKID, got: %v", err)
 	}
 }
@@ -487,7 +488,7 @@ func TestVerifierIssMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation errors for iss mismatch")
 	}
-	if !errors.Is(err, jwt.ErrInvalidClaim) {
+	if !errors.Is(err, jose.ErrInvalidClaim) {
 		t.Fatalf("expected ErrInvalidClaim for iss mismatch, got: %v", err)
 	}
 }
@@ -514,7 +515,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := iss.Verify(parsed); !errors.Is(err, jwt.ErrUnsupportedAlg) {
+	if err := iss.Verify(parsed); !errors.Is(err, jose.ErrUnsupportedAlg) {
 		t.Fatalf("expected ErrUnsupportedAlg for tampered alg, got: %v", err)
 	}
 }
@@ -932,11 +933,11 @@ func TestDecodeRawErrors(t *testing.T) {
 		input    string
 		sentinel error
 	}{
-		{"empty string", "", jwt.ErrMalformedToken},
-		{"one segment", "abc", jwt.ErrMalformedToken},
-		{"two segments", "abc.def", jwt.ErrMalformedToken},
-		{"four segments", "a.b.c.d", jwt.ErrMalformedToken},
-		{"bad signature base64", "eyJhbGciOiJFZERTQSJ9.eyJpc3MiOiJ4In0.!!!bad!!!", jwt.ErrInvalidSignature},
+		{"empty string", "", jose.ErrMalformedToken},
+		{"one segment", "abc", jose.ErrMalformedToken},
+		{"two segments", "abc.def", jose.ErrMalformedToken},
+		{"four segments", "a.b.c.d", jose.ErrMalformedToken},
+		{"bad signature base64", "eyJhbGciOiJFZERTQSJ9.eyJpc3MiOiJ4In0.!!!bad!!!", jose.ErrSignatureInvalid},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

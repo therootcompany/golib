@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 
 	"github.com/therootcompany/golib/auth/jwt/internal/jwa"
+	"github.com/therootcompany/golib/auth/jwt/jose"
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
@@ -49,14 +50,14 @@ type Signer struct {
 // TODO allow for non-signing keys (for key rotation)
 func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 	if len(keys) == 0 {
-		return nil, fmt.Errorf("NewSigner: %w", ErrNoSigningKey)
+		return nil, fmt.Errorf("NewSigner: %w", jose.ErrNoSigningKey)
 	}
 	// Copy so the caller can't mutate after construction.
 	ss := make([]jwk.PrivateKey, len(keys))
 	copy(ss, keys)
 	for i := range ss {
 		if ss[i].Signer == nil {
-			return nil, fmt.Errorf("NewSigner: key[%d] kid %q: %w", i, ss[i].KID, ErrNoSigningKey)
+			return nil, fmt.Errorf("NewSigner: key[%d] kid %q: %w", i, ss[i].KID, jose.ErrNoSigningKey)
 		}
 
 		// Derive algorithm from key type; validate caller's Alg if already set.
@@ -65,7 +66,7 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 			return nil, fmt.Errorf("NewSigner: key[%d]: %w", i, err)
 		}
 		if ss[i].Alg != "" && ss[i].Alg != alg {
-			return nil, fmt.Errorf("NewSigner: key[%d] alg %q expected %s: %w", i, ss[i].Alg, alg, ErrAlgConflict)
+			return nil, fmt.Errorf("NewSigner: key[%d] alg %q expected %s: %w", i, ss[i].Alg, alg, jose.ErrAlgConflict)
 		}
 		ss[i].Alg = alg
 
@@ -114,14 +115,14 @@ func (s *Signer) SignJWS(jws SignableJWS) error {
 // header, signs the payload, and stores the result via [SignableJWS].
 func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 	if pk.Signer == nil {
-		return fmt.Errorf("signWith: kid %q: %w", pk.KID, ErrNoSigningKey)
+		return fmt.Errorf("signWith: kid %q: %w", pk.KID, jose.ErrNoSigningKey)
 	}
 	hdr := jws.GetHeader()
 	switch {
 	case hdr.KID == "":
 		hdr.KID = pk.KID
 	case hdr.KID != pk.KID:
-		return fmt.Errorf("signWith: header kid %q vs key kid %q: %w", hdr.KID, pk.KID, ErrKIDConflict)
+		return fmt.Errorf("signWith: header kid %q vs key kid %q: %w", hdr.KID, pk.KID, jose.ErrKIDConflict)
 	}
 
 	alg, hash, ecKeySize, err := jwa.SigningParams(pk.Signer)
@@ -131,7 +132,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 
 	// Validate and set header algorithm.
 	if hdr.Alg != "" && hdr.Alg != alg {
-		return fmt.Errorf("signWith: key %s vs header %q: %w", alg, hdr.Alg, ErrAlgConflict)
+		return fmt.Errorf("signWith: key %s vs header %q: %w", alg, hdr.Alg, jose.ErrAlgConflict)
 	}
 	hdr.Alg = alg
 

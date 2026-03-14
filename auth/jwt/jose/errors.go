@@ -3,13 +3,10 @@
 // imports of its siblings), so every package in the module can import
 // it without creating cycles.
 //
-// All sentinel errors for the module live here so that callers can
-// match on a single import path regardless of which layer produced the
-// error. The jwt and jwk packages re-export every sentinel under their
-// own package name for convenience:
+// All sentinel errors for the module live here. Use [errors.Is] to
+// check for specific sentinels:
 //
-//	errors.Is(err, jwt.ErrAfterExp)   // works
-//	errors.Is(err, jose.ErrAfterExp)  // also works — same pointer
+//	if errors.Is(err, jose.ErrAfterExp) { /* token expired */ }
 package jose
 
 import (
@@ -21,44 +18,49 @@ import (
 // Returned by jwt.Decode and jwt.UnmarshalClaims when the compact token
 // or its components are malformed.
 var (
-	ErrMalformedToken   = errors.New("malformed token")
-	ErrInvalidHeader    = errors.New("invalid header")
-	ErrInvalidPayload   = errors.New("invalid payload")
-	ErrInvalidSignature = errors.New("invalid signature encoding")
+	ErrMalformedToken = errors.New("malformed token")
+	ErrInvalidHeader  = errors.New("invalid header")
+	ErrInvalidPayload = errors.New("invalid payload")
+)
+
+// --- Signature errors ---
+// Returned during signing, verification, and decoding when the
+// signature is malformed, cryptographically invalid, or cannot be
+// produced.
+var (
+	ErrSignatureInvalid = errors.New("signature invalid")
 )
 
 // --- Verification errors ---
 // Returned by jwt.Verifier.Verify and jwt.Verifier.VerifyJWT.
 var (
-	ErrMissingKID       = errors.New("missing kid")
-	ErrUnknownKID       = errors.New("unknown kid")
-	ErrSignatureInvalid = errors.New("signature invalid")
-	ErrKeyTypeMismatch  = errors.New("key type mismatch")
-	ErrCurveMismatch    = errors.New("curve mismatch")
-	ErrUnsupportedAlg   = errors.New("unsupported algorithm")
+	ErrMissingKID   = errors.New("missing kid")
+	ErrUnknownKID   = errors.New("unknown kid")
+	ErrUnsupportedAlg = errors.New("unsupported algorithm")
+)
+
+// --- Key / algorithm errors ---
+// Returned when the key type, curve, or algorithm is unsupported or
+// conflicts between the key and the operation being performed.
+var (
+	ErrUnsupportedKeyType = errors.New("unsupported key type")
+	ErrUnsupportedCurve   = errors.New("unsupported curve")
+	ErrAlgConflict        = errors.New("algorithm conflict")
+	ErrKIDConflict        = errors.New("kid conflict")
 )
 
 // --- Signing errors ---
 // Returned by jwt.NewSigner, jwt.Signer.SignJWS, and jwt.Signer.Sign.
 var (
 	ErrNoSigningKey = errors.New("no signing key")
-	ErrAlgConflict  = errors.New("algorithm conflict")
-	ErrKIDConflict  = errors.New("kid conflict")
-)
-
-// --- Key type / curve errors ---
-// Shared by jwt, jwk, and internal/jwa.
-var (
-	ErrUnsupportedKeyType = errors.New("unsupported key type")
-	ErrUnsupportedCurve   = errors.New("unsupported curve")
 )
 
 // --- Key parsing errors ---
 // Returned by jwk.PublicKey.UnmarshalJSON, jwk.PrivateKey.UnmarshalJSON,
 // and jwk.ReadFile.
 var (
-	ErrInvalidKey    = errors.New("invalid key")
-	ErrKeyTooSmall   = fmt.Errorf("%w: key too small", ErrInvalidKey)
+	ErrInvalidKey     = errors.New("invalid key")
+	ErrKeyTooSmall    = fmt.Errorf("%w: key too small", ErrInvalidKey)
 	ErrMissingKeyData = fmt.Errorf("%w: missing key data", ErrInvalidKey)
 )
 
