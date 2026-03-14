@@ -318,6 +318,57 @@ func TestCustomValidation(t *testing.T) {
 	}
 }
 
+// TestNBFValidation confirms that a token with nbf in the future is rejected,
+// and that a token with nbf in the past (or absent) is accepted.
+func TestNBFValidation(t *testing.T) {
+	now := time.Now()
+
+	base := AppClaims{
+		IDTokenClaims: jwt.IDTokenClaims{
+			Iss: "https://example.com",
+			Aud: jwt.Audience{"myapp"},
+			Exp: now.Add(time.Hour).Unix(),
+			Iat: now.Unix(),
+		},
+	}
+
+	rfc := &jwt.RFCValidator{
+		ValidatorCore: jwt.ValidatorCore{
+			Iss: []string{"https://example.com"},
+			Aud: []string{"myapp"},
+		},
+	}
+
+	// No nbf: should pass.
+	if errs, err := rfc.Validate(&base, now); err != nil {
+		t.Fatalf("expected no error without nbf: %v — errs: %v", err, errs)
+	}
+
+	// nbf in the past: should pass.
+	pastNBF := base
+	pastNBF.NBF = now.Add(-time.Hour).Unix()
+	if errs, err := rfc.Validate(&pastNBF, now); err != nil {
+		t.Fatalf("expected no error with past nbf: %v — errs: %v", err, errs)
+	}
+
+	// nbf in the future: must be rejected.
+	futureNBF := base
+	futureNBF.NBF = now.Add(time.Hour).Unix()
+	errs, err := rfc.Validate(&futureNBF, now)
+	if err == nil {
+		t.Fatal("expected error for future nbf")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "nbf") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected nbf error in: %v", errs)
+	}
+}
+
 // TestRFCValidator confirms that RFCValidator always checks exp/iat, checks
 // iss/aud/azp when configured, and skips sub/jti/auth_time/amr by default.
 func TestRFCValidator(t *testing.T) {

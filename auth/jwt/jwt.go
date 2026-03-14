@@ -274,16 +274,22 @@ func (a Audience) MarshalJSON() ([]byte, error) {
 //	}
 //	// AppClaims now satisfies Claims automatically.
 type IDTokenClaims struct {
-	Iss      string   `json:"iss"`
-	Sub      string   `json:"sub"`
-	Aud      Audience `json:"aud,omitempty"`
-	Exp      int64    `json:"exp"`
-	Iat      int64    `json:"iat"`
-	AuthTime int64    `json:"auth_time,omitempty"`
-	Nonce    string   `json:"nonce,omitempty"`
-	AMR      []string `json:"amr,omitempty"`
-	Azp      string   `json:"azp,omitempty"`
-	JTI      string   `json:"jti,omitempty"`
+	// RFC 7519 §4.1 registered claims — all OPTIONAL per the RFC;
+	// higher-level profiles (OIDC, RFC 9068) may require subsets.
+	Iss string   `json:"iss"`
+	Sub string   `json:"sub"`
+	Aud Audience `json:"aud,omitempty"`
+	Exp int64    `json:"exp"`
+	NBF int64    `json:"nbf,omitempty"` // Not Before: reject token before this Unix time
+	Iat int64    `json:"iat"`
+	JTI string   `json:"jti,omitempty"` // JWT ID: unique identifier for replay prevention
+
+	// OIDC Core §2 authentication event claims — all OPTIONAL per OIDC.
+	AuthTime int64    `json:"auth_time,omitempty"` // REQUIRED when max_age requested
+	Nonce    string   `json:"nonce,omitempty"`     // REQUIRED when sent in auth request
+	ACR      string   `json:"acr,omitempty"`       // Authentication Context Class Reference
+	AMR      []string `json:"amr,omitempty"`       // Authentication Methods References
+	Azp      string   `json:"azp,omitempty"`       // Authorized party (rare; see OIDC §2)
 }
 
 // StandardClaims extends [IDTokenClaims] with the OIDC Core §5.1 UserInfo
@@ -563,6 +569,7 @@ type ValidatorCore struct {
 	GracePeriod  time.Duration // 0 = DefaultGracePeriod (5s); negative = no tolerance
 	MaxAge       time.Duration
 	IgnoreExp    bool
+	IgnoreNBF    bool // rarely appropriate; nbf is a security boundary like exp
 	IgnoreIat    bool
 	Iss          []string // token's iss must appear in list (if set)
 	Aud          []string // token's aud must intersect list (if set)
@@ -571,14 +578,15 @@ type ValidatorCore struct {
 	MinAMRCount  int      // token's amr must have at least this many values; 0 = no minimum
 }
 
-// Validate checks exp, iat, and any configured value lists (iss, aud, azp, amr).
-// It does not check sub, jti, or auth_time — use [ValidatorStrict] or [ValidatorLax]
+// Validate checks exp, nbf, iat, and any configured value lists (iss, aud, azp, amr).
+// It does not check sub, jti, or auth_time — use [IDTokenValidator] or [RFCValidator]
 // for those.
 func (v *ValidatorCore) Validate(claims Claims, now time.Time) ([]string, error) {
 	return validateClaims(*claims.GetIDTokenClaims(), *v, claimChecks{
 		checkIss: len(v.Iss) > 0,
 		checkAud: len(v.Aud) > 0,
 		checkExp: !v.IgnoreExp,
+		checkNBF: !v.IgnoreNBF,
 		checkIat: !v.IgnoreIat,
 		checkAMR: len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
 		checkAzp: len(v.Azp) > 0,
@@ -616,6 +624,7 @@ func (v *IDTokenValidator) Validate(claims Claims, now time.Time) ([]string, err
 		checkSub:      !v.IgnoreSub,
 		checkAud:      !v.IgnoreAud,
 		checkExp:      !v.IgnoreExp,
+		checkNBF:      !v.IgnoreNBF,
 		checkIat:      !v.IgnoreIat,
 		checkJTI:      !v.IgnoreJTI,
 		checkAuthTime: !v.IgnoreAuthTime,
@@ -656,6 +665,7 @@ func (v *RFCValidator) Validate(claims Claims, now time.Time) ([]string, error) 
 		checkSub:      v.ExpectSub,
 		checkAud:      len(v.Aud) > 0,
 		checkExp:      !v.IgnoreExp,
+		checkNBF:      !v.IgnoreNBF,
 		checkIat:      !v.IgnoreIat,
 		checkJTI:      v.ExpectJTI,
 		checkAuthTime: v.ExpectAuthTime || v.MaxAge > 0,
@@ -665,13 +675,14 @@ func (v *RFCValidator) Validate(claims Claims, now time.Time) ([]string, error) 
 	}, now)
 }
 
-// claimChecks holds the resolved per-check flags computed from a [ValidatorStrict]
-// or [ValidatorLax] before passing to [validateClaims].
+// claimChecks holds the resolved per-check flags computed from a validator
+// before passing to [validateClaims].
 type claimChecks struct {
 	checkIss      bool
 	checkSub      bool
 	checkAud      bool
 	checkExp      bool
+	checkNBF      bool
 	checkIat      bool
 	checkJTI      bool
 	checkAuthTime bool
@@ -719,6 +730,16 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 			duration := now.Sub(time.Unix(claims.Exp, 0))
 			expTime := time.Unix(claims.Exp, 0).Format("2006-01-02 15:04:05 MST")
 			errs = append(errs, fmt.Sprintf("token expired %s ago (%s)", formatDuration(duration), expTime))
+		}
+	}
+
+	// nbf is only validated when present (non-zero); absence is never an error.
+	if checks.checkNBF && claims.NBF > 0 {
+		nbfTime := time.Unix(claims.NBF, 0)
+		if nbfTime.After(now.Add(skew)) {
+			fromNow := nbfTime.Sub(now)
+			nbfStr := nbfTime.Format("2006-01-02 15:04:05 MST")
+			errs = append(errs, fmt.Sprintf("token not yet valid: 'nbf' is %s in the future (%s)", formatDuration(fromNow), nbfStr))
 		}
 	}
 
