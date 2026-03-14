@@ -115,14 +115,14 @@ func (s *Signer) SignJWS(jws SignableJWS) error {
 // header, signs the payload, and stores the result via [SignableJWS].
 func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 	if pk.Signer == nil {
-		return fmt.Errorf("signWith: kid %q: %w", pk.KID, jose.ErrNoSigningKey)
+		return fmt.Errorf("kid %q: %w", pk.KID, jose.ErrNoSigningKey)
 	}
 	hdr := jws.GetHeader()
 	switch {
 	case hdr.KID == "":
 		hdr.KID = pk.KID
 	case hdr.KID != pk.KID:
-		return fmt.Errorf("signWith: header kid %q vs key kid %q: %w", hdr.KID, pk.KID, jose.ErrKIDConflict)
+		return fmt.Errorf("header kid %q vs key kid %q: %w", hdr.KID, pk.KID, jose.ErrKIDConflict)
 	}
 
 	alg, hash, ecKeySize, err := jwa.SigningParams(pk.Signer)
@@ -132,7 +132,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 
 	// Validate and set header algorithm.
 	if hdr.Alg != "" && hdr.Alg != alg {
-		return fmt.Errorf("signWith: key %s vs header %q: %w", alg, hdr.Alg, jose.ErrAlgConflict)
+		return fmt.Errorf("key %s vs header %q: %w", alg, hdr.Alg, jose.ErrAlgConflict)
 	}
 	hdr.Alg = alg
 
@@ -156,7 +156,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 		sig, err = pk.Signer.Sign(rand.Reader, input, crypto.Hash(0))
 	}
 	if err != nil {
-		return fmt.Errorf("signWith %s: %w", alg, err)
+		return fmt.Errorf("sign %s: %w", alg, err)
 	}
 
 	// ECDSA post-processing: crypto.Signer returns ASN.1 DER, but JWS

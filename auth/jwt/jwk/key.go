@@ -158,6 +158,8 @@ func (k PublicKey) Thumbprint() (string, error) {
 			Kty string `json:"kty"`
 			X   string `json:"x"`
 		}{Crv: rk.Crv, Kty: rk.Kty, X: rk.X})
+	default:
+		return "", fmt.Errorf("thumbprint: kty %q: %w", rk.Kty, jose.ErrUnsupportedKeyType)
 	}
 	if err != nil {
 		return "", fmt.Errorf("thumbprint: marshal canonical JSON: %w", err)
@@ -404,7 +406,7 @@ func ReadFile(filePath string) ([]PublicKey, error) {
 }
 
 // decodeOne parses a single rawKey wire struct into a [PublicKey].
-// KID auto-derivation from thumbprint is handled by [PublicKey.UnmarshalJSON].
+// If the JWK has no "kid" field, the KID is auto-computed via [PublicKey.Thumbprint].
 //
 // Supported key types:
 //   - "RSA" - minimum 1024-bit (RS256)
@@ -449,7 +451,8 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 }
 
 // decodePrivate parses a rawKey wire struct that contains private key material
-// into a [PrivateKey]. KID auto-derivation is handled by [PrivateKey.UnmarshalJSON].
+// into a [PrivateKey]. If the JWK has no "kid" field, the KID is auto-computed
+// via [PublicKey.Thumbprint]. Returns an error if the "d" field is missing.
 func decodePrivate(kj rawKey) (*PrivateKey, error) {
 	if kj.D == "" {
 		return nil, fmt.Errorf("\"d\" field missing: %w", jose.ErrMissingKeyData)
@@ -593,11 +596,11 @@ func decodeRSA(kj rawKey) (*rsa.PublicKey, error) {
 func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 	x, err := base64.RawURLEncoding.DecodeString(kj.X)
 	if err != nil {
-		return nil, fmt.Errorf("invalid ECDSA X: %w: %w", jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("invalid x: %w: %w", jose.ErrInvalidKey, err)
 	}
 	y, err := base64.RawURLEncoding.DecodeString(kj.Y)
 	if err != nil {
-		return nil, fmt.Errorf("invalid ECDSA Y: %w: %w", jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("invalid y: %w: %w", jose.ErrInvalidKey, err)
 	}
 
 	ci, err := jwa.ECInfoByCrv(kj.Crv)
@@ -631,7 +634,7 @@ func decodeOKP(kj rawKey) (ed25519.PublicKey, error) {
 	}
 	x, err := base64.RawURLEncoding.DecodeString(kj.X)
 	if err != nil {
-		return nil, fmt.Errorf("invalid OKP X: %w: %w", jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("invalid x: %w: %w", jose.ErrInvalidKey, err)
 	}
 	if len(x) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("Ed25519 key size %d bytes, want %d: %w", len(x), ed25519.PublicKeySize, jose.ErrInvalidKey)
