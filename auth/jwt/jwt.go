@@ -14,7 +14,7 @@
 // them). As a relying party you either hold known public keys at startup, or you
 // fetch them at runtime from a canonical JWKS endpoint.
 //
-//   - Issuer: use [NewSigner] → [Signer.Sign]; expose public keys via
+//   - Issuer: use [NewSigner] then [Signer.Sign]; expose public keys via
 //     json.Marshal(&signer) ([Signer] embeds [jwk.JWKs]) or hand them
 //     directly to [New] for a co-located verifier.
 //   - Relying party, known keys: use [New] with a []jwk.PublicKey slice.
@@ -27,11 +27,11 @@
 // and will be rejected at verification time. Supported algorithms are derived
 // automatically from the key type - you never configure alg directly:
 //
-//   - EC P-256  → ES256 (ECDSA + SHA-256, RFC 7518 §3.4)
-//   - EC P-384  → ES384 (ECDSA + SHA-384)
-//   - EC P-521  → ES512 (ECDSA + SHA-512)
-//   - RSA       → RS256 (PKCS#1 v1.5 + SHA-256, RFC 7518 §3.3)
-//   - Ed25519   → EdDSA (RFC 8037)
+//   - EC P-256  => ES256 (ECDSA + SHA-256, RFC 7518 §3.4)
+//   - EC P-384  => ES384 (ECDSA + SHA-384)
+//   - EC P-521  => ES512 (ECDSA + SHA-512)
+//   - RSA       => RS256 (PKCS#1 v1.5 + SHA-256, RFC 7518 §3.3)
+//   - Ed25519   => EdDSA (RFC 8037)
 //
 // During verification, the key type stored under the token's "kid" is checked
 // against the "alg" claim before any cryptographic operation is attempted.
@@ -43,11 +43,11 @@
 // automatically from the key type; KID comes from [jwk.PrivateKey.KID]; typ is
 // always "JWT". [Signer.SignJWS] handles all of this - you do not configure alg.
 //
-// You'll almost always need custom claims. [UnmarshalClaims] accepts any JWS and
-// any pointer - no interface to implement for decoding. Embed [IDTokenClaims] in
-// your struct to get the registered fields and satisfy [Claims] for free via
-// Go method promotion, with zero boilerplate. For OIDC UserInfo profile fields
-// (name, email, phone, etc.) embed [StandardClaims] instead.
+// You'll almost always need custom claims. [UnmarshalClaims] decodes the payload
+// into a [Claims] value. Embed [IDTokenClaims] in your struct to get the
+// registered fields and satisfy [Claims] for free via Go method promotion, with
+// zero boilerplate. For OIDC UserInfo profile fields (name, email, phone, etc.)
+// embed [StandardClaims] instead.
 //
 // Your custom claims validation logic is your own. [Verifier.VerifyJWT] authenticates the
 // signature; [UnmarshalClaims] decodes the payload; [IDTokenValidator.Validate]
@@ -121,13 +121,8 @@ type RawJWT struct {
 	signature []byte
 }
 
-// GetProtected returns the base64url-encoded protected header.
 func (raw *RawJWT) GetProtected() []byte { return raw.protected }
-
-// GetPayload returns the base64url-encoded payload.
-func (raw *RawJWT) GetPayload() []byte { return raw.payload }
-
-// GetSignature returns the decoded signature bytes.
+func (raw *RawJWT) GetPayload() []byte   { return raw.payload }
 func (raw *RawJWT) GetSignature() []byte { return raw.signature }
 
 // JWS is a decoded JSON Web Signature / JWT.
@@ -162,7 +157,7 @@ func (jws *JWS) MarshalHeader(hdr Header) ([]byte, error) {
 	return jws.protected, nil
 }
 
-// SetSignature stores the computed signature bytes. Implements [SignableJWS].
+// SetSignature implements [SignableJWS].
 func (jws *JWS) SetSignature(sig []byte) {
 	jws.signature = sig
 }
@@ -187,7 +182,10 @@ func UnmarshalStandardClaims(jws VerifiableJWS) (StandardClaims, error) {
 	return claims, UnmarshalClaims(jws, &claims)
 }
 
-// just so that we use the same pattern internally as anyone would use externally
+// jwsHeader is an example of the pattern callers use when embedding Header in
+// a custom JWS type. Embed Header, and all its fields are promoted through the
+// struct. To implement a custom JWS type, copy this struct and replace Header
+// embedding with whatever custom header fields you need.
 type jwsHeader struct {
 	Header
 }
@@ -352,18 +350,17 @@ func Decode(tokenStr string) (*JWS, error) {
 	return &jws, nil
 }
 
-// UnmarshalClaims decodes the payload of jws into v.
+// UnmarshalClaims decodes the payload of jws into claims.
 //
-// v must be a pointer to a struct (e.g. *AppClaims). Always call
-// [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before UnmarshalClaims to ensure
-// the signature is authenticated before trusting the payload. Works with any
-// [VerifiableJWS] implementation, not just [*JWS].
-func UnmarshalClaims(jws VerifiableJWS, v any) error {
+// Always call [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before
+// UnmarshalClaims - the signature must be authenticated before trusting the
+// payload. Works with any [VerifiableJWS] implementation, not just [*JWS].
+func UnmarshalClaims(jws VerifiableJWS, claims Claims) error {
 	payload, err := base64.RawURLEncoding.DecodeString(string(jws.GetPayload()))
 	if err != nil {
 		return fmt.Errorf("invalid claims encoding: %w", err)
 	}
-	if err := json.Unmarshal(payload, v); err != nil {
+	if err := json.Unmarshal(payload, claims); err != nil {
 		return fmt.Errorf("invalid claims JSON: %w", err)
 	}
 	return nil
@@ -517,7 +514,7 @@ func signingInputBytes(protected, payload []byte) []byte {
 // DefaultGracePeriod is the tolerance applied to exp, iat, and auth_time checks
 // when ValidatorCore.GracePeriod is zero. It accommodates typical clock skew
 // between distributed systems.
-const DefaultGracePeriod = 5 * time.Second
+var DefaultGracePeriod = 5 * time.Second
 
 // ValidatorCore holds configuration shared by [IDTokenValidator] and [RFCValidator].
 // It can also be used directly as a minimal validator.
@@ -785,7 +782,7 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 // [KeyFetcher.Verifier] to obtain one from a signer or remote JWKS endpoint.
 type Verifier struct {
 	pubKeys []jwk.PublicKey
-	keys    map[string]jwk.CryptoPublicKey // kid → key
+	keys    map[string]jwk.CryptoPublicKey // kid => key
 }
 
 // New creates a Verifier with an explicit set of public keys.

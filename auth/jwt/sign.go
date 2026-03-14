@@ -20,7 +20,7 @@ import (
 )
 
 // Signer manages one or more private signing keys and issues JWTs by
-// round-robining across them. It is the issuing side of a JWT issuer —
+// round-robining across them. It is the issuing side of a JWT issuer -
 // the party that signs tokens with a private key and publishes the
 // corresponding public keys.
 //
@@ -28,9 +28,9 @@ import (
 //
 //	json.Marshal(&signer)
 //
-// Do not copy a Signer after first use — it contains an atomic counter.
+// Do not copy a Signer after first use - it contains an atomic counter.
 type Signer struct {
-	jwk.JWKs              // Keys []jwk.PublicKey — promoted; marshals as {"keys":[...]}
+	jwk.JWKs              // Keys []jwk.PublicKey - promoted; marshals as {"keys":[...]}
 	keys      []jwk.PrivateKey
 	signerIdx atomic.Uint64
 }
@@ -94,7 +94,6 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 	}, nil
 }
 
-// algForSigner returns the JWS algorithm string for the given crypto.Signer's key type.
 func algForSigner(s crypto.Signer) (string, error) {
 	switch pub := s.Public().(type) {
 	case *ecdsa.PublicKey:

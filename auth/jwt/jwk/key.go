@@ -20,7 +20,7 @@
 // For signing, use [PrivateKey] which wraps a [crypto.Signer] and derives its
 // [PublicKey] on demand via [PrivateKey.PublicKey].
 //
-// JSON encoding and decoding are handled transparently — there are no exported
+// JSON encoding and decoding are handled transparently - there are no exported
 // wire types to deal with.
 package jwk
 
@@ -52,10 +52,10 @@ type CryptoPublicKey interface {
 //
 // PublicKey is the in-memory representation of a JWK.
 // [PublicKey.KeyType] returns the JWK kty string ("EC", "RSA", or "OKP").
-// To access the raw Go key, type-switch on [PublicKey.CryptoPublicKey] —
+// To access the raw Go key, type-switch on [PublicKey.CryptoPublicKey] -
 // see [PublicKey.KeyType] for an example.
 //
-// For signing keys, use [PrivateKey] instead — it holds the [crypto.Signer]
+// For signing keys, use [PrivateKey] instead - it holds the [crypto.Signer]
 // and derives a PublicKey on demand.
 type PublicKey struct {
 	CryptoPublicKey
@@ -131,9 +131,9 @@ func (k *PublicKey) UnmarshalJSON(data []byte) error {
 // https://www.rfc-editor.org/rfc/rfc7638.html
 //
 // Canonical forms per RFC 7638:
-//   - EC:  {"crv":…, "kty":"EC", "x":…, "y":…}
-//   - RSA: {"e":…, "kty":"RSA", "n":…}
-//   - OKP: {"crv":"Ed25519", "kty":"OKP", "x":…}
+//   - EC:  {"crv":..., "kty":"EC", "x":..., "y":...}
+//   - RSA: {"e":..., "kty":"RSA", "n":...}
+//   - OKP: {"crv":"Ed25519", "kty":"OKP", "x":...}
 func (k PublicKey) Thumbprint() (string, error) {
 	var canonical []byte
 	var err error
@@ -213,7 +213,7 @@ func (k PublicKey) Thumbprint() (string, error) {
 // PrivateKey implements [json.Marshaler] and [json.Unmarshaler]:
 // marshaling includes the private key material (the "d" field and RSA primes);
 // unmarshaling reconstructs a fully operational signing key from a JWK with
-// private fields present. Never publish the marshaled output — it contains
+// private fields present. Never publish the marshaled output - it contains
 // private key material.
 //
 // Because crypto.Signer is embedded, PrivateKey itself satisfies crypto.Signer:
@@ -227,10 +227,9 @@ type PrivateKey struct {
 }
 
 // PublicKey derives the [PublicKey] for this signing key.
-//
 // KID, Use, and Alg are copied directly. KeyOps are translated to their
-// public-key equivalents: "sign"→"verify", "decrypt"→"encrypt",
-// "unwrapKey"→"wrapKey". Any op with no public equivalent is omitted.
+// public-key equivalents: "sign"=>"verify", "decrypt"=>"encrypt",
+// "unwrapKey"=>"wrapKey". Any op with no public equivalent is omitted.
 func (k *PrivateKey) PublicKey() *PublicKey {
 	pub, _ := k.Signer.Public().(CryptoPublicKey)
 	return &PublicKey{
@@ -259,7 +258,7 @@ func toPublicKeyOps(ops []string) []string {
 		case "unwrapKey":
 			out = append(out, "wrapKey")
 		case "verify", "encrypt", "wrapKey":
-			// Already a public-key op — pass through.
+			// Already a public-key op - pass through.
 			out = append(out, op)
 		}
 	}
@@ -298,7 +297,7 @@ func NewPrivateKey() (*PrivateKey, error) {
 
 // MarshalJSON implements [json.Marshaler], encoding the key as a JWK JSON object
 // that includes private key material (the "d" field and RSA CRT components).
-// Never publish the result — it contains the private key.
+// Never publish the result - it contains the private key.
 func (k PrivateKey) MarshalJSON() ([]byte, error) {
 	pk, err := encodePrivate(k)
 	if err != nil {
@@ -354,7 +353,7 @@ type rawKey struct {
 	KeyOps []string `json:"key_ops,omitempty"`
 }
 
-// JWKs is a JSON Web Key Set. Use json.Marshal and json.Unmarshal directly —
+// JWKs is a JSON Web Key Set. Use json.Marshal and json.Unmarshal directly -
 // each [PublicKey] in Keys handles its own encoding via MarshalJSON / UnmarshalJSON.
 type JWKs struct {
 	Keys []PublicKey `json:"keys"`
@@ -504,9 +503,9 @@ func ReadFile(filePath string) ([]PublicKey, error) {
 // KID auto-derivation from thumbprint is handled by [PublicKey.UnmarshalJSON].
 //
 // Supported key types:
-//   - "RSA" — minimum 1024-bit (RS256)
-//   - "EC"  — P-256, P-384, P-521 (ES256, ES384, ES512)
-//   - "OKP" — Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
+//   - "RSA" - minimum 1024-bit (RS256)
+//   - "EC"  - P-256, P-384, P-521 (ES256, ES384, ES512)
+//   - "OKP" - Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
 func decodeOne(kj rawKey) (*PublicKey, error) {
 	switch kj.Kty {
 	case "RSA":

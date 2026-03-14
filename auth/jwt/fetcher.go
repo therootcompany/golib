@@ -41,7 +41,7 @@ type cachedVerifier struct {
 // InitialKeys, if set, pre-populate the cache as immediately stale on the
 // first call to [KeyFetcher.Verifier]. Combined with KeepOnError=true and a
 // positive StaleAge, they are served immediately while a background refresh
-// fetches fresh keys — useful for bootstrapping auth without a blocking fetch
+// fetches fresh keys - useful for bootstrapping auth without a blocking fetch
 // at startup.
 //
 // There is no persistent background goroutine: refreshes are started on
@@ -83,7 +83,7 @@ type KeyFetcher struct {
 	// enables TCP connection pooling across refreshes.
 	//
 	// The client's Timeout controls how long a refresh may run. A long value
-	// (e.g. 120s) is appropriate — JWKS fetching is not tied to individual
+	// (e.g. 120s) is appropriate - JWKS fetching is not tied to individual
 	// request lifetimes and should be allowed to eventually succeed.
 	HTTPClient *http.Client
 
@@ -122,7 +122,7 @@ func (f *KeyFetcher) Verifier() (*Verifier, error) {
 	}
 
 	// Stale path: return immediately and refresh in the background.
-	// ctrlMu is held only briefly — it never blocks on an in-progress HTTP fetch.
+	// ctrlMu is held only briefly - it never blocks on an in-progress HTTP fetch.
 	if ci != nil && f.KeepOnError && now.Before(ci.expiresAt.Add(f.StaleAge)) {
 		f.ctrlMu.Lock()
 		if !f.refreshing {
@@ -134,13 +134,13 @@ func (f *KeyFetcher) Verifier() (*Verifier, error) {
 		return ci.iss, lastErr
 	}
 
-	// Blocking path: no usable cache — wait for a fetch.
+	// Blocking path: no usable cache - wait for a fetch.
 	// fetchMu serializes concurrent blocking callers; the re-check prevents
 	// a redundant fetch if another goroutine already refreshed.
 	f.fetchMu.Lock()
 	defer f.fetchMu.Unlock()
 
-	// Re-check after acquiring lock — another goroutine may have refreshed.
+	// Re-check after acquiring lock - another goroutine may have refreshed.
 	now = time.Now()
 	if ci := f.cached.Load(); ci != nil && now.Before(ci.expiresAt) {
 		return ci.iss, nil
@@ -190,7 +190,7 @@ func (f *KeyFetcher) maybeInit() {
 		ci := &cachedVerifier{
 			iss:       New(f.InitialKeys),
 			fetchedAt: now,
-			expiresAt: now, // immediately expired — served as stale, triggers background refresh
+			expiresAt: now, // immediately expired - served as stale, triggers background refresh
 		}
 		f.cached.Store(ci)
 	})

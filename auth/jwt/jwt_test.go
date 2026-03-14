@@ -28,14 +28,14 @@ import (
 // AppClaims embeds IDTokenClaims and adds application-specific fields.
 //
 // Because IDTokenClaims is embedded, AppClaims satisfies Claims
-// for free via Go's method promotion — no interface to implement.
+// for free via Go's method promotion - no interface to implement.
 type AppClaims struct {
 	jwt.IDTokenClaims
 	Email string   `json:"email"`
 	Roles []string `json:"roles"`
 }
 
-// validateAppClaims is a plain function — not a method satisfying an interface.
+// validateAppClaims is a plain function - not a method satisfying an interface.
 // It demonstrates the Decode+Verify pattern: custom validation logic lives here,
 // calling Validator.Validate and adding app-specific checks.
 func validateAppClaims(c AppClaims, v *jwt.IDTokenValidator, now time.Time) ([]string, error) {
@@ -87,7 +87,7 @@ func goodVerifier(pub jwk.PublicKey) *jwt.Verifier {
 }
 
 // TestRoundTrip is the primary happy path using ES256.
-// It demonstrates the full Verify → UnmarshalClaims → Validate flow.
+// It demonstrates the full Verify / UnmarshalClaims / Validate flow.
 func TestRoundTrip(t *testing.T) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -128,7 +128,7 @@ func TestRoundTrip(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatalf("claim validation failed: %v", errs)
 	}
-	// Direct field access — no type assertion needed.
+	// Direct field access - no type assertion needed.
 	if decoded.Email != claims.Email {
 		t.Errorf("email: got %s, want %s", decoded.Email, claims.Email)
 	}
@@ -238,7 +238,7 @@ func TestDecodeVerifyFlow(t *testing.T) {
 
 	errs, err := goodValidator().Validate(&decoded, time.Now())
 	if err != nil {
-		t.Fatalf("Validate failed: %v — errs: %v", err, errs)
+		t.Fatalf("Validate failed: %v - errs: %v", err, errs)
 	}
 }
 
@@ -253,7 +253,7 @@ func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	// Verifier has wrong public key — sig verification will fail.
+	// Verifier has wrong public key - sig verification will fail.
 	iss := jwt.New([]jwk.PublicKey{{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"}})
 
 	// Decode always succeeds for well-formed tokens.
@@ -279,7 +279,7 @@ func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 func TestCustomValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	// Token with empty Email — our custom validator should reject it.
+	// Token with empty Email - our custom validator should reject it.
 	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
 	claims := goodClaims()
 	claims.Email = ""
@@ -335,14 +335,14 @@ func TestNBFValidation(t *testing.T) {
 
 	// No nbf: should pass.
 	if errs, err := rfc.Validate(&base, now); err != nil {
-		t.Fatalf("expected no error without nbf: %v — errs: %v", err, errs)
+		t.Fatalf("expected no error without nbf: %v - errs: %v", err, errs)
 	}
 
 	// nbf in the past: should pass.
 	pastNBF := base
 	pastNBF.NBF = now.Add(-time.Hour).Unix()
 	if errs, err := rfc.Validate(&pastNBF, now); err != nil {
-		t.Fatalf("expected no error with past nbf: %v — errs: %v", err, errs)
+		t.Fatalf("expected no error with past nbf: %v - errs: %v", err, errs)
 	}
 
 	// nbf in the future: must be rejected.
@@ -389,7 +389,7 @@ func TestRFCValidator(t *testing.T) {
 
 	errs, err := rfc.Validate(&minimal, now)
 	if err != nil {
-		t.Fatalf("RFCValidator rejected minimal valid claims: %v — errs: %v", err, errs)
+		t.Fatalf("RFCValidator rejected minimal valid claims: %v - errs: %v", err, errs)
 	}
 
 	// Expired token must still be rejected.
@@ -429,7 +429,7 @@ func TestRFCValidator(t *testing.T) {
 }
 
 // TestVerifyWithoutValidation confirms that Verify + UnmarshalClaims succeeds
-// independently of claim validation — the caller decides whether to validate.
+// independently of claim validation - the caller decides whether to validate.
 func TestVerifyWithoutValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
@@ -503,7 +503,7 @@ func TestVerifierIssMismatch(t *testing.T) {
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 
-	// Decode+Verify succeeds — iss is not checked at the Verifier level.
+	// Decode+Verify succeeds - iss is not checked at the Verifier level.
 	parsed, err := jwt.Decode(token)
 	if err != nil {
 		t.Fatal(err)
@@ -549,7 +549,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 
 	// Replace the protected header with one that has alg:"none".
-	// The original ES256 signature stays — the signing input will mismatch.
+	// The original ES256 signature stays - the signing input will mismatch.
 	noneHeader := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","kid":"k","typ":"JWT"}`))
 	parts := strings.SplitN(token, ".", 3)
 	tamperedToken := noneHeader + "." + parts[1] + "." + parts[2]
@@ -563,7 +563,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	}
 }
 
-// TestSignerRoundTrip verifies the Signer → Sign → Verifier → Verify → Validate flow.
+// TestSignerRoundTrip verifies the Signer / Sign / Verifier / Verify / Validate flow.
 func TestSignerRoundTrip(t *testing.T) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -733,16 +733,16 @@ func TestKeyType(t *testing.T) {
 }
 
 // TestPublicKeyOps verifies that PrivateKey.PublicKey() translates key_ops to their
-// public-key counterparts ("sign"→"verify", "decrypt"→"encrypt", "unwrapKey"→"wrapKey").
+// public-key counterparts ("sign"=>"verify", "decrypt"=>"encrypt", "unwrapKey"=>"wrapKey").
 func TestPublicKeyOps(t *testing.T) {
 	tests := []struct {
 		name       string
 		privateOps []string
 		wantOps    []string
 	}{
-		{"sign→verify", []string{"sign"}, []string{"verify"}},
-		{"decrypt→encrypt", []string{"decrypt"}, []string{"encrypt"}},
-		{"unwrapKey→wrapKey", []string{"unwrapKey"}, []string{"wrapKey"}},
+		{"sign=>verify", []string{"sign"}, []string{"verify"}},
+		{"decrypt=>encrypt", []string{"decrypt"}, []string{"encrypt"}},
+		{"unwrapKey=>wrapKey", []string{"unwrapKey"}, []string{"wrapKey"}},
 		{"multiple", []string{"sign", "decrypt"}, []string{"verify", "encrypt"}},
 		{"public op passthrough", []string{"verify"}, []string{"verify"}},
 		{"no public equivalent dropped", []string{"deriveKey"}, nil},
@@ -843,7 +843,7 @@ func TestThumbprint(t *testing.T) {
 			if strings.Contains(thumb, "+") || strings.Contains(thumb, "/") || strings.Contains(thumb, "=") {
 				t.Errorf("Thumbprint() contains non-base64url characters: %s", thumb)
 			}
-			// Same key → same thumbprint
+			// Same key, same thumbprint
 			thumb2, _ := tt.jwk.Thumbprint()
 			if thumb != thumb2 {
 				t.Errorf("Thumbprint() not deterministic: %s != %s", thumb, thumb2)
