@@ -65,7 +65,8 @@ import (
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
-// JWS is the interface implemented by [*StandardJWS] and any custom JWS type.
+// JWS is the read-only interface implemented by [*StandardJWS] and any custom
+// JWS type. It exposes only the parsed header and payload — no mutation.
 //
 // Custom implementations can embed [StandardHeader] to satisfy
 // [JWS.GetStandardHeader] for free via Go method promotion — similar to
@@ -79,6 +80,17 @@ type JWS interface {
 	GetPayload() []byte
 	GetSignature() []byte
 	GetStandardHeader() *StandardHeader
+}
+
+// SignableJWS extends [JWS] with the ability to be signed in-place.
+// [*StandardJWS] implements both [JWS] and [SignableJWS].
+//
+// Custom JWS types that need to participate in [Signer.SignJWS] should
+// implement SignWith — typically by mutating their own header and storing
+// the signature.
+type SignableJWS interface {
+	JWS
+	SignWith(pk *jwk.PrivateKey) ([]byte, error)
 }
 
 // StandardJWS is a decoded JSON Web Signature / JWT.
@@ -298,14 +310,14 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 	return &jws, nil
 }
 
-// Sign signs the JWS in-place using pk.
+// SignWith signs the JWS in-place using pk. It implements [SignableJWS].
 //
 // pk must be a non-nil [jwk.PrivateKey]. The KID is taken from pk.KID:
 // if jws.Header.KID is empty it is set automatically; if it is already set to a
-// different value, Sign returns an error.
+// different value, SignWith returns an error.
 //
 // If jws.Header.Alg is already set to a value that is incompatible with the
-// key type, Sign returns an error.
+// key type, SignWith returns an error.
 //
 // Supported algorithms (inferred from key type):
 //   - *ecdsa.PrivateKey P-256  → ES256 (SHA-256, raw r||s)
@@ -314,15 +326,15 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 //   - *rsa.PrivateKey           → RS256 (PKCS#1 v1.5 + SHA-256)
 //   - ed25519.PrivateKey         → EdDSA (Ed25519, RFC 8037)
 //     https://www.rfc-editor.org/rfc/rfc8037.html
-func (jws *StandardJWS) Sign(pk *jwk.PrivateKey) ([]byte, error) {
+func (jws *StandardJWS) SignWith(pk *jwk.PrivateKey) ([]byte, error) {
 	if pk.Signer == nil {
-		return nil, fmt.Errorf("Sign: key %q has no Signer", pk.KID)
+		return nil, fmt.Errorf("SignWith: key %q has no Signer", pk.KID)
 	}
 	switch {
 	case jws.header.KID == "":
 		jws.header.KID = pk.KID
 	case jws.header.KID != pk.KID:
-		return nil, fmt.Errorf("Sign: header kid %q conflicts with key KID %q", jws.header.KID, pk.KID)
+		return nil, fmt.Errorf("SignWith: header kid %q conflicts with key KID %q", jws.header.KID, pk.KID)
 	}
 
 	switch pub := pk.Signer.Public().(type) {
@@ -332,7 +344,7 @@ func (jws *StandardJWS) Sign(pk *jwk.PrivateKey) ([]byte, error) {
 			return nil, err
 		}
 		if jws.header.Alg != "" && jws.header.Alg != alg {
-			return nil, fmt.Errorf("Sign: key alg %s incompatible with header alg %q", alg, jws.header.Alg)
+			return nil, fmt.Errorf("SignWith: key alg %s incompatible with header alg %q", alg, jws.header.Alg)
 		}
 		jws.header.Alg = alg
 		headerJSON, err := json.Marshal(jws.header)
@@ -348,14 +360,14 @@ func (jws *StandardJWS) Sign(pk *jwk.PrivateKey) ([]byte, error) {
 		// crypto.Signer returns ASN.1 DER for ECDSA; convert to raw r||s for JWS.
 		derSig, err := pk.Signer.Sign(rand.Reader, digest, h)
 		if err != nil {
-			return nil, fmt.Errorf("Sign %s: %w", alg, err)
+			return nil, fmt.Errorf("SignWith %s: %w", alg, err)
 		}
 		jws.signature, err = ecdsaDERToRaw(derSig, pub.Curve)
 		return jws.signature, err
 
 	case *rsa.PublicKey:
 		if jws.header.Alg != "" && jws.header.Alg != "RS256" {
-			return nil, fmt.Errorf("Sign: RSA key incompatible with header alg %q (expected RS256)", jws.header.Alg)
+			return nil, fmt.Errorf("SignWith: RSA key incompatible with header alg %q (expected RS256)", jws.header.Alg)
 		}
 		jws.header.Alg = "RS256"
 		headerJSON, err := json.Marshal(jws.header)
@@ -374,7 +386,7 @@ func (jws *StandardJWS) Sign(pk *jwk.PrivateKey) ([]byte, error) {
 
 	case ed25519.PublicKey:
 		if jws.header.Alg != "" && jws.header.Alg != "EdDSA" {
-			return nil, fmt.Errorf("Sign: Ed25519 key incompatible with header alg %q (expected EdDSA)", jws.header.Alg)
+			return nil, fmt.Errorf("SignWith: Ed25519 key incompatible with header alg %q (expected EdDSA)", jws.header.Alg)
 		}
 		jws.header.Alg = "EdDSA"
 		headerJSON, err := json.Marshal(jws.header)

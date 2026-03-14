@@ -101,7 +101,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err = jws.Sign(pk); err != nil {
+	if _, err = jws.SignWith(pk); err != nil {
 		t.Fatal(err)
 	}
 	if jws.GetStandardHeader().Alg != "ES256" {
@@ -148,7 +148,7 @@ func TestRoundTripRS256(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err = jws.Sign(pk); err != nil {
+	if _, err = jws.SignWith(pk); err != nil {
 		t.Fatal(err)
 	}
 	if jws.GetStandardHeader().Alg != "RS256" {
@@ -187,7 +187,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err = jws.Sign(pk); err != nil {
+	if _, err = jws.SignWith(pk); err != nil {
 		t.Fatal(err)
 	}
 	if jws.GetStandardHeader().Alg != "EdDSA" {
@@ -220,7 +220,7 @@ func TestDecodeVerifyFlow(t *testing.T) {
 	claims := goodClaims()
 	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.Sign(pk)
+	_, _ = jws.SignWith(pk)
 	token := jws.Encode()
 
 	iss := jwt.New([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
@@ -254,7 +254,7 @@ func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	claims := goodClaims()
 	pk := &jwk.PrivateKey{KID: "k", Signer: signingKey}
 	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.Sign(pk)
+	_, _ = jws.SignWith(pk)
 	token := jws.Encode()
 
 	// Verifier has wrong public key — sig verification will fail.
@@ -288,7 +288,7 @@ func TestCustomValidation(t *testing.T) {
 	claims.Email = ""
 	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.Sign(pk)
+	_, _ = jws.SignWith(pk)
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
@@ -413,7 +413,7 @@ func TestVerifyWithoutValidation(t *testing.T) {
 	c := goodClaims()
 	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&c)
-	_, _ = jws.Sign(pk)
+	_, _ = jws.SignWith(pk)
 	token := jws.Encode()
 
 	iss := jwt.New([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
@@ -439,7 +439,7 @@ func TestVerifierWrongKey(t *testing.T) {
 	claims := goodClaims()
 	pk := &jwk.PrivateKey{KID: "k", Signer: signingKey}
 	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.Sign(pk)
+	_, _ = jws.SignWith(pk)
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"})
@@ -460,7 +460,7 @@ func TestVerifierUnknownKid(t *testing.T) {
 	claims := goodClaims()
 	pk := &jwk.PrivateKey{KID: "unknown-kid", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.Sign(pk)
+	_, _ = jws.SignWith(pk)
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "known-kid"})
@@ -484,7 +484,7 @@ func TestVerifierIssMismatch(t *testing.T) {
 	claims.Iss = "https://evil.example.com"
 	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.Sign(pk)
+	_, _ = jws.SignWith(pk)
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
@@ -531,7 +531,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	claims := goodClaims()
 	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
 	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.Sign(pk)
+	_, _ = jws.SignWith(pk)
 	token := jws.Encode()
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})

@@ -113,13 +113,13 @@ func algForSigner(s crypto.Signer) (string, error) {
 // and returns the signature bytes.
 //
 // The KID and alg header fields are set automatically from the selected key.
-// Use this when you need the full signed *StandardJWS for further processing
+// Use this when you need the full signed JWS for further processing
 // (e.g., inspecting headers before encoding). For the common one-step cases,
 // prefer [Signer.Sign] or [Signer.SignToString].
-func (s *Signer) SignJWS(jws *StandardJWS) ([]byte, error) {
+func (s *Signer) SignJWS(jws SignableJWS) ([]byte, error) {
 	idx := s.signerIdx.Add(1) - 1
 	pk := &s.keys[idx%uint64(len(s.keys))]
-	return jws.Sign(pk)
+	return jws.SignWith(pk)
 }
 
 // Sign creates a StandardJWS from claims, signs it with the next signing key,
