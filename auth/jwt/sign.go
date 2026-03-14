@@ -10,13 +10,11 @@ package jwt
 
 import (
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/rsa"
 	"fmt"
 	"sync/atomic"
 
+	"github.com/therootcompany/golib/auth/jwt/internal/jwa"
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
@@ -62,9 +60,9 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 		}
 
 		// Derive algorithm from key type; validate caller's Alg if already set.
-		alg, err := algForSigner(ss[i].Signer)
+		alg, _, _, err := jwa.SigningParams(ss[i].Signer)
 		if err != nil {
-			return nil, fmt.Errorf("NewSigner: key[%d]: %w", i, err)
+			return nil, fmt.Errorf("NewSigner: key[%d]: %w: %w", i, ErrUnsupportedKey, err)
 		}
 		if ss[i].Alg != "" && ss[i].Alg != alg {
 			return nil, fmt.Errorf("NewSigner: key[%d] alg %q expected %s: %w", i, ss[i].Alg, alg, ErrAlgConflict)
@@ -98,20 +96,6 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 	}, nil
 }
 
-func algForSigner(s crypto.Signer) (string, error) {
-	switch pub := s.Public().(type) {
-	case *ecdsa.PublicKey:
-		ci, err := ecKeyInfo(pub)
-		return ci.Alg, err
-	case *rsa.PublicKey:
-		return "RS256", nil
-	case ed25519.PublicKey:
-		return "EdDSA", nil
-	default:
-		return "", fmt.Errorf("%T: %w", pub, ErrUnsupportedKey)
-	}
-}
-
 // SignJWS signs jws in-place using the next signing key in round-robin order
 // and returns the signature bytes.
 //
@@ -128,10 +112,6 @@ func (s *Signer) SignJWS(jws SignableJWS) error {
 // signWith is the shared implementation used by [Signer.SignJWS]. It derives
 // the algorithm from the key type, validates any pre-set alg/kid in the JWS
 // header, signs the payload, and stores the result via [SignableJWS].
-//
-// We type-switch on .Public() (not on pk.Signer directly) so that non-standard
-// crypto.Signer implementations (KMS, HSM) work as long as they expose a
-// standard public key type.
 func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 	if pk.Signer == nil {
 		return fmt.Errorf("signWith: kid %q: %w", pk.KID, ErrNoSigningKey)
@@ -144,24 +124,9 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 		return fmt.Errorf("signWith: header kid %q vs key kid %q: %w", hdr.KID, pk.KID, ErrKIDConflict)
 	}
 
-	// Determine signing parameters from the key type.
-	var alg string
-	var hash crypto.Hash // 0 = sign raw message (Ed25519)
-	var ecKeySize int    // >0 = ECDSA: need DER-to-P1363 post-processing
-
-	switch pub := pk.Signer.Public().(type) {
-	case *ecdsa.PublicKey:
-		ci, err := ecKeyInfo(pub)
-		if err != nil {
-			return err
-		}
-		alg, hash, ecKeySize = ci.Alg, ci.Hash, ci.KeySize
-	case *rsa.PublicKey:
-		alg, hash = "RS256", crypto.SHA256
-	case ed25519.PublicKey:
-		alg = "EdDSA"
-	default:
-		return fmt.Errorf("signWith: %T: %w", pk.Signer.Public(), ErrUnsupportedKey)
+	alg, hash, ecKeySize, err := jwa.SigningParams(pk.Signer)
+	if err != nil {
+		return fmt.Errorf("signWith: %w: %w", ErrUnsupportedKey, err)
 	}
 
 	// Validate and set header algorithm.
@@ -180,7 +145,8 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 	// Sign: pre-hash for EC/RSA, or sign raw for Ed25519.
 	var sig []byte
 	if hash != 0 {
-		digest, err := digestFor(hash, input)
+		var digest []byte
+		digest, err = digestFor(hash, input)
 		if err != nil {
 			return err
 		}

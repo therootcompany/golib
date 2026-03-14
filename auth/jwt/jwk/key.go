@@ -38,7 +38,7 @@ import (
 	"math/big"
 	"os"
 
-	"github.com/therootcompany/golib/auth/jwt/internal/ecutil"
+	"github.com/therootcompany/golib/auth/jwt/internal/jwa"
 )
 
 // CryptoPublicKey is the constraint for public key types stored in [PublicKey].
@@ -678,18 +678,18 @@ func decodeOKP(kj rawKey) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(x), nil
 }
 
-// curveInfo wraps ecutil.Info with jwk sentinel errors.
-func curveInfo(curve elliptic.Curve) (ecutil.CurveInfo, error) {
-	ci, err := ecutil.Info(curve)
+// curveInfo wraps jwa.ECInfo with jwk sentinel errors.
+func curveInfo(curve elliptic.Curve) (jwa.CurveInfo, error) {
+	ci, err := jwa.ECInfo(curve)
 	if err != nil {
 		return ci, fmt.Errorf("EC curve %s: %w", curve.Params().Name, ErrUnsupportedCurve)
 	}
 	return ci, nil
 }
 
-// curveInfoByCrv wraps ecutil.InfoByCrv with jwk sentinel errors.
-func curveInfoByCrv(crv string) (ecutil.CurveInfo, error) {
-	ci, err := ecutil.InfoByCrv(crv)
+// curveInfoByCrv wraps jwa.ECInfoByCrv with jwk sentinel errors.
+func curveInfoByCrv(crv string) (jwa.CurveInfo, error) {
+	ci, err := jwa.ECInfoByCrv(crv)
 	if err != nil {
 		return ci, fmt.Errorf("EC crv %q: %w", crv, ErrUnsupportedCurve)
 	}

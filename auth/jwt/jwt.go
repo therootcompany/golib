@@ -139,7 +139,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/therootcompany/golib/auth/jwt/internal/ecutil"
+	"github.com/therootcompany/golib/auth/jwt/internal/jwa"
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
@@ -912,9 +912,9 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 		if !ok {
 			return fmt.Errorf("alg %s requires *ecdsa.PublicKey, got %T: %w", alg, key, ErrKeyTypeMismatch)
 		}
-		ci, err := ecKeyInfo(k)
+		ci, err := jwa.ECInfo(k.Curve)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %w", jwk.ErrUnsupportedCurve, err)
 		}
 		if ci.Alg != alg {
 			return fmt.Errorf("key is %s, token alg is %s: %w", ci.Alg, alg, ErrCurveMismatch)
@@ -963,16 +963,6 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 }
 
 // --- Internal helpers ---
-
-// ecKeyInfo returns the curve metadata for an ECDSA public key,
-// wrapping any error with the jwt-package sentinel [ErrUnsupportedKey].
-func ecKeyInfo(pub *ecdsa.PublicKey) (ecutil.CurveInfo, error) {
-	ci, err := ecutil.Info(pub.Curve)
-	if err != nil {
-		return ci, fmt.Errorf("EC curve %s: %w", pub.Curve.Params().Name, ErrUnsupportedKey)
-	}
-	return ci, nil
-}
 
 func digestFor(h crypto.Hash, data []byte) ([]byte, error) {
 	if !h.Available() {
