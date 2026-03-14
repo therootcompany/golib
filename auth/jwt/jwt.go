@@ -275,7 +275,6 @@ type IDTokenClaims struct {
 	// OIDC Core §2 authentication event claims — all OPTIONAL per OIDC.
 	AuthTime int64    `json:"auth_time,omitempty"` // REQUIRED when max_age requested
 	Nonce    string   `json:"nonce,omitempty"`     // REQUIRED when sent in auth request
-	ACR      string   `json:"acr,omitempty"`       // Authentication Context Class Reference
 	AMR      []string `json:"amr,omitempty"`       // Authentication Methods References
 	Azp      string   `json:"azp,omitempty"`       // Authorized party (rare; see OIDC §2)
 }
@@ -313,8 +312,8 @@ type StandardClaims struct {
 	// Locale / time fields
 	Gender    string `json:"gender,omitempty"`
 	Birthdate string `json:"birthdate,omitempty"` // YYYY, YYYY-MM, or YYYY-MM-DD (§5.1)
-	Zoneinfo  string `json:"zoneinfo,omitempty"` // IANA tz, e.g. "Europe/Paris"
-	Locale    string `json:"locale,omitempty"`   // BCP 47, e.g. "en-US"
+	Zoneinfo  string `json:"zoneinfo,omitempty"`  // IANA tz, e.g. "Europe/Paris"
+	Locale    string `json:"locale,omitempty"`    // BCP 47, e.g. "en-US"
 
 	UpdatedAt int64 `json:"updated_at,omitempty"` // seconds since Unix epoch
 }
@@ -407,12 +406,14 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 }
 
 // Encode produces the compact JWT string (header.payload.signature).
-func (jws *StandardJWS) Encode() string {
-	sig := base64.RawURLEncoding.EncodeToString(jws.signature)
-	out := make([]byte, 0, len(jws.protected)+1+len(jws.payload)+1+len(sig))
-	out = append(out, jws.protected...)
+func Encode(jws JWS) string {
+	protected := jws.GetProtected()
+	payload := jws.GetPayload()
+	sig := base64.RawURLEncoding.EncodeToString(jws.GetSignature())
+	out := make([]byte, 0, len(protected)+1+len(payload)+1+len(sig))
+	out = append(out, protected...)
 	out = append(out, '.')
-	out = append(out, jws.payload...)
+	out = append(out, payload...)
 	out = append(out, '.')
 	out = append(out, sig...)
 	return string(out)

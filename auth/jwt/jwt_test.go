@@ -108,7 +108,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("expected ES256, got %s", jws.GetStandardHeader().Alg)
 	}
 
-	token := jws.Encode()
+	token := jwt.Encode(jws)
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "key-1"})
 
@@ -155,7 +155,7 @@ func TestRoundTripRS256(t *testing.T) {
 		t.Fatalf("expected RS256, got %s", jws.GetStandardHeader().Alg)
 	}
 
-	token := jws.Encode()
+	token := jwt.Encode(jws)
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "key-1"})
 
@@ -194,7 +194,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 		t.Fatalf("expected EdDSA, got %s", jws.GetStandardHeader().Alg)
 	}
 
-	token := jws.Encode()
+	token := jwt.Encode(jws)
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: pubKeyBytes, KID: "key-1"})
 

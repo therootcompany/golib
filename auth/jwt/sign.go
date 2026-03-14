@@ -150,7 +150,7 @@ func (s *Signer) SignToString(claims Claims) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return jws.Encode(), nil
+	return Encode(jws), nil
 }
 
 // Verifier returns a new [*Verifier] containing the public keys of all signing keys.
