@@ -30,7 +30,7 @@ import (
 //
 // Do not copy a Signer after first use - it contains an atomic counter.
 type Signer struct {
-	jwk.JWKs              // Keys []jwk.PublicKey - promoted; marshals as {"keys":[...]}
+	jwk.JWKs  // Keys []jwk.PublicKey - promoted; marshals as {"keys":[...]}
 	keys      []jwk.PrivateKey
 	signerIdx atomic.Uint64
 }
@@ -115,7 +115,7 @@ func algForSigner(s crypto.Signer) (string, error) {
 // Use this when you need the full signed JWS for further processing
 // (e.g., inspecting headers before encoding). For the common one-step cases,
 // prefer [Signer.Sign] or [Signer.SignToString].
-func (s *Signer) SignJWS(jws SignableJWS) ([]byte, error) {
+func (s *Signer) SignJWS(jws SignableJWS) error {
 	idx := s.signerIdx.Add(1) - 1
 	pk := &s.keys[idx%uint64(len(s.keys))]
 	return signWith(jws, pk)
@@ -132,7 +132,7 @@ func (s *Signer) Sign(claims Claims) (*JWS, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.SignJWS(jws); err != nil {
+	if err := s.SignJWS(jws); err != nil {
 		return nil, err
 	}
 	return jws, nil
