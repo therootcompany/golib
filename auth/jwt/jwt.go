@@ -83,14 +83,14 @@ import (
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
-// JWS is the read-only interface implemented by [*TodoJWS] and any custom
+// JWS is the read-only interface implemented by [*JWS] and any custom
 // JWS type. It exposes only the parsed header and payload — no mutation.
 //
 // Custom implementations can embed [Header] to satisfy
 // [JWS.GetHeader] for free via Go method promotion — similar to
 // how embedding [IDTokenClaims] satisfies [Claims].
 //
-// Use [Verifier.VerifyJWT] to get a verified [*TodoJWS], then call
+// Use [Verifier.VerifyJWT] to get a verified [*JWS], then call
 // [UnmarshalClaims] to decode the payload. Or use [Decode] + [Verifier.Verify]
 // for routing by header fields before verifying the signature.
 type VerifiableJWS interface {
@@ -102,8 +102,8 @@ type VerifiableJWS interface {
 	GetHeader() Header
 }
 
-// SignableJWS extends [JWS] with the two hooks [Signer.SignJWS] needs.
-// [*TodoJWS] implements both [JWS] and [SignableJWS].
+// SignableJWS extends [VerifiableJWS] with the two hooks [Signer.SignJWS] needs.
+// [*JWS] implements both [VerifiableJWS] and [SignableJWS].
 //
 // Custom JWS types implement MarshalHeader to merge the signer's standard
 // fields (alg, kid, typ) with any custom header fields and return the
@@ -134,29 +134,29 @@ func (raw *RawJWT) GetPayload() []byte { return raw.payload }
 // GetSignature returns the decoded signature bytes.
 func (raw *RawJWT) GetSignature() []byte { return raw.signature }
 
-// TodoJWS is a decoded JSON Web Signature / JWT.
+// JWS is a decoded JSON Web Signature / JWT.
 //
 // It holds only the parsed structure — header, raw base64url fields, and
 // decoded signature bytes. It carries no Claims interface and no Verified flag;
 // use [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] to authenticate the token
 // and [UnmarshalClaims] to decode the payload into a typed struct.
 //
-// *TodoJWS implements [JWS].
-type TodoJWS struct {
+// *JWS implements [VerifiableJWS].
+type JWS struct {
 	RawJWT
 	header jwsHeader
 }
 
 // GetHeader returns a copy of the decoded JOSE header fields.
-// Implements [JWS]. The returned value is a copy — mutations do not affect the JWS.
-func (jws *TodoJWS) GetHeader() Header { return jws.header.Header }
+// Implements [VerifiableJWS]. The returned value is a copy — mutations do not affect the JWS.
+func (jws *JWS) GetHeader() Header { return jws.header.Header }
 
 // MarshalHeader encodes hdr as the protected header, stores it internally,
 // and returns the base64url-encoded bytes. Implements [SignableJWS].
 //
 // Custom JWS types override this to merge hdr with their own additional
 // header fields before encoding.
-func (jws *TodoJWS) MarshalHeader(hdr Header) ([]byte, error) {
+func (jws *JWS) MarshalHeader(hdr Header) ([]byte, error) {
 	jws.header.Header = hdr
 	data, err := json.Marshal(hdr)
 	if err != nil {
@@ -167,7 +167,7 @@ func (jws *TodoJWS) MarshalHeader(hdr Header) ([]byte, error) {
 }
 
 // SetSignature stores the computed signature bytes. Implements [SignableJWS].
-func (jws *TodoJWS) SetSignature(sig []byte) {
+func (jws *JWS) SetSignature(sig []byte) {
 	jws.signature = sig
 }
 
@@ -175,7 +175,7 @@ func (jws *TodoJWS) SetSignature(sig []byte) {
 //
 // Always call [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before
 // UnmarshalIDTokenClaims — the signature must be authenticated before trusting
-// the payload. Works with any [JWS] implementation, not just [*TodoJWS].
+// the payload. Works with any [VerifiableJWS] implementation, not just [*JWS].
 func UnmarshalIDTokenClaims(jws VerifiableJWS) (IDTokenClaims, error) {
 	var claims IDTokenClaims
 	return claims, UnmarshalClaims(jws, &claims)
@@ -185,7 +185,7 @@ func UnmarshalIDTokenClaims(jws VerifiableJWS) (IDTokenClaims, error) {
 //
 // Always call [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before
 // UnmarshalStandardClaims — the signature must be authenticated before trusting
-// the payload. Works with any [JWS] implementation, not just [*TodoJWS].
+// the payload. Works with any [VerifiableJWS] implementation, not just [*JWS].
 func UnmarshalStandardClaims(jws VerifiableJWS) (StandardClaims, error) {
 	var claims StandardClaims
 	return claims, UnmarshalClaims(jws, &claims)
@@ -336,17 +336,17 @@ type Claims interface {
 	GetIDTokenClaims() *IDTokenClaims
 }
 
-// Decode parses a compact JWT string (header.payload.signature) into a TodoJWS.
+// Decode parses a compact JWT string (header.payload.signature) into a JWS.
 //
 // It does not unmarshal the claims payload — call [UnmarshalClaims] after
 // [Verifier.VerifyJWT] or [Verifier.Verify] to populate a typed claims struct.
-func Decode(tokenStr string) (*TodoJWS, error) {
+func Decode(tokenStr string) (*JWS, error) {
 	parts := strings.Split(tokenStr, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid JWT format")
 	}
 
-	var jws TodoJWS
+	var jws JWS
 	jws.protected, jws.payload = []byte(parts[0]), []byte(parts[1])
 
 	header, err := base64.RawURLEncoding.DecodeString(string(jws.protected))
@@ -370,7 +370,7 @@ func Decode(tokenStr string) (*TodoJWS, error) {
 // v must be a pointer to a struct (e.g. *AppClaims). Always call
 // [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before UnmarshalClaims to ensure
 // the signature is authenticated before trusting the payload. Works with any
-// [JWS] implementation, not just [*TodoJWS].
+// [VerifiableJWS] implementation, not just [*JWS].
 func UnmarshalClaims(jws VerifiableJWS, v any) error {
 	payload, err := base64.RawURLEncoding.DecodeString(string(jws.GetPayload()))
 	if err != nil {
@@ -382,13 +382,13 @@ func UnmarshalClaims(jws VerifiableJWS, v any) error {
 	return nil
 }
 
-// NewJWS creates an unsigned TodoJWS from the provided claims.
+// NewJWS creates an unsigned JWS from the provided claims.
 //
 // The "alg" and "kid" header fields are set automatically by [Signer.SignJWS]
-// based on the key type and [jwk.PrivateKey.KID]. Call [TodoJWS.Encode] to
+// based on the key type and [jwk.PrivateKey.KID]. Call [JWS.Encode] to
 // produce the compact JWT string after signing.
-func NewJWS(claims Claims) (*TodoJWS, error) {
-	var jws TodoJWS
+func NewJWS(claims Claims) (*JWS, error) {
+	var jws JWS
 
 	jws.header = Header{
 		// Alg and KID are set by Sign from the key type and jwk.PrivateKey.KID.
@@ -825,7 +825,7 @@ func (iss *Verifier) PublicKeys() []jwk.PublicKey {
 	return iss.pubKeys
 }
 
-// Verify checks the signature of an already-decoded [JWS].
+// Verify checks the signature of an already-decoded [VerifiableJWS].
 //
 // Returns nil on success, a descriptive error on failure. Claim values
 // (iss, aud, exp, etc.) are NOT checked — call [Validator.Validate] on the
@@ -862,10 +862,10 @@ func (iss *Verifier) Verify(jws VerifiableJWS) error {
 }
 
 // VerifyJWT decodes tokenStr and verifies its signature, returning the parsed
-// [*TodoJWS] on success.
+// [*JWS] on success.
 //
 // Returns (nil, err) on any failure — the caller never receives an
-// unauthenticated TodoJWS. Claim values (iss, aud, exp, etc.) are NOT checked;
+// unauthenticated JWS. Claim values (iss, aud, exp, etc.) are NOT checked;
 // call [IDTokenValidator.Validate] or [RFCValidator.Validate] on the unmarshalled claims after VerifyJWT:
 //
 //	jws, err := iss.VerifyJWT(tokenStr)
@@ -875,7 +875,7 @@ func (iss *Verifier) Verify(jws VerifiableJWS) error {
 //	errs, _ := v.Validate(&claims, time.Now())
 //
 // For routing by kid/iss before verifying, use [Decode] then [Verifier.Verify].
-func (iss *Verifier) VerifyJWT(tokenStr string) (*TodoJWS, error) {
+func (iss *Verifier) VerifyJWT(tokenStr string) (*JWS, error) {
 	jws, err := Decode(tokenStr)
 	if err != nil {
 		return nil, err
