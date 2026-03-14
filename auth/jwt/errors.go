@@ -8,35 +8,36 @@
 
 package jwt
 
-import (
-	"errors"
-	"fmt"
-)
+import "github.com/therootcompany/golib/auth/jwt/jose"
+
+// All sentinel errors are defined in [jose] and re-exported here so
+// callers can use either jwt.ErrFoo or jose.ErrFoo — they are the same
+// pointer, so [errors.Is] works regardless of which import path is used.
 
 // Decode errors — returned by [Decode] and [UnmarshalClaims] when the
 // compact token or its components are malformed.
 var (
-	ErrMalformedToken   = errors.New("malformed token")
-	ErrInvalidHeader    = errors.New("invalid header")
-	ErrInvalidPayload   = errors.New("invalid payload")
-	ErrInvalidSignature = errors.New("invalid signature encoding")
+	ErrMalformedToken   = jose.ErrMalformedToken
+	ErrInvalidHeader    = jose.ErrInvalidHeader
+	ErrInvalidPayload   = jose.ErrInvalidPayload
+	ErrInvalidSignature = jose.ErrInvalidSignature
 )
 
 // Verification errors — returned by [Verifier.Verify] and [Verifier.VerifyJWT].
 var (
-	ErrMissingKID       = errors.New("missing kid")
-	ErrUnknownKID       = errors.New("unknown kid")
-	ErrSignatureInvalid = errors.New("signature invalid")
-	ErrKeyTypeMismatch  = errors.New("key type mismatch")
-	ErrCurveMismatch    = errors.New("curve mismatch")
-	ErrUnsupportedAlg   = errors.New("unsupported algorithm")
+	ErrMissingKID       = jose.ErrMissingKID
+	ErrUnknownKID       = jose.ErrUnknownKID
+	ErrSignatureInvalid = jose.ErrSignatureInvalid
+	ErrKeyTypeMismatch  = jose.ErrKeyTypeMismatch
+	ErrCurveMismatch    = jose.ErrCurveMismatch
+	ErrUnsupportedAlg   = jose.ErrUnsupportedAlg
 )
 
 // Signing errors — returned by [NewSigner], [Signer.SignJWS], and [Signer.Sign].
 var (
-	ErrNoSigningKey = errors.New("no signing key")
-	ErrAlgConflict  = errors.New("algorithm conflict")
-	ErrKIDConflict  = errors.New("kid conflict")
+	ErrNoSigningKey = jose.ErrNoSigningKey
+	ErrAlgConflict  = jose.ErrAlgConflict
+	ErrKIDConflict  = jose.ErrKIDConflict
 )
 
 // Validation errors — returned by [ValidatorCore.Validate],
@@ -53,16 +54,16 @@ var (
 // [ErrInvalidClaim], so a single [errors.Is](err, ErrInvalidClaim) check
 // catches all value errors.
 var (
-	ErrValidation = errors.New("validation failed")
+	ErrValidation = jose.ErrValidation
 
 	// Generic claim errors.
-	ErrMissingClaim = errors.New("missing required claim")
-	ErrInvalidClaim = errors.New("invalid claim value")
+	ErrMissingClaim = jose.ErrMissingClaim
+	ErrInvalidClaim = jose.ErrInvalidClaim
 
 	// Time-based claim errors — each wraps [ErrInvalidClaim].
-	ErrAfterExp        = fmt.Errorf("%w: exp: token expired", ErrInvalidClaim)
-	ErrBeforeNbf       = fmt.Errorf("%w: nbf: token not yet valid", ErrInvalidClaim)
-	ErrBeforeIat       = fmt.Errorf("%w: iat: issued in the future", ErrInvalidClaim)
-	ErrBeforeAuthTime  = fmt.Errorf("%w: auth_time: in the future", ErrInvalidClaim)
-	ErrAfterAuthMaxAge = fmt.Errorf("%w: auth_time: exceeds max age", ErrInvalidClaim)
+	ErrAfterExp        = jose.ErrAfterExp
+	ErrBeforeNbf       = jose.ErrBeforeNbf
+	ErrBeforeIat       = jose.ErrBeforeIat
+	ErrBeforeAuthTime  = jose.ErrBeforeAuthTime
+	ErrAfterAuthMaxAge = jose.ErrAfterAuthMaxAge
 )

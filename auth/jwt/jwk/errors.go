@@ -8,37 +8,34 @@
 
 package jwk
 
-import (
-	"errors"
-	"fmt"
+import "github.com/therootcompany/golib/auth/jwt/jose"
 
-	"github.com/therootcompany/golib/auth/jwt/jose"
-)
+// All sentinel errors are defined in [jose] and re-exported here so
+// callers can use either jwk.ErrFoo or jose.ErrFoo — they are the same
+// pointer, so [errors.Is] works regardless of which import path is used.
 
 // Key parsing errors — returned by [PublicKey.UnmarshalJSON],
 // [PrivateKey.UnmarshalJSON], and [ReadFile].
 var (
 	// ErrInvalidKey is the broad category for any key that cannot be
 	// decoded or fails validation. More specific sentinels below wrap it.
-	ErrInvalidKey = errors.New("invalid key")
+	ErrInvalidKey = jose.ErrInvalidKey
 
 	// ErrUnsupportedKeyType indicates an unrecognized JWK "kty" value.
-	// Re-exported from [jose] so jwt, jwk, and internal/jwa share one sentinel.
 	ErrUnsupportedKeyType = jose.ErrUnsupportedKeyType
 
 	// ErrUnsupportedCurve indicates an unrecognized JWK "crv" value.
-	// Re-exported from [jose] so jwt, jwk, and internal/jwa share one sentinel.
 	ErrUnsupportedCurve = jose.ErrUnsupportedCurve
 
 	// ErrKeyTooSmall indicates a key that does not meet the minimum size.
-	ErrKeyTooSmall = fmt.Errorf("%w: key too small", ErrInvalidKey)
+	ErrKeyTooSmall = jose.ErrKeyTooSmall
 
 	// ErrMissingKeyData indicates required key material is absent.
-	ErrMissingKeyData = fmt.Errorf("%w: missing key data", ErrInvalidKey)
+	ErrMissingKeyData = jose.ErrMissingKeyData
 )
 
 // Fetch errors — returned by [FetchURL], [FetchOIDC], and [FetchOAuth2].
 var (
-	ErrFetchFailed     = errors.New("fetch failed")
-	ErrUnexpectedStatus = fmt.Errorf("%w: unexpected status", ErrFetchFailed)
+	ErrFetchFailed      = jose.ErrFetchFailed
+	ErrUnexpectedStatus = jose.ErrUnexpectedStatus
 )
