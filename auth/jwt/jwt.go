@@ -46,11 +46,12 @@
 // You'll almost always need custom claims. [StandardJWS.UnmarshalClaims] accepts any
 // pointer — no interface to implement for decoding. Embed [IDTokenClaims] in
 // your struct to get the registered fields and satisfy [Claims] for free via
-// Go method promotion, with zero boilerplate.
+// Go method promotion, with zero boilerplate. For OIDC UserInfo profile fields
+// (name, email, phone, etc.) embed [StandardClaims] instead.
 //
 // Your custom claims validation logic is your own. [Verifier.VerifyJWT] authenticates the
-// signature; [StandardJWS.UnmarshalClaims] decodes the payload; [ValidatorStrict.Validate]
-// or [ValidatorLax.Validate] checks the registered claim values (iss, aud, exp, etc.). These are three
+// signature; [StandardJWS.UnmarshalClaims] decodes the payload; [IDTokenValidator.Validate]
+// or [RFCValidator.Validate] checks the registered claim values (iss, aud, exp, etc.). These are three
 // separate calls — you compose them in whatever order your application needs.
 //
 // [Decode] always succeeds for a well-formed token — inspect the header (kid,
@@ -166,7 +167,7 @@ func (jws *StandardJWS) SetSignature(sig []byte) {
 	jws.signature = sig
 }
 
-// IDTokenClaims decodes the payload and returns the OIDC ID Token claims.
+// IDTokenClaims decodes the JWT payload into an [IDTokenClaims] struct.
 //
 // It does not verify the signature — always call [Verifier.VerifyJWT] or
 // [Decode]+[Verifier.Verify] before trusting the returned claims.
@@ -178,6 +179,22 @@ func (jws *StandardJWS) IDTokenClaims() (IDTokenClaims, error) {
 	var claims IDTokenClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return IDTokenClaims{}, fmt.Errorf("unmarshal ID token claims: %w", err)
+	}
+	return claims, nil
+}
+
+// StandardClaims decodes the JWT payload into a [StandardClaims] struct.
+//
+// It does not verify the signature — always call [Verifier.VerifyJWT] or
+// [Decode]+[Verifier.Verify] before trusting the returned claims.
+func (jws *StandardJWS) StandardClaims() (StandardClaims, error) {
+	payload, err := base64.RawURLEncoding.DecodeString(string(jws.payload))
+	if err != nil {
+		return StandardClaims{}, fmt.Errorf("decode payload: %w", err)
+	}
+	var claims StandardClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return StandardClaims{}, fmt.Errorf("unmarshal standard claims: %w", err)
 	}
 	return claims, nil
 }
@@ -242,6 +259,9 @@ func (a Audience) MarshalJSON() ([]byte, error) {
 // registered claim names (iss, sub, aud, exp, iat, jti) plus the
 // OIDC-specific authentication event fields (auth_time, nonce, amr, azp).
 //
+// For OIDC UserInfo profile fields (name, email, phone, locale, etc.),
+// use [StandardClaims] instead — it embeds IDTokenClaims and adds §5.1 fields.
+//
 // https://www.rfc-editor.org/rfc/rfc7519.html
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 //
@@ -250,7 +270,6 @@ func (a Audience) MarshalJSON() ([]byte, error) {
 //
 //	type AppClaims struct {
 //	    jwt.IDTokenClaims        // promotes GetIDTokenClaims()
-//	    Email string `json:"email"`
 //	    Roles []string `json:"roles"`
 //	}
 //	// AppClaims now satisfies Claims automatically.
@@ -260,11 +279,50 @@ type IDTokenClaims struct {
 	Aud      Audience `json:"aud,omitempty"`
 	Exp      int64    `json:"exp"`
 	Iat      int64    `json:"iat"`
-	AuthTime int64    `json:"auth_time"`
+	AuthTime int64    `json:"auth_time,omitempty"`
 	Nonce    string   `json:"nonce,omitempty"`
 	AMR      []string `json:"amr,omitempty"`
 	Azp      string   `json:"azp,omitempty"`
 	JTI      string   `json:"jti,omitempty"`
+}
+
+// StandardClaims extends [IDTokenClaims] with the OIDC Core §5.1 UserInfo
+// standard profile claims. Embed StandardClaims to get both the ID Token
+// fields and the user profile fields with zero boilerplate.
+//
+// https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims
+//
+//	type AppClaims struct {
+//	    jwt.StandardClaims       // promotes GetIDTokenClaims()
+//	    Roles []string `json:"roles"`
+//	}
+type StandardClaims struct {
+	IDTokenClaims
+
+	// Profile fields (OIDC Core §5.1)
+	Name              string `json:"name,omitempty"`
+	GivenName         string `json:"given_name,omitempty"`
+	FamilyName        string `json:"family_name,omitempty"`
+	MiddleName        string `json:"middle_name,omitempty"`
+	Nickname          string `json:"nickname,omitempty"`
+	PreferredUsername string `json:"preferred_username,omitempty"`
+	Profile           string `json:"profile,omitempty"` // URL of end-user's profile page
+	Picture           string `json:"picture,omitempty"` // URL of end-user's profile picture
+	Website           string `json:"website,omitempty"` // URL of end-user's web page
+
+	// Contact fields
+	Email               string `json:"email,omitempty"`
+	EmailVerified       bool   `json:"email_verified,omitempty"`
+	PhoneNumber         string `json:"phone_number,omitempty"`
+	PhoneNumberVerified bool   `json:"phone_number_verified,omitempty"`
+
+	// Locale / time fields
+	Gender    string `json:"gender,omitempty"`
+	Birthdate string `json:"birthdate,omitempty"` // YYYY, YYYY-MM, or YYYY-MM-DD (§5.1)
+	Zoneinfo  string `json:"zoneinfo,omitempty"` // IANA tz, e.g. "Europe/Paris"
+	Locale    string `json:"locale,omitempty"`   // BCP 47, e.g. "en-US"
+
+	UpdatedAt int64 `json:"updated_at,omitempty"` // seconds since Unix epoch
 }
 
 // GetIDTokenClaims implements [Claims].
@@ -487,7 +545,7 @@ func signingInputBytes(protected, payload []byte) []byte {
 // between distributed systems.
 const DefaultGracePeriod = 5 * time.Second
 
-// ValidatorCore holds configuration shared by [ValidatorStrict] and [ValidatorLax].
+// ValidatorCore holds configuration shared by [IDTokenValidator] and [RFCValidator].
 // It can also be used directly as a minimal validator.
 //
 // Exp and Iat are checked by default; set IgnoreExp or IgnoreIat to opt out.
@@ -527,18 +585,20 @@ func (v *ValidatorCore) Validate(claims Claims, now time.Time) ([]string, error)
 	}, now)
 }
 
-// ValidatorStrict checks all standard JWT/OIDC claims by default.
+// IDTokenValidator checks all standard JWT/OIDC ID Token claims by default.
+// It is the strict counterpart to [RFCValidator].
 //
-// Configure once at startup and reuse across requests. Use Ignore* fields to
-// opt out of individual checks. IgnoreExp and IgnoreIat are promoted from
-// [ValidatorCore]. Sub and JTI are presence-only: if not ignored, the claim
-// must be non-empty, but its value is not matched — that is per-token/per-user
-// logic and belongs in the application.
+// Configure once at startup and reuse across requests. All OIDC-required fields
+// (iss, sub, aud, exp, iat, jti, auth_time, amr, azp) are checked unless
+// explicitly disabled with Ignore* fields. IgnoreExp and IgnoreIat are promoted
+// from [ValidatorCore]. Sub and JTI are presence-only: if not ignored, the
+// claim must be non-empty, but its value is not matched — that is
+// per-token/per-user logic and belongs in the application.
 //
-// Call [ValidatorStrict.Validate] to check all standard fields.
+// Call [IDTokenValidator.Validate] to check all standard fields.
 //
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
-type ValidatorStrict struct {
+type IDTokenValidator struct {
 	ValidatorCore
 	IgnoreIss      bool
 	IgnoreSub      bool // if false, sub must be present (non-empty)
@@ -549,8 +609,8 @@ type ValidatorStrict struct {
 	IgnoreAzp      bool
 }
 
-// Validate checks the standard JWT/OIDC claims and returns soft errors.
-func (v *ValidatorStrict) Validate(claims Claims, now time.Time) ([]string, error) {
+// Validate checks the standard JWT/OIDC ID Token claims and returns soft errors.
+func (v *IDTokenValidator) Validate(claims Claims, now time.Time) ([]string, error) {
 	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      !v.IgnoreIss,
 		checkSub:      !v.IgnoreSub,
@@ -564,41 +624,44 @@ func (v *ValidatorStrict) Validate(claims Claims, now time.Time) ([]string, erro
 	}, now)
 }
 
-// ValidatorLax checks only the most critical claims by default.
+// RFCValidator checks only the most critical claims by default — exp and iat.
+// It is the lax counterpart to [IDTokenValidator], matching RFC 7519 semantics
+// where almost all claims are optional.
 //
 // Exp and Iat are checked by default (IgnoreExp and IgnoreIat from the embedded
 // [ValidatorCore] can disable them, but this is rarely appropriate). Iss, Aud,
 // and Azp are checked automatically when their value lists are configured.
-// Everything else (Sub, JTI, AuthTime, AMR) requires explicit opt-in via
-// Check* fields.
+// Everything else (Sub, JTI, AuthTime, AMR, Nonce) requires explicit opt-in via
+// Expect* fields, expressing that the claim is expected and it is an error if
+// it is absent or invalid.
 //
-// Use ValidatorLax when many tokens legitimately omit optional claims such as
-// amr, jti, or auth_time. Prefer [ValidatorStrict] when you control token
+// Use RFCValidator when tokens legitimately omit optional claims such as
+// amr, jti, or auth_time. Prefer [IDTokenValidator] when you control token
 // issuance and want full OIDC compliance enforced.
 //
-// Call [ValidatorLax.Validate] to check claims.
-type ValidatorLax struct {
+// Call [RFCValidator.Validate] to check claims.
+type RFCValidator struct {
 	ValidatorCore
-	CheckSub      bool   // if true, sub must be present (non-empty)
-	CheckJTI      bool   // if true, jti must be present (non-empty)
-	CheckAuthTime bool   // if true (or MaxAge > 0), auth_time is validated
-	CheckAMR      bool   // if true (or RequiredAMRs/MinAMRCount set), amr is validated
-	CheckNonce    bool   // if true, nonce must be present (non-empty)
+	ExpectSub      bool // if true, sub must be present (non-empty)
+	ExpectJTI      bool // if true, jti must be present (non-empty)
+	ExpectAuthTime bool // if true (or MaxAge > 0), auth_time is validated
+	ExpectAMR      bool // if true (or RequiredAMRs/MinAMRCount set), amr is validated
+	ExpectNonce    bool // if true, nonce must be present (non-empty)
 }
 
-// Validate checks the standard JWT/OIDC claims and returns soft errors.
-func (v *ValidatorLax) Validate(claims Claims, now time.Time) ([]string, error) {
+// Validate checks claims against RFC 7519 rules and returns soft errors.
+func (v *RFCValidator) Validate(claims Claims, now time.Time) ([]string, error) {
 	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      len(v.Iss) > 0,
-		checkSub:      v.CheckSub,
+		checkSub:      v.ExpectSub,
 		checkAud:      len(v.Aud) > 0,
 		checkExp:      !v.IgnoreExp,
 		checkIat:      !v.IgnoreIat,
-		checkJTI:      v.CheckJTI,
-		checkAuthTime: v.CheckAuthTime || v.MaxAge > 0,
-		checkAMR:      v.CheckAMR || len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
+		checkJTI:      v.ExpectJTI,
+		checkAuthTime: v.ExpectAuthTime || v.MaxAge > 0,
+		checkAMR:      v.ExpectAMR || len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
 		checkAzp:      len(v.Azp) > 0,
-		checkNonce:    v.CheckNonce,
+		checkNonce:    v.ExpectNonce,
 	}, now)
 }
 
@@ -808,7 +871,7 @@ func (iss *Verifier) Verify(jws JWS) error {
 //
 // Returns (nil, err) on any failure — the caller never receives an
 // unauthenticated StandardJWS. Claim values (iss, aud, exp, etc.) are NOT checked;
-// call [ValidatorStrict.Validate] or [ValidatorLax.Validate] on the unmarshalled claims after VerifyJWT:
+// call [IDTokenValidator.Validate] or [RFCValidator.Validate] on the unmarshalled claims after VerifyJWT:
 //
 //	jws, err := iss.VerifyJWT(tokenStr)
 //	if err != nil { /* bad sig, malformed token, unknown kid */ }

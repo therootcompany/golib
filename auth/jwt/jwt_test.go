@@ -38,7 +38,7 @@ type AppClaims struct {
 // validateAppClaims is a plain function — not a method satisfying an interface.
 // It demonstrates the Decode+Verify pattern: custom validation logic lives here,
 // calling Validator.Validate and adding app-specific checks.
-func validateAppClaims(c AppClaims, v *jwt.ValidatorStrict, now time.Time) ([]string, error) {
+func validateAppClaims(c AppClaims, v *jwt.IDTokenValidator, now time.Time) ([]string, error) {
 	errs, _ := v.Validate(&c, now)
 	if c.Email == "" {
 		errs = append(errs, "missing email claim")
@@ -69,10 +69,10 @@ func goodClaims() AppClaims {
 	}
 }
 
-// goodValidator configures the strict validator with iss set to "https://example.com".
+// goodValidator configures the ID token validator with iss set to "https://example.com".
 // Iss checking is now the Validator's responsibility, not the Verifier's.
-func goodValidator() *jwt.ValidatorStrict {
-	return &jwt.ValidatorStrict{
+func goodValidator() *jwt.IDTokenValidator {
+	return &jwt.IDTokenValidator{
 		ValidatorCore: jwt.ValidatorCore{
 			Iss:          []string{"https://example.com"},
 			Aud:          []string{"myapp"},
@@ -318,12 +318,12 @@ func TestCustomValidation(t *testing.T) {
 	}
 }
 
-// TestValidatorLax confirms that ValidatorLax always checks exp/iat, checks
+// TestRFCValidator confirms that RFCValidator always checks exp/iat, checks
 // iss/aud/azp when configured, and skips sub/jti/auth_time/amr by default.
-func TestValidatorLax(t *testing.T) {
+func TestRFCValidator(t *testing.T) {
 	now := time.Now()
 
-	// Minimal claims: only the fields ValidatorLax checks by default.
+	// Minimal claims: only the fields RFCValidator checks by default.
 	minimal := AppClaims{
 		IDTokenClaims: jwt.IDTokenClaims{
 			Iss: "https://example.com",
@@ -335,24 +335,24 @@ func TestValidatorLax(t *testing.T) {
 		Email: "user@example.com",
 	}
 
-	lax := &jwt.ValidatorLax{
+	rfc := &jwt.RFCValidator{
 		ValidatorCore: jwt.ValidatorCore{
 			Iss: []string{"https://example.com"},
 			Aud: []string{"myapp"},
 		},
 	}
 
-	errs, err := lax.Validate(&minimal, now)
+	errs, err := rfc.Validate(&minimal, now)
 	if err != nil {
-		t.Fatalf("ValidatorLax rejected minimal valid claims: %v — errs: %v", err, errs)
+		t.Fatalf("RFCValidator rejected minimal valid claims: %v — errs: %v", err, errs)
 	}
 
 	// Expired token must still be rejected.
 	expired := minimal
 	expired.Exp = now.Add(-time.Hour).Unix()
-	errs, err = lax.Validate(&expired, now)
+	errs, err = rfc.Validate(&expired, now)
 	if err == nil {
-		t.Fatal("ValidatorLax should reject expired token")
+		t.Fatal("RFCValidator should reject expired token")
 	}
 	found := false
 	for _, e := range errs {
@@ -367,9 +367,9 @@ func TestValidatorLax(t *testing.T) {
 	// Future iat must be rejected.
 	futureIat := minimal
 	futureIat.Iat = now.Add(time.Hour).Unix()
-	errs, err = lax.Validate(&futureIat, now)
+	errs, err = rfc.Validate(&futureIat, now)
 	if err == nil {
-		t.Fatal("ValidatorLax should reject future-dated iat")
+		t.Fatal("RFCValidator should reject future-dated iat")
 	}
 	found = false
 	for _, e := range errs {
@@ -381,19 +381,19 @@ func TestValidatorLax(t *testing.T) {
 		t.Fatalf("expected iat error, got: %v", errs)
 	}
 
-	// Opt-in CheckNonce: absent nonce must be caught.
-	laxNonce := &jwt.ValidatorLax{
+	// Opt-in ExpectNonce: absent nonce must be caught.
+	rfcNonce := &jwt.RFCValidator{
 		ValidatorCore: jwt.ValidatorCore{
 			Iss: []string{"https://example.com"},
 			Aud: []string{"myapp"},
 		},
-		CheckNonce: true,
+		ExpectNonce: true,
 	}
 	noNonce := minimal
 	noNonce.Nonce = ""
-	errs, err = laxNonce.Validate(&noNonce, now)
+	errs, err = rfcNonce.Validate(&noNonce, now)
 	if err == nil {
-		t.Fatal("ValidatorLax should reject absent nonce when CheckNonce is set")
+		t.Fatal("RFCValidator should reject absent nonce when ExpectNonce is set")
 	}
 	found = false
 	for _, e := range errs {
