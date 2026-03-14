@@ -226,26 +226,6 @@ func (jws *JWS) MarshalHeader(hdr Header) ([]byte, error) {
 	return jws.protected, nil
 }
 
-// UnmarshalIDTokenClaims decodes the payload of jws into an [IDTokenClaims] struct.
-//
-// Always call [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before
-// UnmarshalIDTokenClaims - the signature must be authenticated before trusting
-// the payload. Works with any [VerifiableJWS] implementation, not just [*JWS].
-func UnmarshalIDTokenClaims(jws VerifiableJWS) (IDTokenClaims, error) {
-	var claims IDTokenClaims
-	return claims, UnmarshalClaims(jws, &claims)
-}
-
-// UnmarshalStandardClaims decodes the payload of jws into a [StandardClaims] struct.
-//
-// Always call [Verifier.VerifyJWT] or [Decode]+[Verifier.Verify] before
-// UnmarshalStandardClaims - the signature must be authenticated before trusting
-// the payload. Works with any [VerifiableJWS] implementation, not just [*JWS].
-func UnmarshalStandardClaims(jws VerifiableJWS) (StandardClaims, error) {
-	var claims StandardClaims
-	return claims, UnmarshalClaims(jws, &claims)
-}
-
 // jwsHeader is an example of the pattern callers use when embedding Header in
 // a custom JWS type. Embed Header, and all its fields are promoted through the
 // struct. To implement a custom JWS type, copy this struct and replace Header
