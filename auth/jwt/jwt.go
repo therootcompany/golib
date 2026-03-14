@@ -708,6 +708,8 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 	}
 
 	if len(errs) > 0 {
+		serverTime := fmt.Sprintf("info: server time is %s", now.Format("2006-01-02 15:04:05 MST"))
+		errs = append(errs, serverTime)
 		return errs, fmt.Errorf("jwt: validation failed")
 	}
 	return nil, nil
