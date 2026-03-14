@@ -228,7 +228,10 @@ type PrivateKey struct {
 }
 
 // PublicKey derives the [PublicKey] for this signing key.
-// The returned PublicKey carries the same KID, Use, Alg, and KeyOps metadata.
+//
+// KID, Use, and Alg are copied directly. KeyOps are translated to their
+// public-key equivalents: "sign"→"verify", "decrypt"→"encrypt",
+// "unwrapKey"→"wrapKey". Any op with no public equivalent is omitted.
 func (k *PrivateKey) PublicKey() *PublicKey {
 	pub, _ := k.Signer.Public().(CryptoPublicKey)
 	return &PublicKey{
@@ -236,8 +239,35 @@ func (k *PrivateKey) PublicKey() *PublicKey {
 		KID:             k.KID,
 		Use:             k.Use,
 		Alg:             k.Alg,
-		KeyOps:          k.KeyOps,
+		KeyOps:          toPublicKeyOps(k.KeyOps),
 	}
+}
+
+// toPublicKeyOps translates private-key key_ops values to their public-key
+// counterparts per RFC 7517 §4.3. Operations with no public-key equivalent
+// (e.g. "deriveKey", "deriveBits") are dropped.
+func toPublicKeyOps(ops []string) []string {
+	if len(ops) == 0 {
+		return ops
+	}
+	out := make([]string, 0, len(ops))
+	for _, op := range ops {
+		switch op {
+		case "sign":
+			out = append(out, "verify")
+		case "decrypt":
+			out = append(out, "encrypt")
+		case "unwrapKey":
+			out = append(out, "wrapKey")
+		case "verify", "encrypt", "wrapKey":
+			// Already a public-key op — pass through.
+			out = append(out, op)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Thumbprint computes the RFC 7638 thumbprint for this key's public side.

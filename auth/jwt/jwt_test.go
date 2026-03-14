@@ -732,6 +732,43 @@ func TestKeyType(t *testing.T) {
 	}
 }
 
+// TestPublicKeyOps verifies that PrivateKey.PublicKey() translates key_ops to their
+// public-key counterparts ("sign"→"verify", "decrypt"→"encrypt", "unwrapKey"→"wrapKey").
+func TestPublicKeyOps(t *testing.T) {
+	tests := []struct {
+		name       string
+		privateOps []string
+		wantOps    []string
+	}{
+		{"sign→verify", []string{"sign"}, []string{"verify"}},
+		{"decrypt→encrypt", []string{"decrypt"}, []string{"encrypt"}},
+		{"unwrapKey→wrapKey", []string{"unwrapKey"}, []string{"wrapKey"}},
+		{"multiple", []string{"sign", "decrypt"}, []string{"verify", "encrypt"}},
+		{"public op passthrough", []string{"verify"}, []string{"verify"}},
+		{"no public equivalent dropped", []string{"deriveKey"}, nil},
+		{"empty", nil, nil},
+	}
+	base, err := jwk.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pk := *base
+			pk.KeyOps = tt.privateOps
+			pub := pk.PublicKey()
+			if len(pub.KeyOps) != len(tt.wantOps) {
+				t.Fatalf("KeyOps = %v, want %v", pub.KeyOps, tt.wantOps)
+			}
+			for i, op := range pub.KeyOps {
+				if op != tt.wantOps[i] {
+					t.Errorf("KeyOps[%d] = %q, want %q", i, op, tt.wantOps[i])
+				}
+			}
+		})
+	}
+}
+
 // TestDecodePublicJWKJSON verifies JWKS JSON parsing with real base64url-encoded
 // key material from RFC 7517 / OIDC examples.
 func TestDecodePublicJWKJSON(t *testing.T) {
