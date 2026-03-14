@@ -8,7 +8,10 @@
 
 package jwt
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Decode errors — returned by [Decode] when the compact token is malformed.
 var (
@@ -41,13 +44,23 @@ var (
 // check for specific issues with [errors.Is]:
 //
 //	err := v.Validate(&claims, time.Now())
-//	if errors.Is(err, jwt.ErrClaimsExp) { /* handle */ }
+//	if errors.Is(err, jwt.ErrAfterExp) { /* token expired */ }
+//	if errors.Is(err, jwt.ErrInvalidClaim) { /* any value error, including time-based */ }
+//
+// The time-based sentinels ([ErrAfterExp], [ErrBeforeNbf], etc.) wrap
+// [ErrInvalidClaim], so a single [errors.Is](err, ErrInvalidClaim) check
+// catches all value errors.
 var (
-	ErrValidation     = errors.New("validation failed")
-	ErrClaimsExp      = errors.New("exp: token expired")
-	ErrClaimsNbf      = errors.New("nbf: token not yet valid")
-	ErrClaimsIat      = errors.New("iat: token issued in the future")
-	ErrClaimsAuthTime = errors.New("auth_time: authentication too old")
-	ErrMissingClaim   = errors.New("missing required claim")
-	ErrInvalidClaim   = errors.New("invalid claim value")
+	ErrValidation = errors.New("validation failed")
+
+	// Generic claim errors.
+	ErrMissingClaim = errors.New("missing required claim")
+	ErrInvalidClaim = errors.New("invalid claim value")
+
+	// Time-based claim errors — each wraps [ErrInvalidClaim].
+	ErrAfterExp        = fmt.Errorf("exp: token expired: %w", ErrInvalidClaim)
+	ErrBeforeNbf       = fmt.Errorf("nbf: token not yet valid: %w", ErrInvalidClaim)
+	ErrBeforeIat       = fmt.Errorf("iat: issued in the future: %w", ErrInvalidClaim)
+	ErrBeforeAuthTime  = fmt.Errorf("auth_time: in the future: %w", ErrInvalidClaim)
+	ErrAfterAuthMaxAge = fmt.Errorf("auth_time: exceeds max age: %w", ErrInvalidClaim)
 )
