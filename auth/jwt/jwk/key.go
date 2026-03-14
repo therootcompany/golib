@@ -28,7 +28,6 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -140,22 +139,13 @@ func (k PublicKey) Thumbprint() (string, error) {
 
 	switch key := k.CryptoPublicKey.(type) {
 	case *ecdsa.PublicKey:
+		ci, err := ECCurveInfo(key.Curve)
+		if err != nil {
+			return "", fmt.Errorf("Thumbprint: %w", err)
+		}
 		b, err := key.Bytes() // uncompressed: 0x04 || X || Y
 		if err != nil {
 			return "", fmt.Errorf("Thumbprint: encode EC key: %w", err)
-		}
-		byteLen := (key.Curve.Params().BitSize + 7) / 8
-
-		var crv string
-		switch key.Curve {
-		case elliptic.P256():
-			crv = "P-256"
-		case elliptic.P384():
-			crv = "P-384"
-		case elliptic.P521():
-			crv = "P-521"
-		default:
-			return "", fmt.Errorf("Thumbprint: EC curve %s: %w", key.Curve.Params().Name, ErrUnsupportedCurve)
 		}
 
 		// Fields in lexicographic order: crv, kty, x, y
@@ -165,10 +155,10 @@ func (k PublicKey) Thumbprint() (string, error) {
 			X   string `json:"x"`
 			Y   string `json:"y"`
 		}{
-			Crv: crv,
+			Crv: ci.Crv,
 			Kty: "EC",
-			X:   base64.RawURLEncoding.EncodeToString(b[1 : 1+byteLen]),
-			Y:   base64.RawURLEncoding.EncodeToString(b[1+byteLen:]),
+			X:   base64.RawURLEncoding.EncodeToString(b[1 : 1+ci.KeySize]),
+			Y:   base64.RawURLEncoding.EncodeToString(b[1+ci.KeySize:]),
 		})
 
 	case *rsa.PublicKey:
@@ -365,28 +355,20 @@ type JWKs struct {
 func encode(k PublicKey) (rawKey, error) {
 	switch key := k.CryptoPublicKey.(type) {
 	case *ecdsa.PublicKey:
-		var crv string
-		switch key.Curve {
-		case elliptic.P256():
-			crv = "P-256"
-		case elliptic.P384():
-			crv = "P-384"
-		case elliptic.P521():
-			crv = "P-521"
-		default:
-			return rawKey{}, fmt.Errorf("Encode: EC curve %s: %w", key.Curve.Params().Name, ErrUnsupportedCurve)
+		ci, err := ECCurveInfo(key.Curve)
+		if err != nil {
+			return rawKey{}, fmt.Errorf("Encode: %w", err)
 		}
 		b, err := key.Bytes() // uncompressed: 0x04 || X || Y
 		if err != nil {
 			return rawKey{}, fmt.Errorf("Encode: encode EC key: %w", err)
 		}
-		byteLen := (key.Curve.Params().BitSize + 7) / 8
 		return rawKey{
 			Kty:    "EC",
 			KID:    k.KID,
-			Crv:    crv,
-			X:      base64.RawURLEncoding.EncodeToString(b[1 : 1+byteLen]),
-			Y:      base64.RawURLEncoding.EncodeToString(b[1+byteLen:]),
+			Crv:    ci.Crv,
+			X:      base64.RawURLEncoding.EncodeToString(b[1 : 1+ci.KeySize]),
+			Y:      base64.RawURLEncoding.EncodeToString(b[1+ci.KeySize:]),
 			Use:    k.Use,
 			Alg:    k.Alg,
 			KeyOps: k.KeyOps,
@@ -508,7 +490,6 @@ func ReadFile(filePath string) ([]PublicKey, error) {
 //   - "EC"  - P-256, P-384, P-521 (ES256, ES384, ES512)
 //   - "OKP" - Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
 //
-// TODO we may need to deduplicate this logic from jwt
 func decodeOne(kj rawKey) (*PublicKey, error) {
 	switch kj.Kty {
 	case "RSA":
@@ -542,27 +523,19 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 
 // decodePrivate parses a rawKey wire struct that contains private key material
 // into a [PrivateKey]. KID auto-derivation is handled by [PrivateKey.UnmarshalJSON].
-// TODO we may need to deduplicate this logic from jwt
 func decodePrivate(kj rawKey) (*PrivateKey, error) {
 	switch kj.Kty {
 	case "EC":
-		var curve elliptic.Curve
-		switch kj.Crv {
-		case "P-256":
-			curve = elliptic.P256()
-		case "P-384":
-			curve = elliptic.P384()
-		case "P-521":
-			curve = elliptic.P521()
-		default:
-			return nil, fmt.Errorf("parse EC private key %q: crv %q: %w", kj.KID, kj.Crv, ErrUnsupportedCurve)
+		ci, err := ECCurveInfoByCrv(kj.Crv)
+		if err != nil {
+			return nil, fmt.Errorf("parse EC private key %q: %w", kj.KID, err)
 		}
 		dBytes, err := base64.RawURLEncoding.DecodeString(kj.D)
 		if err != nil {
 			return nil, fmt.Errorf("parse EC private key %q: invalid d: %w: %w", kj.KID, ErrInvalidKey, err)
 		}
 		// ParseRawPrivateKey validates the scalar and derives the public key.
-		priv, err := ecdsa.ParseRawPrivateKey(curve, dBytes)
+		priv, err := ecdsa.ParseRawPrivateKey(ci.Curve, dBytes)
 		if err != nil {
 			return nil, fmt.Errorf("parse EC private key %q: %w: %w", kj.KID, ErrInvalidKey, err)
 		}
@@ -663,34 +636,25 @@ func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("invalid ECDSA Y: %w: %w", ErrInvalidKey, err)
 	}
 
-	var curve elliptic.Curve
-	switch kj.Crv {
-	case "P-256":
-		curve = elliptic.P256()
-	case "P-384":
-		curve = elliptic.P384()
-	case "P-521":
-		curve = elliptic.P521()
-	default:
-		return nil, fmt.Errorf("EC crv %q: %w", kj.Crv, ErrUnsupportedCurve)
+	ci, err := ECCurveInfoByCrv(kj.Crv)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build the uncompressed point (0x04 || X || Y), left-padding each
 	// coordinate to the expected byte length. ParseUncompressedPublicKey
 	// validates that the point is on the curve.
-	byteLen := (curve.Params().BitSize + 7) / 8
-	// TODO(review): confirm test coverage for over-length coordinates.
-	if len(x) > byteLen {
-		return nil, fmt.Errorf("ECDSA X coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(x), byteLen, ErrInvalidKey)
+	if len(x) > ci.KeySize {
+		return nil, fmt.Errorf("ECDSA X coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(x), ci.KeySize, ErrInvalidKey)
 	}
-	if len(y) > byteLen {
-		return nil, fmt.Errorf("ECDSA Y coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(y), byteLen, ErrInvalidKey)
+	if len(y) > ci.KeySize {
+		return nil, fmt.Errorf("ECDSA Y coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(y), ci.KeySize, ErrInvalidKey)
 	}
-	uncompressed := make([]byte, 1+2*byteLen)
+	uncompressed := make([]byte, 1+2*ci.KeySize)
 	uncompressed[0] = 0x04
-	copy(uncompressed[1+byteLen-len(x):1+byteLen], x) // left-pad X
-	copy(uncompressed[1+2*byteLen-len(y):], y)        // left-pad Y
-	key, err := ecdsa.ParseUncompressedPublicKey(curve, uncompressed)
+	copy(uncompressed[1+ci.KeySize-len(x):1+ci.KeySize], x) // left-pad X
+	copy(uncompressed[1+2*ci.KeySize-len(y):], y)            // left-pad Y
+	key, err := ecdsa.ParseUncompressedPublicKey(ci.Curve, uncompressed)
 	if err != nil {
 		return nil, fmt.Errorf("EC point not on curve %s: %w: %w", kj.Crv, ErrInvalidKey, err)
 	}

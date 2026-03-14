@@ -126,7 +126,6 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rsa"
 	_ "crypto/sha256" // register SHA-256 with crypto.Hash
 	_ "crypto/sha512" // register SHA-384 and SHA-512 with crypto.Hash
@@ -912,25 +911,22 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 		if !ok {
 			return fmt.Errorf("alg %s requires *ecdsa.PublicKey, got %T: %w", alg, key, ErrKeyTypeMismatch)
 		}
-		expectedAlg, h, err := algForECKey(k)
+		ci, err := ecKeyInfo(k)
 		if err != nil {
 			return err
 		}
-		if expectedAlg != alg {
-			return fmt.Errorf("key is %s, token alg is %s: %w", expectedAlg, alg, ErrCurveMismatch)
+		if ci.Alg != alg {
+			return fmt.Errorf("key is %s, token alg is %s: %w", ci.Alg, alg, ErrCurveMismatch)
 		}
-		// TODO I need to understand this. Is +7 for the compression bit to become a byte?
-		byteLen := (k.Curve.Params().BitSize + 7) / 8
-		if len(sig) != 2*byteLen {
-			return fmt.Errorf("%s sig len %d, want %d: %w", alg, len(sig), 2*byteLen, ErrSignatureInvalid)
+		if len(sig) != 2*ci.KeySize {
+			return fmt.Errorf("%s sig len %d, want %d: %w", alg, len(sig), 2*ci.KeySize, ErrSignatureInvalid)
 		}
-		digest, err := digestFor(h, signingInput)
+		digest, err := digestFor(ci.Hash, signingInput)
 		if err != nil {
 			return err
 		}
-		// TODO use func ParseUncompressedPublicKey(curve elliptic.Curve, data []byte) (*PublicKey, error)
-		r := new(big.Int).SetBytes(sig[:byteLen])
-		s := new(big.Int).SetBytes(sig[byteLen:])
+		r := new(big.Int).SetBytes(sig[:ci.KeySize])
+		s := new(big.Int).SetBytes(sig[ci.KeySize:])
 		if !ecdsa.Verify(k, digest, r, s) {
 			return fmt.Errorf("%s: %w", alg, ErrSignatureInvalid)
 		}
@@ -967,17 +963,15 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 
 // --- Internal helpers ---
 
-func algForECKey(pub *ecdsa.PublicKey) (alg string, h crypto.Hash, err error) {
-	switch pub.Curve {
-	case elliptic.P256():
-		return "ES256", crypto.SHA256, nil
-	case elliptic.P384():
-		return "ES384", crypto.SHA384, nil
-	case elliptic.P521():
-		return "ES512", crypto.SHA512, nil
-	default:
-		return "", 0, fmt.Errorf("EC curve %s: %w", pub.Curve.Params().Name, ErrUnsupportedKey)
+// ecKeyInfo returns the JWK curve metadata for an ECDSA public key.
+// It delegates to [jwk.ECCurveInfo] and re-wraps the error with the
+// jwt-package sentinel [ErrUnsupportedKey].
+func ecKeyInfo(pub *ecdsa.PublicKey) (jwk.CurveInfo, error) {
+	ci, err := jwk.ECCurveInfo(pub.Curve)
+	if err != nil {
+		return jwk.CurveInfo{}, fmt.Errorf("EC curve %s: %w", pub.Curve.Params().Name, ErrUnsupportedKey)
 	}
+	return ci, nil
 }
 
 func digestFor(h crypto.Hash, data []byte) ([]byte, error) {
@@ -989,7 +983,7 @@ func digestFor(h crypto.Hash, data []byte) ([]byte, error) {
 	return hh.Sum(nil), nil
 }
 
-func ecdsaDERToRaw(der []byte, curve elliptic.Curve) ([]byte, error) {
+func ecdsaDERToRaw(der []byte, keySize int) ([]byte, error) {
 	var sig struct{ R, S *big.Int }
 	rest, err := asn1.Unmarshal(der, &sig)
 	if err != nil {
@@ -998,10 +992,9 @@ func ecdsaDERToRaw(der []byte, curve elliptic.Curve) ([]byte, error) {
 	if len(rest) > 0 {
 		return nil, fmt.Errorf("ecdsaDERToRaw: %d trailing bytes: %w", len(rest), ErrInvalidSignature)
 	}
-	byteLen := (curve.Params().BitSize + 7) / 8
-	out := make([]byte, 2*byteLen)
-	sig.R.FillBytes(out[:byteLen])
-	sig.S.FillBytes(out[byteLen:])
+	out := make([]byte, 2*keySize)
+	sig.R.FillBytes(out[:keySize])
+	sig.S.FillBytes(out[keySize:])
 	return out, nil
 }
 

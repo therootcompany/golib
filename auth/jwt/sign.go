@@ -101,8 +101,8 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 func algForSigner(s crypto.Signer) (string, error) {
 	switch pub := s.Public().(type) {
 	case *ecdsa.PublicKey:
-		alg, _, err := algForECKey(pub)
-		return alg, err
+		ci, err := ecKeyInfo(pub)
+		return ci.Alg, err
 	case *rsa.PublicKey:
 		return "RS256", nil
 	case ed25519.PublicKey:
@@ -144,32 +144,30 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 		return fmt.Errorf("signWith: header kid %q vs key kid %q: %w", hdr.KID, pk.KID, ErrKIDConflict)
 	}
 
-	// TODO Why aren't we switching on pk.Signer?
 	switch pub := pk.Signer.Public().(type) {
 	case *ecdsa.PublicKey:
-		alg, h, err := algForECKey(pub)
+		ci, err := ecKeyInfo(pub)
 		if err != nil {
 			return err
 		}
-		if hdr.Alg != "" && hdr.Alg != alg {
-			return fmt.Errorf("signWith: key %s vs header %q: %w", alg, hdr.Alg, ErrAlgConflict)
+		if hdr.Alg != "" && hdr.Alg != ci.Alg {
+			return fmt.Errorf("signWith: key %s vs header %q: %w", ci.Alg, hdr.Alg, ErrAlgConflict)
 		}
-		hdr.Alg = alg
+		hdr.Alg = ci.Alg
 		protected, err := jws.MarshalHeader(hdr)
 		if err != nil {
 			return err
 		}
-		digest, err := digestFor(h, signingInputBytes(protected, jws.GetPayload()))
+		digest, err := digestFor(ci.Hash, signingInputBytes(protected, jws.GetPayload()))
 		if err != nil {
 			return err
 		}
-		// TODO seems like we should just use func SignASN1(r io.Reader, priv *PrivateKey, hash []byte) ([]byte, error)
 		// crypto.Signer returns ASN.1 DER for ECDSA; convert to raw r||s for JWS.
-		derSig, err := pk.Signer.Sign(rand.Reader, digest, h)
+		derSig, err := pk.Signer.Sign(rand.Reader, digest, ci.Hash)
 		if err != nil {
-			return fmt.Errorf("signWith %s: %w", alg, err)
+			return fmt.Errorf("signWith %s: %w", ci.Alg, err)
 		}
-		sig, err := ecdsaDERToRaw(derSig, pub.Curve)
+		sig, err := ecdsaDERToRaw(derSig, ci.KeySize)
 		if err != nil {
 			return err
 		}
