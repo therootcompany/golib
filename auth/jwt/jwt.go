@@ -872,61 +872,56 @@ func (iss *Verifier) Verify(jws VerifiableJWS) error {
 	signingInput := signingInputBytes(jws.GetProtected(), jws.GetPayload())
 	sig := jws.GetSignature()
 
-	// wrap adds kid+alg context to verification errors.
-	wrap := func(err error) error {
-		return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, err)
-	}
-
 	switch h.Alg {
 	case "ES256", "ES384", "ES512":
 		k, ok := key.(*ecdsa.PublicKey)
 		if !ok {
-			return wrap(fmt.Errorf("key type %T: %w", key, jose.ErrAlgConflict))
+			return fmt.Errorf("kid %q alg %q: key type %T: %w", h.KID, h.Alg, key, jose.ErrAlgConflict)
 		}
 		ci, err := jwa.ECInfoForAlg(k.Curve, h.Alg)
 		if err != nil {
-			return wrap(err)
+			return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, err)
 		}
 		if len(sig) != 2*ci.KeySize {
-			return wrap(fmt.Errorf("sig len %d, want %d: %w", len(sig), 2*ci.KeySize, jose.ErrSignatureInvalid))
+			return fmt.Errorf("kid %q alg %q: sig len %d, want %d: %w", h.KID, h.Alg, len(sig), 2*ci.KeySize, jose.ErrSignatureInvalid)
 		}
 		digest, err := digestFor(ci.Hash, signingInput)
 		if err != nil {
-			return wrap(err)
+			return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, err)
 		}
 		r := new(big.Int).SetBytes(sig[:ci.KeySize])
 		s := new(big.Int).SetBytes(sig[ci.KeySize:])
 		if !ecdsa.Verify(k, digest, r, s) {
-			return wrap(jose.ErrSignatureInvalid)
+			return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, jose.ErrSignatureInvalid)
 		}
 		return nil
 
 	case "RS256":
 		k, ok := key.(*rsa.PublicKey)
 		if !ok {
-			return wrap(fmt.Errorf("key type %T: %w", key, jose.ErrAlgConflict))
+			return fmt.Errorf("kid %q alg %q: key type %T: %w", h.KID, h.Alg, key, jose.ErrAlgConflict)
 		}
 		digest, err := digestFor(crypto.SHA256, signingInput)
 		if err != nil {
-			return wrap(err)
+			return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, err)
 		}
 		if err := rsa.VerifyPKCS1v15(k, crypto.SHA256, digest, sig); err != nil {
-			return wrap(fmt.Errorf("%w: %w", jose.ErrSignatureInvalid, err))
+			return fmt.Errorf("kid %q alg %q: %w: %w", h.KID, h.Alg, jose.ErrSignatureInvalid, err)
 		}
 		return nil
 
 	case "EdDSA":
 		k, ok := key.(ed25519.PublicKey)
 		if !ok {
-			return wrap(fmt.Errorf("key type %T: %w", key, jose.ErrAlgConflict))
+			return fmt.Errorf("kid %q alg %q: key type %T: %w", h.KID, h.Alg, key, jose.ErrAlgConflict)
 		}
 		if !ed25519.Verify(k, signingInput, sig) {
-			return wrap(jose.ErrSignatureInvalid)
+			return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, jose.ErrSignatureInvalid)
 		}
 		return nil
 
 	default:
-		return wrap(jose.ErrUnsupportedAlg)
+		return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, jose.ErrUnsupportedAlg)
 	}
 }
 
