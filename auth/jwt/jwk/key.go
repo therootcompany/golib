@@ -388,8 +388,11 @@ func encodePrivate(k PrivateKey) (rawKey, error) {
 		if err != nil {
 			return rawKey{}, err
 		}
-		byteLen := (priv.Curve.Params().BitSize + 7) / 8
-		pub.D = base64.RawURLEncoding.EncodeToString(priv.D.FillBytes(make([]byte, byteLen)))
+		dBytes, err := priv.Bytes()
+		if err != nil {
+			return rawKey{}, fmt.Errorf("encodePrivate: encode EC private key: %w", err)
+		}
+		pub.D = base64.RawURLEncoding.EncodeToString(dBytes)
 		return pub, nil
 
 	case *rsa.PrivateKey:
