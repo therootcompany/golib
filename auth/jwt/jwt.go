@@ -27,7 +27,7 @@
 // always "JWT". [StandardJWS.Sign] handles all of this — you do not configure alg.
 //
 // You'll almost always need custom claims. [StandardJWS.UnmarshalClaims] accepts any
-// pointer — no interface to implement for decoding. Embed [StandardClaims] in
+// pointer — no interface to implement for decoding. Embed [IDTokenClaims] in
 // your struct to get the registered fields and satisfy [Claims] for free via
 // Go method promotion, with zero boilerplate.
 //
@@ -70,7 +70,7 @@ import (
 //
 // Custom implementations can embed [StandardHeader] to satisfy
 // [JWS.GetStandardHeader] for free via Go method promotion — similar to
-// how embedding [StandardClaims] satisfies [Claims].
+// how embedding [IDTokenClaims] satisfies [Claims].
 //
 // Use [Verifier.VerifyJWT] to get a [*StandardJWS] with access to
 // [StandardJWS.UnmarshalClaims], or [Decode] + [Verifier.Verify] for
@@ -82,15 +82,21 @@ type JWS interface {
 	GetStandardHeader() *StandardHeader
 }
 
-// SignableJWS extends [JWS] with the ability to be signed in-place.
+// SignableJWS extends [JWS] with the two hooks [Signer.SignJWS] needs.
 // [*StandardJWS] implements both [JWS] and [SignableJWS].
 //
-// Custom JWS types that need to participate in [Signer.SignJWS] should
-// implement SignWith — typically by mutating their own header and storing
-// the signature.
+// Custom JWS types implement MarshalHeader to merge the signer's standard
+// fields (alg, kid, typ) with any custom header fields and return the
+// encoded protected bytes. They implement SetSignature to store the result.
+// No cryptographic knowledge is required — the [Signer] handles all of that.
 type SignableJWS interface {
 	JWS
-	SignWith(pk *jwk.PrivateKey) ([]byte, error)
+	// MarshalHeader encodes the full protected header by merging hdr into
+	// the JWS's own header fields, stores the result internally, and returns
+	// the base64url-encoded bytes used as the signing-input prefix.
+	MarshalHeader(hdr StandardHeader) ([]byte, error)
+	// SetSignature stores the computed signature bytes.
+	SetSignature(sig []byte)
 }
 
 // StandardJWS is a decoded JSON Web Signature / JWT.
@@ -121,18 +127,38 @@ func (jws *StandardJWS) GetSignature() []byte { return jws.signature }
 // Implements [JWS].
 func (jws *StandardJWS) GetStandardHeader() *StandardHeader { return &jws.header }
 
-// StandardClaims decodes the payload and returns the standard JWT claims.
+// MarshalHeader encodes hdr as the protected header, stores it internally,
+// and returns the base64url-encoded bytes. Implements [SignableJWS].
+//
+// Custom JWS types override this to merge hdr with their own additional
+// header fields before encoding.
+func (jws *StandardJWS) MarshalHeader(hdr StandardHeader) ([]byte, error) {
+	jws.header = hdr
+	data, err := json.Marshal(hdr)
+	if err != nil {
+		return nil, fmt.Errorf("MarshalHeader: %w", err)
+	}
+	jws.protected = []byte(base64.RawURLEncoding.EncodeToString(data))
+	return jws.protected, nil
+}
+
+// SetSignature stores the computed signature bytes. Implements [SignableJWS].
+func (jws *StandardJWS) SetSignature(sig []byte) {
+	jws.signature = sig
+}
+
+// IDTokenClaims decodes the payload and returns the OIDC ID Token claims.
 //
 // It does not verify the signature — always call [Verifier.VerifyJWT] or
 // [Decode]+[Verifier.Verify] before trusting the returned claims.
-func (jws *StandardJWS) StandardClaims() (StandardClaims, error) {
+func (jws *StandardJWS) IDTokenClaims() (IDTokenClaims, error) {
 	payload, err := base64.RawURLEncoding.DecodeString(string(jws.payload))
 	if err != nil {
-		return StandardClaims{}, fmt.Errorf("decode payload: %w", err)
+		return IDTokenClaims{}, fmt.Errorf("decode payload: %w", err)
 	}
-	var claims StandardClaims
+	var claims IDTokenClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return StandardClaims{}, fmt.Errorf("unmarshal standard claims: %w", err)
+		return IDTokenClaims{}, fmt.Errorf("unmarshal ID token claims: %w", err)
 	}
 	return claims, nil
 }
@@ -197,21 +223,23 @@ func (a Audience) MarshalJSON() ([]byte, error) {
 	return json.Marshal([]string(a))
 }
 
-// StandardClaims holds the registered JWT claim names defined in RFC 7519
-// and extended by OpenID Connect Core.
+// IDTokenClaims holds the OIDC Core §2 ID Token claims: the RFC 7519
+// registered claim names (iss, sub, aud, exp, iat, jti) plus the
+// OIDC-specific authentication event fields (auth_time, nonce, amr, azp).
 //
 // https://www.rfc-editor.org/rfc/rfc7519.html
+// https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 //
-// Embed StandardClaims in your own claims struct to satisfy [Claims]
+// Embed IDTokenClaims in your own claims struct to satisfy [Claims]
 // for free via Go's method promotion — zero boilerplate:
 //
 //	type AppClaims struct {
-//	    jwt.StandardClaims        // promotes GetStandardClaims()
+//	    jwt.IDTokenClaims        // promotes GetIDTokenClaims()
 //	    Email string `json:"email"`
 //	    Roles []string `json:"roles"`
 //	}
 //	// AppClaims now satisfies Claims automatically.
-type StandardClaims struct {
+type IDTokenClaims struct {
 	Iss      string   `json:"iss"`
 	Sub      string   `json:"sub"`
 	Aud      Audience `json:"aud,omitempty"`
@@ -224,18 +252,18 @@ type StandardClaims struct {
 	JTI      string   `json:"jti"`
 }
 
-// GetStandardClaims implements [Claims].
-// Any struct embedding StandardClaims gets this method for free via promotion.
-func (sc *StandardClaims) GetStandardClaims() *StandardClaims { return sc }
+// GetIDTokenClaims implements [Claims].
+// Any struct embedding IDTokenClaims gets this method for free via promotion.
+func (sc *IDTokenClaims) GetIDTokenClaims() *IDTokenClaims { return sc }
 
-// Claims is implemented for free by any struct that embeds [StandardClaims].
+// Claims is implemented for free by any struct that embeds [IDTokenClaims].
 //
 //	type AppClaims struct {
-//	    jwt.StandardClaims        // promotes GetStandardClaims() — zero boilerplate
+//	    jwt.IDTokenClaims        // promotes GetIDTokenClaims() — zero boilerplate
 //	    Email string `json:"email"`
 //	}
 type Claims interface {
-	GetStandardClaims() *StandardClaims
+	GetIDTokenClaims() *IDTokenClaims
 }
 
 // Decode parses a compact JWT string (header.payload.signature) into a StandardJWS.
@@ -310,14 +338,7 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 	return &jws, nil
 }
 
-// SignWith signs the JWS in-place using pk. It implements [SignableJWS].
-//
-// pk must be a non-nil [jwk.PrivateKey]. The KID is taken from pk.KID:
-// if jws.Header.KID is empty it is set automatically; if it is already set to a
-// different value, SignWith returns an error.
-//
-// If jws.Header.Alg is already set to a value that is incompatible with the
-// key type, SignWith returns an error.
+// SignWith signs the JWS in-place using pk.
 //
 // Supported algorithms (inferred from key type):
 //   - *ecdsa.PrivateKey P-256  → ES256 (SHA-256, raw r||s)
@@ -327,84 +348,7 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 //   - ed25519.PrivateKey         → EdDSA (Ed25519, RFC 8037)
 //     https://www.rfc-editor.org/rfc/rfc8037.html
 func (jws *StandardJWS) SignWith(pk *jwk.PrivateKey) ([]byte, error) {
-	if pk.Signer == nil {
-		return nil, fmt.Errorf("SignWith: key %q has no Signer", pk.KID)
-	}
-	switch {
-	case jws.header.KID == "":
-		jws.header.KID = pk.KID
-	case jws.header.KID != pk.KID:
-		return nil, fmt.Errorf("SignWith: header kid %q conflicts with key KID %q", jws.header.KID, pk.KID)
-	}
-
-	switch pub := pk.Signer.Public().(type) {
-	case *ecdsa.PublicKey:
-		alg, h, err := algForECKey(pub)
-		if err != nil {
-			return nil, err
-		}
-		if jws.header.Alg != "" && jws.header.Alg != alg {
-			return nil, fmt.Errorf("SignWith: key alg %s incompatible with header alg %q", alg, jws.header.Alg)
-		}
-		jws.header.Alg = alg
-		headerJSON, err := json.Marshal(jws.header)
-		if err != nil {
-			return nil, fmt.Errorf("marshal header: %w", err)
-		}
-		jws.protected = []byte(base64.RawURLEncoding.EncodeToString(headerJSON))
-
-		digest, err := digestFor(h, jws.signingInput())
-		if err != nil {
-			return nil, err
-		}
-		// crypto.Signer returns ASN.1 DER for ECDSA; convert to raw r||s for JWS.
-		derSig, err := pk.Signer.Sign(rand.Reader, digest, h)
-		if err != nil {
-			return nil, fmt.Errorf("SignWith %s: %w", alg, err)
-		}
-		jws.signature, err = ecdsaDERToRaw(derSig, pub.Curve)
-		return jws.signature, err
-
-	case *rsa.PublicKey:
-		if jws.header.Alg != "" && jws.header.Alg != "RS256" {
-			return nil, fmt.Errorf("SignWith: RSA key incompatible with header alg %q (expected RS256)", jws.header.Alg)
-		}
-		jws.header.Alg = "RS256"
-		headerJSON, err := json.Marshal(jws.header)
-		if err != nil {
-			return nil, fmt.Errorf("marshal header: %w", err)
-		}
-		jws.protected = []byte(base64.RawURLEncoding.EncodeToString(headerJSON))
-
-		digest, err := digestFor(crypto.SHA256, jws.signingInput())
-		if err != nil {
-			return nil, err
-		}
-		// crypto.Signer returns raw PKCS#1 v1.5 bytes for RSA; use directly.
-		jws.signature, err = pk.Signer.Sign(rand.Reader, digest, crypto.SHA256)
-		return jws.signature, err
-
-	case ed25519.PublicKey:
-		if jws.header.Alg != "" && jws.header.Alg != "EdDSA" {
-			return nil, fmt.Errorf("SignWith: Ed25519 key incompatible with header alg %q (expected EdDSA)", jws.header.Alg)
-		}
-		jws.header.Alg = "EdDSA"
-		headerJSON, err := json.Marshal(jws.header)
-		if err != nil {
-			return nil, fmt.Errorf("marshal header: %w", err)
-		}
-		jws.protected = []byte(base64.RawURLEncoding.EncodeToString(headerJSON))
-
-		// Ed25519 signs the raw message with no pre-hashing; pass crypto.Hash(0).
-		jws.signature, err = pk.Signer.Sign(rand.Reader, jws.signingInput(), crypto.Hash(0))
-		return jws.signature, err
-
-	default:
-		return nil, fmt.Errorf(
-			"Sign: unsupported public key type %T (supported: *ecdsa.PublicKey, *rsa.PublicKey, ed25519.PublicKey)",
-			pk.Signer.Public(),
-		)
-	}
+	return signWith(jws, pk)
 }
 
 // Encode produces the compact JWT string (header.payload.signature).
@@ -419,12 +363,107 @@ func (jws *StandardJWS) Encode() string {
 	return string(out)
 }
 
-// signingInput builds the protected.payload byte slice used as the signing input.
-func (jws *StandardJWS) signingInput() []byte {
-	out := make([]byte, 0, len(jws.protected)+1+len(jws.payload))
-	out = append(out, jws.protected...)
+// signWith is the shared implementation used by [StandardJWS.SignWith] and
+// [Signer.SignJWS]. It selects the algorithm from the key type, validates any
+// pre-set alg/kid in the JWS header, then calls [SignableJWS.MarshalHeader]
+// and [SignableJWS.SetSignature] so custom JWS types need no crypto knowledge.
+//
+// pk must have a non-nil Signer. KID is taken from pk.KID — set automatically
+// if the header's KID is empty; an error is returned on mismatch.
+func signWith(jws SignableJWS, pk *jwk.PrivateKey) ([]byte, error) {
+	if pk.Signer == nil {
+		return nil, fmt.Errorf("signWith: key %q has no Signer", pk.KID)
+	}
+	hdr := *jws.GetStandardHeader()
+	switch {
+	case hdr.KID == "":
+		hdr.KID = pk.KID
+	case hdr.KID != pk.KID:
+		return nil, fmt.Errorf("signWith: header kid %q conflicts with key KID %q", hdr.KID, pk.KID)
+	}
+
+	switch pub := pk.Signer.Public().(type) {
+	case *ecdsa.PublicKey:
+		alg, h, err := algForECKey(pub)
+		if err != nil {
+			return nil, err
+		}
+		if hdr.Alg != "" && hdr.Alg != alg {
+			return nil, fmt.Errorf("signWith: key alg %s incompatible with header alg %q", alg, hdr.Alg)
+		}
+		hdr.Alg = alg
+		protected, err := jws.MarshalHeader(hdr)
+		if err != nil {
+			return nil, err
+		}
+		digest, err := digestFor(h, signingInputBytes(protected, jws.GetPayload()))
+		if err != nil {
+			return nil, err
+		}
+		// crypto.Signer returns ASN.1 DER for ECDSA; convert to raw r||s for JWS.
+		derSig, err := pk.Signer.Sign(rand.Reader, digest, h)
+		if err != nil {
+			return nil, fmt.Errorf("signWith %s: %w", alg, err)
+		}
+		sig, err := ecdsaDERToRaw(derSig, pub.Curve)
+		if err != nil {
+			return nil, err
+		}
+		jws.SetSignature(sig)
+		return sig, nil
+
+	case *rsa.PublicKey:
+		if hdr.Alg != "" && hdr.Alg != "RS256" {
+			return nil, fmt.Errorf("signWith: RSA key incompatible with header alg %q (expected RS256)", hdr.Alg)
+		}
+		hdr.Alg = "RS256"
+		protected, err := jws.MarshalHeader(hdr)
+		if err != nil {
+			return nil, err
+		}
+		digest, err := digestFor(crypto.SHA256, signingInputBytes(protected, jws.GetPayload()))
+		if err != nil {
+			return nil, err
+		}
+		// crypto.Signer returns raw PKCS#1 v1.5 bytes for RSA; use directly.
+		sig, err := pk.Signer.Sign(rand.Reader, digest, crypto.SHA256)
+		if err != nil {
+			return nil, fmt.Errorf("signWith RS256: %w", err)
+		}
+		jws.SetSignature(sig)
+		return sig, nil
+
+	case ed25519.PublicKey:
+		if hdr.Alg != "" && hdr.Alg != "EdDSA" {
+			return nil, fmt.Errorf("signWith: Ed25519 key incompatible with header alg %q (expected EdDSA)", hdr.Alg)
+		}
+		hdr.Alg = "EdDSA"
+		protected, err := jws.MarshalHeader(hdr)
+		if err != nil {
+			return nil, err
+		}
+		// Ed25519 signs the raw message with no pre-hashing; pass crypto.Hash(0).
+		sig, err := pk.Signer.Sign(rand.Reader, signingInputBytes(protected, jws.GetPayload()), crypto.Hash(0))
+		if err != nil {
+			return nil, fmt.Errorf("signWith EdDSA: %w", err)
+		}
+		jws.SetSignature(sig)
+		return sig, nil
+
+	default:
+		return nil, fmt.Errorf(
+			"signWith: unsupported public key type %T (supported: *ecdsa.PublicKey, *rsa.PublicKey, ed25519.PublicKey)",
+			pk.Signer.Public(),
+		)
+	}
+}
+
+// signingInputBytes builds the protected.payload byte slice used as the signing input.
+func signingInputBytes(protected, payload []byte) []byte {
+	out := make([]byte, 0, len(protected)+1+len(payload))
+	out = append(out, protected...)
 	out = append(out, '.')
-	out = append(out, jws.payload...)
+	out = append(out, payload...)
 	return out
 }
 
@@ -463,7 +502,7 @@ type ValidatorCore struct {
 // It does not check sub, jti, or auth_time — use [ValidatorStrict] or [ValidatorLax]
 // for those.
 func (v *ValidatorCore) Validate(claims Claims, now time.Time) ([]string, error) {
-	return validateClaims(*claims.GetStandardClaims(), *v, claimChecks{
+	return validateClaims(*claims.GetIDTokenClaims(), *v, claimChecks{
 		checkIss: len(v.Iss) > 0,
 		checkAud: len(v.Aud) > 0,
 		checkExp: !v.IgnoreExp,
@@ -497,7 +536,7 @@ type ValidatorStrict struct {
 
 // Validate checks the standard JWT/OIDC claims and returns soft errors.
 func (v *ValidatorStrict) Validate(claims Claims, now time.Time) ([]string, error) {
-	return validateClaims(*claims.GetStandardClaims(), v.ValidatorCore, claimChecks{
+	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      !v.IgnoreIss,
 		checkSub:      !v.IgnoreSub,
 		checkAud:      !v.IgnoreAud,
@@ -534,7 +573,7 @@ type ValidatorLax struct {
 
 // Validate checks the standard JWT/OIDC claims and returns soft errors.
 func (v *ValidatorLax) Validate(claims Claims, now time.Time) ([]string, error) {
-	return validateClaims(*claims.GetStandardClaims(), v.ValidatorCore, claimChecks{
+	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      len(v.Iss) > 0,
 		checkSub:      v.CheckSub,
 		checkAud:      len(v.Aud) > 0,
@@ -563,7 +602,7 @@ type claimChecks struct {
 	checkNonce    bool
 }
 
-func validateClaims(claims StandardClaims, core ValidatorCore, checks claimChecks, now time.Time) ([]string, error) {
+func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks, now time.Time) ([]string, error) {
 	var errs []string
 
 	skew := core.GracePeriod

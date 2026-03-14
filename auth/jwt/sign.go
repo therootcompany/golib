@@ -119,7 +119,7 @@ func algForSigner(s crypto.Signer) (string, error) {
 func (s *Signer) SignJWS(jws SignableJWS) ([]byte, error) {
 	idx := s.signerIdx.Add(1) - 1
 	pk := &s.keys[idx%uint64(len(s.keys))]
-	return jws.SignWith(pk)
+	return signWith(jws, pk)
 }
 
 // Sign creates a StandardJWS from claims, signs it with the next signing key,

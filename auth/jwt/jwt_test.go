@@ -25,12 +25,12 @@ import (
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
-// AppClaims embeds StandardClaims and adds application-specific fields.
+// AppClaims embeds IDTokenClaims and adds application-specific fields.
 //
-// Because StandardClaims is embedded, AppClaims satisfies Claims
+// Because IDTokenClaims is embedded, AppClaims satisfies Claims
 // for free via Go's method promotion — no interface to implement.
 type AppClaims struct {
-	jwt.StandardClaims
+	jwt.IDTokenClaims
 	Email string   `json:"email"`
 	Roles []string `json:"roles"`
 }
@@ -52,7 +52,7 @@ func validateAppClaims(c AppClaims, v *jwt.ValidatorStrict, now time.Time) ([]st
 func goodClaims() AppClaims {
 	now := time.Now()
 	return AppClaims{
-		StandardClaims: jwt.StandardClaims{
+		IDTokenClaims: jwt.IDTokenClaims{
 			Iss:      "https://example.com",
 			Sub:      "user123",
 			Aud:      jwt.Audience{"myapp"},
@@ -325,7 +325,7 @@ func TestValidatorLax(t *testing.T) {
 
 	// Minimal claims: only the fields ValidatorLax checks by default.
 	minimal := AppClaims{
-		StandardClaims: jwt.StandardClaims{
+		IDTokenClaims: jwt.IDTokenClaims{
 			Iss: "https://example.com",
 			Aud: jwt.Audience{"myapp"},
 			Exp: now.Add(time.Hour).Unix(),
