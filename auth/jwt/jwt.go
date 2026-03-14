@@ -87,7 +87,7 @@ import (
 // JWS type. It exposes only the parsed header and payload — no mutation.
 //
 // Custom implementations can embed [Header] to satisfy
-// [JWS.GetHeader] for free via Go method promotion — similar to
+// [VerifiableJWS.GetHeader] for free via Go method promotion — similar to
 // how embedding [IDTokenClaims] satisfies [Claims].
 //
 // Use [Verifier.VerifyJWT] to get a verified [*JWS], then call
@@ -198,19 +198,24 @@ type jwsHeader struct {
 
 // Header holds the standard JOSE header fields.
 //
-// Embed Header in a custom JWS struct to satisfy [JWS.GetHeader]
+// Embed Header in a custom JWS struct to satisfy [VerifiableJWS.GetHeader]
 // for free via Go method promotion — zero boilerplate:
 //
 //	type MyJWS struct {
 //	    jwt.Header        // promotes GetHeader()
 //	    // other fields...
 //	}
-//	// MyJWS now satisfies GetHeader automatically.
+//	// MyJWS now satisfies VerifiableJWS.GetHeader automatically.
 type Header struct {
 	Alg string `json:"alg"`
 	KID string `json:"kid"`
 	Typ string `json:"typ"`
 }
+
+// GetHeader implements [VerifiableJWS].
+// Any struct embedding Header gets this method for free via promotion.
+// Returns a copy — mutations do not propagate back to the embedding struct.
+func (h Header) GetHeader() Header { return h }
 
 // Audience exists as a workaround for a quirk in the specification of the
 // JWT "aud" claim: RFC 7519 §4.1.3 allows "aud" to be either a plain string
@@ -385,12 +390,12 @@ func UnmarshalClaims(jws VerifiableJWS, v any) error {
 // NewJWS creates an unsigned JWS from the provided claims.
 //
 // The "alg" and "kid" header fields are set automatically by [Signer.SignJWS]
-// based on the key type and [jwk.PrivateKey.KID]. Call [JWS.Encode] to
+// based on the key type and [jwk.PrivateKey.KID]. Call [Encode] to
 // produce the compact JWT string after signing.
 func NewJWS(claims Claims) (*JWS, error) {
 	var jws JWS
 
-	jws.header = Header{
+	jws.header.Header = Header{
 		// Alg and KID are set by Sign from the key type and jwk.PrivateKey.KID.
 		Typ: "JWT",
 	}

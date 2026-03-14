@@ -122,13 +122,13 @@ func (s *Signer) SignJWS(jws SignableJWS) ([]byte, error) {
 	return signWith(jws, pk)
 }
 
-// Sign creates a TodoJWS from claims, signs it with the next signing key,
+// Sign creates a JWS from claims, signs it with the next signing key,
 // and returns the signed JWS.
 //
 // Use this when you need access to the signed JWS object (e.g., to inspect
 // headers or read the raw signature). For the common case of producing a
 // compact token string, use [Signer.SignToString].
-func (s *Signer) Sign(claims Claims) (*TodoJWS, error) {
+func (s *Signer) Sign(claims Claims) (*JWS, error) {
 	jws, err := NewJWS(claims)
 	if err != nil {
 		return nil, err
