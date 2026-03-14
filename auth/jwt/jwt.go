@@ -20,6 +20,23 @@
 //   - Relying party, known keys: use [New] with a []jwk.PublicKey slice.
 //   - Relying party, remote keys: use [KeyFetcher]; it fetches lazily and caches.
 //
+// # Supported algorithms
+//
+// Only asymmetric (public-key) algorithms are implemented. Symmetric
+// algorithms (HS256, HS384, HS512) and the "none" algorithm are not supported
+// and will be rejected at verification time. Supported algorithms are derived
+// automatically from the key type — you never configure alg directly:
+//
+//   - EC P-256  → ES256 (ECDSA + SHA-256, RFC 7518 §3.4)
+//   - EC P-384  → ES384 (ECDSA + SHA-384)
+//   - EC P-521  → ES512 (ECDSA + SHA-512)
+//   - RSA       → RS256 (PKCS#1 v1.5 + SHA-256, RFC 7518 §3.3)
+//   - Ed25519   → EdDSA (RFC 8037)
+//
+// During verification, the key type stored under the token's "kid" is checked
+// against the "alg" claim before any cryptographic operation is attempted.
+// An alg/key-type mismatch is a hard error.
+//
 // # Design choices
 //
 // You'll almost never need a custom JOSE header. The algorithm is inferred
