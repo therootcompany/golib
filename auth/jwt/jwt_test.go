@@ -342,8 +342,8 @@ func TestNBFValidation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for future nbf")
 	}
-	if !errors.Is(err, jwt.ErrTokenNotYetValid) {
-		t.Fatalf("expected ErrTokenNotYetValid, got: %v", err)
+	if !errors.Is(err, jwt.ErrClaimsNbf) {
+		t.Fatalf("expected ErrClaimsNbf, got: %v", err)
 	}
 }
 
@@ -378,15 +378,15 @@ func TestRFCValidator(t *testing.T) {
 	// Expired token must still be rejected.
 	expired := minimal
 	expired.Exp = now.Add(-time.Hour).Unix()
-	if err := rfc.Validate(&expired, now); !errors.Is(err, jwt.ErrTokenExpired) {
-		t.Fatalf("expected ErrTokenExpired, got: %v", err)
+	if err := rfc.Validate(&expired, now); !errors.Is(err, jwt.ErrClaimsExp) {
+		t.Fatalf("expected ErrClaimsExp, got: %v", err)
 	}
 
 	// Future iat must be rejected.
 	futureIat := minimal
 	futureIat.Iat = now.Add(time.Hour).Unix()
-	if err := rfc.Validate(&futureIat, now); !errors.Is(err, jwt.ErrTokenFromFuture) {
-		t.Fatalf("expected ErrTokenFromFuture, got: %v", err)
+	if err := rfc.Validate(&futureIat, now); !errors.Is(err, jwt.ErrClaimsIat) {
+		t.Fatalf("expected ErrClaimsIat, got: %v", err)
 	}
 }
 

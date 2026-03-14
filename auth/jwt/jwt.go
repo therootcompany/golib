@@ -624,7 +624,7 @@ type ValidatorCore struct {
 // for those.
 //
 // Returns nil on success, or an [errors.Join] of all failures. Use [errors.Is]
-// to check for specific sentinels (e.g. [ErrTokenExpired], [ErrMissingClaim]).
+// to check for specific sentinels (e.g. [ErrClaimsExp], [ErrMissingClaim]).
 func (v *ValidatorCore) Validate(claims Claims, now time.Time) error {
 	return validateClaims(*claims.GetIDTokenClaims(), *v, claimChecks{
 		checkIss: len(v.Iss) > 0,
@@ -664,7 +664,7 @@ type IDTokenValidator struct {
 // Validate checks the OIDC Core §2 ID Token claims.
 //
 // Returns nil on success, or an [errors.Join] of all failures. Use [errors.Is]
-// to check for specific sentinels (e.g. [ErrTokenExpired], [ErrMissingClaim]).
+// to check for specific sentinels (e.g. [ErrClaimsExp], [ErrMissingClaim]).
 func (v *IDTokenValidator) Validate(claims Claims, now time.Time) error {
 	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      !v.IgnoreIss,
@@ -707,7 +707,7 @@ type RFCValidator struct {
 // Validate checks claims against RFC 7519 rules.
 //
 // Returns nil on success, or an [errors.Join] of all failures. Use [errors.Is]
-// to check for specific sentinels (e.g. [ErrTokenExpired], [ErrMissingClaim]).
+// to check for specific sentinels (e.g. [ErrClaimsExp], [ErrMissingClaim]).
 func (v *RFCValidator) Validate(claims Claims, now time.Time) error {
 	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      len(v.Iss) > 0,
@@ -776,7 +776,7 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 		} else if now.After(time.Unix(claims.Exp, 0).Add(skew)) {
 			duration := now.Sub(time.Unix(claims.Exp, 0))
 			expTime := time.Unix(claims.Exp, 0).Format("2006-01-02 15:04:05 MST")
-			errs = append(errs, fmt.Errorf("expired %s ago (%s): %w", formatDuration(duration), expTime, ErrTokenExpired))
+			errs = append(errs, fmt.Errorf("expired %s ago (%s): %w", formatDuration(duration), expTime, ErrClaimsExp))
 		}
 	}
 
@@ -786,7 +786,7 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 		if nbfTime.After(now.Add(skew)) {
 			fromNow := nbfTime.Sub(now)
 			nbfStr := nbfTime.Format("2006-01-02 15:04:05 MST")
-			errs = append(errs, fmt.Errorf("nbf is %s in the future (%s): %w", formatDuration(fromNow), nbfStr, ErrTokenNotYetValid))
+			errs = append(errs, fmt.Errorf("nbf is %s in the future (%s): %w", formatDuration(fromNow), nbfStr, ErrClaimsNbf))
 		}
 	}
 
@@ -796,7 +796,7 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 		} else if time.Unix(claims.Iat, 0).After(now.Add(skew)) {
 			duration := time.Unix(claims.Iat, 0).Sub(now)
 			iatTime := time.Unix(claims.Iat, 0).Format("2006-01-02 15:04:05 MST")
-			errs = append(errs, fmt.Errorf("iat is %s in the future (%s): %w", formatDuration(duration), iatTime, ErrTokenFromFuture))
+			errs = append(errs, fmt.Errorf("iat is %s in the future (%s): %w", formatDuration(duration), iatTime, ErrClaimsIat))
 		}
 	}
 
@@ -815,13 +815,13 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 				fromNow := authTime.Sub(now)
 				errs = append(errs, fmt.Errorf(
 					"auth_time %s is %s in the future: %w",
-					authTimeStr, formatDuration(fromNow), ErrTokenFromFuture),
+					authTimeStr, formatDuration(fromNow), ErrClaimsAuthTime),
 				)
 			} else if core.MaxAge > 0 && age > core.MaxAge {
 				diff := age - core.MaxAge
 				errs = append(errs, fmt.Errorf(
 					"auth_time %s is %s old, exceeding max age %s by %s: %w",
-					authTimeStr, formatDuration(age), formatDuration(core.MaxAge), formatDuration(diff), ErrAuthTooOld),
+					authTimeStr, formatDuration(age), formatDuration(core.MaxAge), formatDuration(diff), ErrClaimsAuthTime),
 				)
 			}
 		}

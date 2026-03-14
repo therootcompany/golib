@@ -19,18 +19,18 @@ var (
 
 // Verification errors — returned by [Verifier.Verify] and [Verifier.VerifyJWT].
 var (
-	ErrMissingKID      = errors.New("missing kid")
-	ErrUnknownKID      = errors.New("unknown kid")
+	ErrMissingKID       = errors.New("missing kid")
+	ErrUnknownKID       = errors.New("unknown kid")
 	ErrSignatureInvalid = errors.New("signature invalid")
-	ErrKeyTypeMismatch = errors.New("key type mismatch")
-	ErrCurveMismatch   = errors.New("curve mismatch")
-	ErrUnsupportedAlg  = errors.New("unsupported algorithm")
+	ErrKeyTypeMismatch  = errors.New("key type mismatch")
+	ErrCurveMismatch    = errors.New("curve mismatch")
+	ErrUnsupportedAlg   = errors.New("unsupported algorithm")
 )
 
 // Signing errors — returned by [NewSigner], [Signer.SignJWS], and [Signer.Sign].
 var (
-	ErrNoSigningKey = errors.New("no signing key")
-	ErrAlgConflict  = errors.New("algorithm conflict")
+	ErrNoSigningKey   = errors.New("no signing key")
+	ErrAlgConflict    = errors.New("algorithm conflict")
 	ErrUnsupportedKey = errors.New("unsupported key type")
 )
 
@@ -41,13 +41,13 @@ var (
 // check for specific issues with [errors.Is]:
 //
 //	err := v.Validate(&claims, time.Now())
-//	if errors.Is(err, jwt.ErrTokenExpired) { /* handle */ }
+//	if errors.Is(err, jwt.ErrClaimsExp) { /* handle */ }
 var (
-	ErrValidation      = errors.New("validation failed")
-	ErrTokenExpired    = errors.New("token expired")
-	ErrTokenNotYetValid = errors.New("token not yet valid")
-	ErrTokenFromFuture = errors.New("token issued in the future")
-	ErrMissingClaim    = errors.New("missing required claim")
-	ErrInvalidClaim    = errors.New("invalid claim value")
-	ErrAuthTooOld      = errors.New("authentication too old")
+	ErrValidation     = errors.New("validation failed")
+	ErrClaimsExp      = errors.New("exp: token expired")
+	ErrClaimsNbf      = errors.New("nbf: token not yet valid")
+	ErrClaimsIat      = errors.New("iat: token issued in the future")
+	ErrClaimsAuthTime = errors.New("auth_time: authentication too old")
+	ErrMissingClaim   = errors.New("missing required claim")
+	ErrInvalidClaim   = errors.New("invalid claim value")
 )
