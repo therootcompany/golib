@@ -213,8 +213,11 @@ func (k PublicKey) Thumbprint() (string, error) {
 
 // PrivateKey wraps a [crypto.Signer] (private key) with its JWKS metadata.
 //
-// PrivateKey is never serialized to JSON — it is a runtime-only signing
-// capability. Call [PrivateKey.PublicKey] to obtain the serializable [PublicKey].
+// PrivateKey implements [json.Marshaler] and [json.Unmarshaler]:
+// marshaling includes the private key material (the "d" field and RSA primes);
+// unmarshaling reconstructs a fully operational signing key from a JWK with
+// private fields present. Never publish the marshaled output — it contains
+// private key material.
 //
 // Because crypto.Signer is embedded, PrivateKey itself satisfies crypto.Signer:
 // its Sign and Public methods are promoted directly.
@@ -245,16 +248,59 @@ func (k *PrivateKey) Thumbprint() (string, error) {
 	return k.PublicKey().Thumbprint()
 }
 
+// MarshalJSON implements [json.Marshaler], encoding the key as a JWK JSON object
+// that includes private key material (the "d" field and RSA CRT components).
+// Never publish the result — it contains the private key.
+func (k PrivateKey) MarshalJSON() ([]byte, error) {
+	pk, err := encodePrivate(k)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(pk)
+}
+
+// UnmarshalJSON implements [json.Unmarshaler], parsing a JWK JSON object that
+// contains private key material. The "d" field (and RSA primes) must be present;
+// public-key-only JWKs return an error. If the JWK has no "kid" field, the KID
+// is auto-computed via [PublicKey.Thumbprint].
+func (k *PrivateKey) UnmarshalJSON(data []byte) error {
+	var kj rawKey
+	if err := json.Unmarshal(data, &kj); err != nil {
+		return fmt.Errorf("parse JWK: %w", err)
+	}
+	if kj.D == "" {
+		return fmt.Errorf("parse JWK: no private key material (\"d\" field missing)")
+	}
+	decoded, err := decodePrivate(kj)
+	if err != nil {
+		return err
+	}
+	if decoded.KID == "" {
+		decoded.KID, err = decoded.Thumbprint()
+		if err != nil {
+			return fmt.Errorf("parse JWK: compute thumbprint: %w", err)
+		}
+	}
+	*k = *decoded
+	return nil
+}
+
 // rawKey is the unexported JSON wire representation of a JWK object.
-// It is used internally by [PublicKey.MarshalJSON] and [PublicKey.UnmarshalJSON].
+// It is used internally by [PublicKey] and [PrivateKey] JSON methods.
 type rawKey struct {
 	Kty    string   `json:"kty"`
 	KID    string   `json:"kid,omitempty"`
 	Crv    string   `json:"crv,omitempty"`
 	X      string   `json:"x,omitempty"`
 	Y      string   `json:"y,omitempty"`
+	D      string   `json:"d,omitempty"`  // EC/OKP: private scalar; RSA: private exponent
 	N      string   `json:"n,omitempty"`
 	E      string   `json:"e,omitempty"`
+	P      string   `json:"p,omitempty"`  // RSA: first prime factor
+	Q      string   `json:"q,omitempty"`  // RSA: second prime factor
+	DP     string   `json:"dp,omitempty"` // RSA: d mod (p-1)
+	DQ     string   `json:"dq,omitempty"` // RSA: d mod (q-1)
+	QI     string   `json:"qi,omitempty"` // RSA: q^-1 mod p
 	Use    string   `json:"use,omitempty"`
 	Alg    string   `json:"alg,omitempty"`
 	KeyOps []string `json:"key_ops,omitempty"`
@@ -326,6 +372,69 @@ func encode(k PublicKey) (rawKey, error) {
 	}
 }
 
+// encodePrivate converts a [PrivateKey] to its [rawKey] wire representation,
+// including private key material (d, and RSA CRT components p/q/dp/dq/qi).
+// Used by [PrivateKey.MarshalJSON].
+func encodePrivate(k PrivateKey) (rawKey, error) {
+	switch priv := k.Signer.(type) {
+	case *ecdsa.PrivateKey:
+		pub, err := encode(PublicKey{
+			CryptoPublicKey: &priv.PublicKey,
+			KID:             k.KID,
+			Use:             k.Use,
+			Alg:             k.Alg,
+			KeyOps:          k.KeyOps,
+		})
+		if err != nil {
+			return rawKey{}, err
+		}
+		byteLen := (priv.Curve.Params().BitSize + 7) / 8
+		pub.D = base64.RawURLEncoding.EncodeToString(priv.D.FillBytes(make([]byte, byteLen)))
+		return pub, nil
+
+	case *rsa.PrivateKey:
+		pub, err := encode(PublicKey{
+			CryptoPublicKey: &priv.PublicKey,
+			KID:             k.KID,
+			Use:             k.Use,
+			Alg:             k.Alg,
+			KeyOps:          k.KeyOps,
+		})
+		if err != nil {
+			return rawKey{}, err
+		}
+		pub.D = base64.RawURLEncoding.EncodeToString(priv.D.Bytes())
+		if len(priv.Primes) >= 2 {
+			priv.Precompute()
+			pub.P = base64.RawURLEncoding.EncodeToString(priv.Primes[0].Bytes())
+			pub.Q = base64.RawURLEncoding.EncodeToString(priv.Primes[1].Bytes())
+			if priv.Precomputed.Dp != nil {
+				pub.DP = base64.RawURLEncoding.EncodeToString(priv.Precomputed.Dp.Bytes())
+				pub.DQ = base64.RawURLEncoding.EncodeToString(priv.Precomputed.Dq.Bytes())
+				pub.QI = base64.RawURLEncoding.EncodeToString(priv.Precomputed.Qinv.Bytes())
+			}
+		}
+		return pub, nil
+
+	case ed25519.PrivateKey:
+		pub, err := encode(PublicKey{
+			CryptoPublicKey: ed25519.PublicKey(priv[ed25519.SeedSize:]),
+			KID:             k.KID,
+			Use:             k.Use,
+			Alg:             k.Alg,
+			KeyOps:          k.KeyOps,
+		})
+		if err != nil {
+			return rawKey{}, err
+		}
+		pub.D = base64.RawURLEncoding.EncodeToString(priv.Seed())
+		return pub, nil
+
+	default:
+		return rawKey{}, fmt.Errorf("encodePrivate: unsupported key type %T", k.Signer)
+	}
+}
+
 // ReadFile reads and parses a JWKS document from a file path.
 // It is equivalent to os.ReadFile followed by json.Unmarshal into a [JWKs].
 func ReadFile(filePath string) ([]PublicKey, error) {
@@ -375,6 +484,80 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 
 	default:
 		return nil, fmt.Errorf("unsupported key type %q for kid %q", kj.Kty, kj.KID)
+	}
+}
+
+// decodePrivate parses a rawKey wire struct that contains private key material
+// into a [PrivateKey]. KID auto-derivation is handled by [PrivateKey.UnmarshalJSON].
+func decodePrivate(kj rawKey) (*PrivateKey, error) {
+	switch kj.Kty {
+	case "EC":
+		pub, err := decodeEC(kj)
+		if err != nil {
+			return nil, fmt.Errorf("parse EC private key %q: %w", kj.KID, err)
+		}
+		dBytes, err := base64.RawURLEncoding.DecodeString(kj.D)
+		if err != nil {
+			return nil, fmt.Errorf("parse EC private key %q: invalid d: %w", kj.KID, err)
+		}
+		priv := &ecdsa.PrivateKey{
+			PublicKey: *pub,
+			D:         new(big.Int).SetBytes(dBytes),
+		}
+		return &PrivateKey{Signer: priv, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
+
+	case "RSA":
+		pub, err := decodeRSA(kj)
+		if err != nil {
+			return nil, fmt.Errorf("parse RSA private key %q: %w", kj.KID, err)
+		}
+		if pub.Size() < 128 { // 1024 bits minimum
+			return nil, fmt.Errorf("RSA private key %q too small: %d bytes", kj.KID, pub.Size())
+		}
+		dBytes, err := base64.RawURLEncoding.DecodeString(kj.D)
+		if err != nil {
+			return nil, fmt.Errorf("parse RSA private key %q: invalid d: %w", kj.KID, err)
+		}
+		priv := &rsa.PrivateKey{
+			PublicKey: *pub,
+			D:         new(big.Int).SetBytes(dBytes),
+		}
+		if kj.P != "" && kj.Q != "" {
+			p, err := base64.RawURLEncoding.DecodeString(kj.P)
+			if err != nil {
+				return nil, fmt.Errorf("parse RSA private key %q: invalid p: %w", kj.KID, err)
+			}
+			q, err := base64.RawURLEncoding.DecodeString(kj.Q)
+			if err != nil {
+				return nil, fmt.Errorf("parse RSA private key %q: invalid q: %w", kj.KID, err)
+			}
+			priv.Primes = []*big.Int{
+				new(big.Int).SetBytes(p),
+				new(big.Int).SetBytes(q),
+			}
+			priv.Precompute()
+			if err := priv.Validate(); err != nil {
+				return nil, fmt.Errorf("parse RSA private key %q: validation failed: %w", kj.KID, err)
+			}
+		}
+		return &PrivateKey{Signer: priv, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
+
+	case "OKP":
+		if kj.Crv != "Ed25519" {
+			return nil, fmt.Errorf("parse OKP private key %q: unsupported curve %q (only Ed25519 supported)", kj.KID, kj.Crv)
+		}
+		seed, err := base64.RawURLEncoding.DecodeString(kj.D)
+		if err != nil {
+			return nil, fmt.Errorf("parse Ed25519 private key %q: invalid d: %w", kj.KID, err)
+		}
+		if len(seed) != ed25519.SeedSize {
+			return nil, fmt.Errorf("parse Ed25519 private key %q: invalid seed size: got %d, want %d", kj.KID, len(seed), ed25519.SeedSize)
+		}
+		priv := ed25519.NewKeyFromSeed(seed)
+		return &PrivateKey{Signer: priv, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
+
+	default:
+		return nil, fmt.Errorf("parse private key: unsupported key type %q for kid %q", kj.Kty, kj.KID)
 	}
 }
 
