@@ -92,8 +92,8 @@ type KeyFetcher struct {
 	// are served immediately while a background refresh fetches fresh keys.
 	InitialKeys []jwk.PublicKey
 
-	fetchMu    sync.Mutex                   // held during HTTP fetch
-	ctrlMu     sync.Mutex                   // held briefly for refreshing/lastErr
+	fetchMu    sync.Mutex // held during HTTP fetch
+	ctrlMu     sync.Mutex // held briefly for refreshing/lastErr
 	cached     atomic.Pointer[cachedVerifier]
 	initOnce   sync.Once
 	refreshing bool  // true while a background refresh goroutine is running
@@ -188,7 +188,7 @@ func (f *KeyFetcher) maybeInit() {
 	f.initOnce.Do(func() {
 		now := time.Now()
 		ci := &cachedVerifier{
-			iss:       New(f.InitialKeys),
+			iss:       NewVerifier(f.InitialKeys),
 			fetchedAt: now,
 			expiresAt: now, // immediately expired - served as stale, triggers background refresh
 		}
@@ -220,7 +220,7 @@ func (f *KeyFetcher) fetch() (*Verifier, error) {
 
 	now := time.Now()
 	ci := &cachedVerifier{
-		iss:       New(keys),
+		iss:       NewVerifier(keys),
 		fetchedAt: now,
 		expiresAt: now.Add(maxAge),
 	}

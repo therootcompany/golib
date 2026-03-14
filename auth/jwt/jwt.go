@@ -443,7 +443,7 @@ func Decode(tokenStr string) (*JWS, error) {
 // UnmarshalClaims - the signature must be authenticated before trusting the
 // payload. Works with any [VerifiableJWS] implementation, not just [*JWS].
 func UnmarshalClaims(jws VerifiableJWS, claims Claims) error {
-	payload, err := base64.RawURLEncoding.DecodeString(string(jws.GetPayload()))
+	payload, err := base64.RawURLEncoding.AppendDecode([]byte{}, jws.GetPayload())
 	if err != nil {
 		return fmt.Errorf("payload base64: %w: %w", ErrInvalidPayload, err)
 	}
@@ -819,11 +819,11 @@ type Verifier struct {
 	keys    map[string]jwk.CryptoPublicKey // kid => key
 }
 
-// New creates a Verifier with an explicit set of public keys.
+// NewVerifier creates a Verifier with an explicit set of public keys.
 //
 // The returned Verifier is immutable - keys cannot be added or removed after
 // construction. For dynamic key rotation, see [KeyFetcher].
-func New(keys []jwk.PublicKey) *Verifier {
+func NewVerifier(keys []jwk.PublicKey) *Verifier {
 	m := make(map[string]jwk.CryptoPublicKey, len(keys))
 	for _, k := range keys {
 		m[k.KID] = k.CryptoPublicKey

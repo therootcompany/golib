@@ -255,5 +255,5 @@ func (s *Signer) SignToString(claims Claims) (string, error) {
 //
 //	iss := jwt.New(append(signer.Keys, oldKeys...))
 func (s *Signer) Verifier() *Verifier {
-	return New(s.Keys)
+	return NewVerifier(s.Keys)
 }
