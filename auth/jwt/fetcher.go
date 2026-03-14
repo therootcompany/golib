@@ -201,7 +201,11 @@ func (f *KeyFetcher) maybeInit() {
 // The cache TTL is the server's Cache-Control max-age, clamped to MaxAge.
 // If the server sends no Cache-Control header, MaxAge is used directly.
 func (f *KeyFetcher) fetch() (*Verifier, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), clientTimeout(f.HTTPClient))
+	timeout := 30 * time.Second
+	if f.HTTPClient != nil && f.HTTPClient.Timeout > 0 {
+		timeout = f.HTTPClient.Timeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	keys, serverMaxAge, err := jwk.FetchURL(ctx, f.URL, f.HTTPClient)
@@ -226,12 +230,4 @@ func (f *KeyFetcher) fetch() (*Verifier, error) {
 	}
 	f.cached.Store(ci)
 	return ci.iss, nil
-}
-
-// clientTimeout returns client.Timeout, or 30s if the client is nil or has no timeout set.
-func clientTimeout(client *http.Client) time.Duration {
-	if client != nil && client.Timeout > 0 {
-		return client.Timeout
-	}
-	return 30 * time.Second
 }

@@ -97,8 +97,7 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 	}, nil
 }
 
-// SignJWS signs jws in-place using the next signing key in round-robin order
-// and returns the signature bytes.
+// SignJWS signs jws in-place using the next signing key in round-robin order.
 //
 // The KID and alg header fields are set automatically from the selected key.
 // Use this when you need the full signed JWS for further processing
@@ -107,13 +106,7 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 func (s *Signer) SignJWS(jws SignableJWS) error {
 	idx := s.signerIdx.Add(1) - 1
 	pk := &s.keys[idx%uint64(len(s.keys))]
-	return signWith(jws, pk)
-}
 
-// signWith is the shared implementation used by [Signer.SignJWS]. It derives
-// the algorithm from the key type, validates any pre-set alg/kid in the JWS
-// header, signs the payload, and stores the result via [SignableJWS].
-func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 	if pk.Signer == nil {
 		return fmt.Errorf("kid %q: %w", pk.KID, jose.ErrNoSigningKey)
 	}
@@ -159,12 +152,10 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 		return fmt.Errorf("sign %s: %w", alg, err)
 	}
 
-	// ECDSA post-processing: crypto.Signer returns ASN.1 DER, but JWS
-	// (RFC 7515 §A.3) requires IEEE P1363 format (raw r||s concatenation).
-	// ecdsa.SignASN1 also returns DER — there is no stdlib function that
-	// signs directly to P1363, so this conversion is required.
+	// ECDSA: crypto.Signer returns ASN.1 DER, but JWS (RFC 7515 §A.3)
+	// requires IEEE P1363 format (raw r||s concatenation).
 	if ecKeySize > 0 {
-		sig, err = ecdsaDERToRaw(sig, ecKeySize)
+		sig, err = ecdsaDERToP1363(sig, ecKeySize)
 		if err != nil {
 			return err
 		}
