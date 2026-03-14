@@ -104,8 +104,8 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jws.GetStandardHeader().Alg != "ES256" {
-		t.Fatalf("expected ES256, got %s", jws.GetStandardHeader().Alg)
+	if jws.GetHeader().Alg != "ES256" {
+		t.Fatalf("expected ES256, got %s", jws.GetHeader().Alg)
 	}
 
 	token := jwt.Encode(jws)
@@ -116,8 +116,8 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyJWT failed: %v", err)
 	}
-	if jws2.GetStandardHeader().Alg != "ES256" {
-		t.Errorf("expected ES256 alg in jws, got %s", jws2.GetStandardHeader().Alg)
+	if jws2.GetHeader().Alg != "ES256" {
+		t.Errorf("expected ES256 alg in jws, got %s", jws2.GetHeader().Alg)
 	}
 
 	var decoded AppClaims
@@ -151,8 +151,8 @@ func TestRoundTripRS256(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jws.GetStandardHeader().Alg != "RS256" {
-		t.Fatalf("expected RS256, got %s", jws.GetStandardHeader().Alg)
+	if jws.GetHeader().Alg != "RS256" {
+		t.Fatalf("expected RS256, got %s", jws.GetHeader().Alg)
 	}
 
 	token := jwt.Encode(jws)
@@ -190,8 +190,8 @@ func TestRoundTripEdDSA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jws.GetStandardHeader().Alg != "EdDSA" {
-		t.Fatalf("expected EdDSA, got %s", jws.GetStandardHeader().Alg)
+	if jws.GetHeader().Alg != "EdDSA" {
+		t.Fatalf("expected EdDSA, got %s", jws.GetHeader().Alg)
 	}
 
 	token := jwt.Encode(jws)
@@ -264,8 +264,8 @@ func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	if result == nil {
 		t.Fatal("Decode should return non-nil StandardJWS")
 	}
-	if result.GetStandardHeader().KID != "k" {
-		t.Errorf("expected kid %q, got %q", "k", result.GetStandardHeader().KID)
+	if result.GetHeader().KID != "k" {
+		t.Errorf("expected kid %q, got %q", "k", result.GetHeader().KID)
 	}
 
 	// Verify should fail with the wrong key.

@@ -69,8 +69,8 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/sha512"
+	_ "crypto/sha256" // register SHA-256 with crypto.Hash
+	_ "crypto/sha512" // register SHA-384 and SHA-512 with crypto.Hash
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
@@ -207,11 +207,7 @@ type Header struct {
 	Typ string `json:"typ"`
 }
 
-func (h Header) GetHeader() Header {
-	return h
-}
-
-// GetHeader implements [JWS].
+// GetHeader implements [VerifiableJWS].
 // Any struct embedding Header gets this method for free via promotion.
 // Returns a copy — mutations do not propagate back to the embedding struct.
 func (h Header) GetHeader() Header { return h }
@@ -966,19 +962,12 @@ func algForECKey(pub *ecdsa.PublicKey) (alg string, h crypto.Hash, err error) {
 }
 
 func digestFor(h crypto.Hash, data []byte) ([]byte, error) {
-	switch h {
-	case crypto.SHA256:
-		d := sha256.Sum256(data)
-		return d[:], nil
-	case crypto.SHA384:
-		d := sha512.Sum384(data)
-		return d[:], nil
-	case crypto.SHA512:
-		d := sha512.Sum512(data)
-		return d[:], nil
-	default:
+	if !h.Available() {
 		return nil, fmt.Errorf("jwt: unsupported hash %v", h)
 	}
+	hh := h.New()
+	hh.Write(data)
+	return hh.Sum(nil), nil
 }
 
 func ecdsaDERToRaw(der []byte, curve elliptic.Curve) ([]byte, error) {
