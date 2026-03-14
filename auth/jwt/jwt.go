@@ -1,4 +1,4 @@
-// Copyright 2025 AJ ONeal <aj@therootcompany.com> (https://therootcompany.com)
+// Copyright 2026 AJ ONeal <aj@therootcompany.com> (https://therootcompany.com)
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,46 +6,64 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-// Package jwt is a lightweight JWT/JWS/JWK library designed from first principles.
+// Package jwt is a lightweight library for the JWT/JWS/JWK parts of JOSE/OIDC/OAuth2 library, designed from first principles, built exclusively for modern Go (1.26 and up) and current standards (OIDC Core 1.0 errata set 2, OAuth 2.1 draft 15, MCP).
 //
-// # Use cases
+// High convenience. Low boilerplate. Easy to customize. Focused:
 //
-// You are either an issuer (you sign tokens) or a relying party (you only verify
-// them). As a relying party you either hold known public keys at startup, or you
-// fetch them at runtime from a canonical JWKS endpoint.
+// - You're either building an Issuer (sign JWTs) or Relying Party (verifies and validates JWTs)
+// - You're implementing part of JOSE, OIDC or OAuth2 and may have a /jwks.json endpoint
+// - You almost never need a custom Header
+// - You almost always need custom Claims (token Payload)
+// - You want type-safe keys (but you don't want to have to type-switch on them)
+// - You may also be implementing MCP support for Ai / Agents
+// - You probably do a little of all sides
 //
-//   - Issuer: use [NewSigner] then [Signer.Sign]; expose public keys via
-//     json.Marshal(&signer) ([Signer] embeds [jwk.JWKs]) or hand them
-//     directly to [New] for a co-located verifier.
+// This package implements So rather than implementing to the spec article by article, this implements by flow.
+//
+// This was created with Ai assistance to be able to iterate quickly over different design choices, but every line of the code has been manually reviewed for correctness, as well as many of the tests.
+//
+// # Use case: Issuer (+Relying Party)
+//
+// You're building the thing that has the Private Keys, signs the tokens + verifies tokens and validates claims.
+//   - create a [NewSigner] with the private keys
+//   - use json.Marshal(&signer.JWKs) to publish a /jwks.json endpoint ([Signer] embeds [jwk.JWKs])
+//   - use [Signer.Sign] + [IDTokenClaims] or [StandardClaims] to create a JWT
+//   - use [Signer.Verifier] to verify the JWT (bearer token)
+//   - use [UnmarshalClaims] to get your user info
+//   - use [Validator.Validate] to validate the claims (user info payload)
+//   - use custom Validation for your own Claims type with a [Validator], or by hand - dealer's choice
+//
+// # Use case: Relying Party
+//
+// 2. Relying Party: you're building a thing that uses Public Keys to verify and validates tokens
+//   - you may already know the public keys (and redeploy when they change)
+//   - or you fetch them at runtime from a /jwks.json endpoint (and cache and update periodically)
 //   - Relying party, known keys: use [New] with a []jwk.PublicKey slice.
 //   - Relying party, remote keys: use [KeyFetcher]; it fetches lazily and caches.
+//   - use [Verifier.Verify] to verify the JWT (bearer token)
+//   - use [UnmarshalClaims] to get your user info
+//   - use [Validator.Validate] to validate the claims (user info payload)
+//   - use custom Validation for your own Claims type with a [Validator], or by hand - dealer's choice
 //
-// # Supported algorithms
-//
-// Only asymmetric (public-key) algorithms are implemented. Symmetric
-// algorithms (HS256, HS384, HS512) and the "none" algorithm are not supported
-// and will be rejected at verification time. Supported algorithms are derived
-// automatically from the key type - you never configure alg directly:
-//
-//   - EC P-256  => ES256 (ECDSA + SHA-256, RFC 7518 §3.4)
-//   - EC P-384  => ES384 (ECDSA + SHA-384)
-//   - EC P-521  => ES512 (ECDSA + SHA-512)
-//   - RSA       => RS256 (PKCS#1 v1.5 + SHA-256, RFC 7518 §3.3)
-//   - Ed25519   => EdDSA (RFC 8037)
-//
-// During verification, the key type stored under the token's "kid" is checked
-// against the "alg" claim before any cryptographic operation is attempted.
-// An alg/key-type mismatch is a hard error.
+// # Use case: MCP / Agents
 //
 // # Design choices
 //
-// You'll almost never need a custom JOSE header. The algorithm is inferred
-// automatically from the key type; KID comes from [jwk.PrivateKey.KID]; typ is
-// always "JWT". [Signer.SignJWS] handles all of this - you do not configure alg.
+// Convenience is not convenient if it gets in your way. This is a library, not
+// a framework: it gives you composable pieces you call and control, not
+// scaffolding you must conform to.
+//
+// We use very simple, embedded types to make it effortless to provide your own Claims,
+// and easy to use custom a Header if needed, or use any part of the system independently.
+//
+// Sane defaults for everything.
+//
+// You don't need to be a crypto export to use this library - but if you are, hopefully
+// you find it to be the best you've ever used.
 //
 // You'll almost always need custom claims. [UnmarshalClaims] decodes the payload
-// into a [Claims] value. Embed [IDTokenClaims] in your struct to get the
-// registered fields and satisfy [Claims] for free via Go method promotion, with
+// into a [Claims] value. Embed [StandardClaims] or [IDTokenClaims] in your struct to get the
+// registered fields and satisfy [Claims] "for free" via Go method promotion -
 // zero boilerplate. For OIDC UserInfo profile fields (name, email, phone, etc.)
 // embed [StandardClaims] instead.
 //
@@ -57,9 +75,54 @@
 // [Decode] always succeeds for a well-formed token - inspect the header (kid,
 // alg) before calling [Verifier.Verify] for multi-issuer routing.
 //
-// Convenience is not convenient if it gets in your way. This is a library, not
-// a framework: it gives you composable pieces you call and control, not
-// scaffolding you must conform to.
+// # Security
+//
+// 1. YAGNI: Don't implement what you don't need = less surface area = greater security.
+//
+// The researchers who write specifications are notorious for imagining every
+// hypothetical - which has resulted in numerous security flaws over the years.
+// There's nothing in here that I haven't seen in the wild and found useful.
+// And I'm happy to extend if needed.
+//
+// 2. Verify AND Validate
+//
+// As an Issuer (owner) you [Signer.Sign] and then [jwt.Encode].
+//
+// As a Relying Party (client) you [jwt.Decode], [Verifier.Verify] and [Validator.Validate].
+//
+// Why not a single step? Because Claims (sometimes called "User" in other libs) is the thing
+// you actually care about, and actually want type safety for. After trying various approaches
+// with embedding and generics, what I landed on is that the only ergonomic and type-safe way
+// to Verify a JWT and Validate Claims is to have the two be separate operations.
+//
+// It's why you get to use this library as a library and how you get to have all of the
+// convenience without sacrificing control and customization of the thing you're most likely
+// to want to be able to customize (and debug).
+//
+// 3. Algorithms: The fewer the merrier.
+//
+// Only asymmetric (public-key) algorithms are implemented.
+//
+// You should use Ed25519. It's the end-game algorithm - all upside, no known
+// downsides, and it's supported ubiquitously - Web Browsers, Node, Go, Rust,
+// JavaScript, etc.
+//
+// Ed25519 is the default for this library.
+// ECDSA is probably the most popular, so it's provided for backwards compatibility.
+// RSA is only is provided for backwards compatibility - it's larger, slower, and no real benefit.
+//
+//   - EC P-256  => ES256 (ECDSA + SHA-256, RFC 7518 §3.4)
+//   - EC P-384  => ES384 (ECDSA + SHA-384)
+//   - EC P-521  => ES512 (ECDSA + SHA-512)
+//   - RSA       => RS256 (PKCS#1 v1.5 + SHA-256, RFC 7518 §3.3)
+//   - Ed25519   => EdDSA (RFC 8037)
+//
+// Supported algorithms are derived automatically from the key type - you never
+// configure alg directly.
+//
+// The verification process selects a key by matching the "kid" (KeyID) of token
+// and the key and then checking "alg" before any cryptographic operation is attempted.
+// An alg/key-type mismatch is a hard error.
 package jwt
 
 import (
@@ -246,8 +309,8 @@ func (a Audience) MarshalJSON() ([]byte, error) {
 // satisfy [Claims] for free via Go's method promotion - zero boilerplate:
 //
 //	type AppClaims struct {
-//	    jwt.StandardClaims            // promotes GetIDTokenClaims()
-//	    Roles []string `json:"roles"`
+//	    jwt.StandardClaims             // promotes GetIDTokenClaims()
+//	    RoleList string `json:"roles"`
 //	}
 //	// AppClaims now satisfies Claims automatically.
 type IDTokenClaims struct {
@@ -512,9 +575,21 @@ func signingInputBytes(protected, payload []byte) []byte {
 }
 
 // DefaultGracePeriod is the tolerance applied to exp, iat, and auth_time checks
-// when ValidatorCore.GracePeriod is zero. It accommodates typical clock skew
-// between distributed systems.
-var DefaultGracePeriod = 5 * time.Second
+// when ValidatorCore.GracePeriod is zero.
+//
+// It should be set to at least 2s in most cases to account for practical edge
+// cases of corresponding systems having even a millisecond of clock skew between
+// them and the offset of their respective implementations truncating, flooring,
+// ceiling, or rounding seconds differently.
+//
+// For example: If 1.999 is truncated to 1 and 2.001 is ceiled to 3, then there
+// is a 2 second difference.
+//
+// This will very rarely affect calculations on exp (and hopefully a client knows
+// better than to ride the very millisecond of expiration), but it can very
+// frequently affect calculations on iat and nbf on distributed production
+// systems.
+var DefaultGracePeriod = 2 * time.Second
 
 // ValidatorCore holds configuration shared by [IDTokenValidator] and [RFCValidator].
 // It can also be used directly as a minimal validator.
