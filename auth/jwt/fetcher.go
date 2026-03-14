@@ -111,7 +111,17 @@ type KeyFetcher struct {
 //
 // No cache: blocks until the first fetch completes.
 func (f *KeyFetcher) Verifier() (*Verifier, error) {
-	f.maybeInit()
+	if len(f.InitialKeys) > 0 {
+		f.initOnce.Do(func() {
+			now := time.Now()
+			ci := &cachedVerifier{
+				iss:       NewVerifier(f.InitialKeys),
+				fetchedAt: now,
+				expiresAt: now, // immediately expired - served as stale, triggers background refresh
+			}
+			f.cached.Store(ci)
+		})
+	}
 
 	now := time.Now()
 	ci := f.cached.Load()
@@ -176,24 +186,6 @@ func (f *KeyFetcher) backgroundRefresh() {
 		f.lastErr = nil
 	}
 	f.ctrlMu.Unlock()
-}
-
-// maybeInit seeds the cache with InitialKeys on the first call, if set.
-// The seeded verifier is immediately expired so it is served as stale,
-// triggering a background refresh while being available immediately.
-func (f *KeyFetcher) maybeInit() {
-	if len(f.InitialKeys) == 0 {
-		return
-	}
-	f.initOnce.Do(func() {
-		now := time.Now()
-		ci := &cachedVerifier{
-			iss:       NewVerifier(f.InitialKeys),
-			fetchedAt: now,
-			expiresAt: now, // immediately expired - served as stale, triggers background refresh
-		}
-		f.cached.Store(ci)
-	})
 }
 
 // fetch performs the HTTP request and stores the result. Must be called with fetchMu held.
