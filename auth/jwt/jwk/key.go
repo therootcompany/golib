@@ -347,7 +347,7 @@ func encode(k PublicKey) (rawKey, error) {
 		return rk, nil
 
 	default:
-		return rawKey{}, fmt.Errorf("encode: %T: %w", k.CryptoPublicKey, jose.ErrUnsupportedKeyType)
+		return rawKey{}, fmt.Errorf("%T: %w", k.CryptoPublicKey, jose.ErrUnsupportedKeyType)
 	}
 }
 
@@ -385,7 +385,7 @@ func encodePrivate(k PrivateKey) (rawKey, error) {
 		rk.D = base64.RawURLEncoding.EncodeToString(priv.Seed())
 
 	default:
-		return rawKey{}, fmt.Errorf("encode: %T: %w", k.Signer, jose.ErrUnsupportedKeyType)
+		return rawKey{}, fmt.Errorf("%T: %w", k.Signer, jose.ErrUnsupportedKeyType)
 	}
 
 	return rk, nil
@@ -612,10 +612,10 @@ func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 	// coordinate to the expected byte length. ParseUncompressedPublicKey
 	// validates that the point is on the curve.
 	if len(x) > ci.KeySize {
-		return nil, fmt.Errorf("ECDSA X coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(x), ci.KeySize, jose.ErrInvalidKey)
+		return nil, fmt.Errorf("x coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(x), ci.KeySize, jose.ErrInvalidKey)
 	}
 	if len(y) > ci.KeySize {
-		return nil, fmt.Errorf("ECDSA Y coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(y), ci.KeySize, jose.ErrInvalidKey)
+		return nil, fmt.Errorf("y coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(y), ci.KeySize, jose.ErrInvalidKey)
 	}
 	uncompressed := make([]byte, 1+2*ci.KeySize)
 	uncompressed[0] = 0x04
@@ -630,7 +630,7 @@ func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 
 func decodeOKP(kj rawKey) (ed25519.PublicKey, error) {
 	if kj.Crv != "Ed25519" {
-		return nil, fmt.Errorf("OKP crv %q (only Ed25519 supported): %w", kj.Crv, jose.ErrUnsupportedCurve)
+		return nil, fmt.Errorf("crv %q (only Ed25519 supported): %w", kj.Crv, jose.ErrUnsupportedCurve)
 	}
 	x, err := base64.RawURLEncoding.DecodeString(kj.X)
 	if err != nil {
