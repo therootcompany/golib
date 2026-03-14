@@ -41,7 +41,7 @@
 //
 // You'll almost never need a custom JOSE header. The algorithm is inferred
 // automatically from the key type; KID comes from [jwk.PrivateKey.KID]; typ is
-// always "JWT". [StandardJWS.SignWith] handles all of this — you do not configure alg.
+// always "JWT". [Signer.SignJWS] handles all of this — you do not configure alg.
 //
 // You'll almost always need custom claims. [StandardJWS.UnmarshalClaims] accepts any
 // pointer — no interface to implement for decoding. Embed [IDTokenClaims] in
@@ -392,7 +392,7 @@ func (jws *StandardJWS) UnmarshalClaims(v any) error {
 
 // NewJWS creates an unsigned StandardJWS from the provided claims.
 //
-// The "alg" and "kid" header fields are set automatically by [StandardJWS.Sign]
+// The "alg" and "kid" header fields are set automatically by [Signer.SignJWS]
 // based on the key type and [jwk.PrivateKey.KID]. Call [StandardJWS.Encode] to
 // produce the compact JWT string after signing.
 func NewJWS(claims Claims) (*StandardJWS, error) {
@@ -417,19 +417,6 @@ func NewJWS(claims Claims) (*StandardJWS, error) {
 	return &jws, nil
 }
 
-// SignWith signs the JWS in-place using pk.
-//
-// Supported algorithms (inferred from key type):
-//   - *ecdsa.PrivateKey P-256  → ES256 (SHA-256, raw r||s)
-//   - *ecdsa.PrivateKey P-384  → ES384 (SHA-384, raw r||s)
-//   - *ecdsa.PrivateKey P-521  → ES512 (SHA-512, raw r||s)
-//   - *rsa.PrivateKey           → RS256 (PKCS#1 v1.5 + SHA-256)
-//   - ed25519.PrivateKey         → EdDSA (Ed25519, RFC 8037)
-//     https://www.rfc-editor.org/rfc/rfc8037.html
-func (jws *StandardJWS) SignWith(pk *jwk.PrivateKey) ([]byte, error) {
-	return signWith(jws, pk)
-}
-
 // Encode produces the compact JWT string (header.payload.signature).
 func (jws *StandardJWS) Encode() string {
 	sig := base64.RawURLEncoding.EncodeToString(jws.signature)
@@ -442,8 +429,8 @@ func (jws *StandardJWS) Encode() string {
 	return string(out)
 }
 
-// signWith is the shared implementation used by [StandardJWS.SignWith] and
-// [Signer.SignJWS]. It selects the algorithm from the key type, validates any
+// signWith is the shared implementation used by [Signer.SignJWS]. It selects
+// the algorithm from the key type, validates any
 // pre-set alg/kid in the JWS header, then calls [SignableJWS.MarshalHeader]
 // and [SignableJWS.SetSignature] so custom JWS types need no crypto knowledge.
 //

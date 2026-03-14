@@ -94,14 +94,14 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	claims := goodClaims()
-	pk := &jwk.PrivateKey{KID: "key-1", Signer: privKey}
-	jws, err := jwt.NewJWS(&claims)
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "key-1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err = jws.SignWith(pk); err != nil {
+	claims := goodClaims()
+	jws, err := signer.Sign(&claims)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if jws.GetStandardHeader().Alg != "ES256" {
@@ -141,14 +141,14 @@ func TestRoundTripRS256(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	claims := goodClaims()
-	pk := &jwk.PrivateKey{KID: "key-1", Signer: privKey}
-	jws, err := jwt.NewJWS(&claims)
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "key-1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err = jws.SignWith(pk); err != nil {
+	claims := goodClaims()
+	jws, err := signer.Sign(&claims)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if jws.GetStandardHeader().Alg != "RS256" {
@@ -180,14 +180,14 @@ func TestRoundTripEdDSA(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	claims := goodClaims()
-	pk := &jwk.PrivateKey{KID: "key-1", Signer: privKey}
-	jws, err := jwt.NewJWS(&claims)
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "key-1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err = jws.SignWith(pk); err != nil {
+	claims := goodClaims()
+	jws, err := signer.Sign(&claims)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if jws.GetStandardHeader().Alg != "EdDSA" {
@@ -216,12 +216,10 @@ func TestRoundTripEdDSA(t *testing.T) {
 // The caller owns the full validation pipeline.
 func TestDecodeVerifyFlow(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
 
 	claims := goodClaims()
-	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
-	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.SignWith(pk)
-	token := jws.Encode()
+	token, _ := signer.SignToString(&claims)
 
 	iss := jwt.New([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
 
@@ -250,12 +248,10 @@ func TestDecodeVerifyFlow(t *testing.T) {
 func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	signingKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: signingKey}})
 
 	claims := goodClaims()
-	pk := &jwk.PrivateKey{KID: "k", Signer: signingKey}
-	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.SignWith(pk)
-	token := jws.Encode()
+	token, _ := signer.SignToString(&claims)
 
 	// Verifier has wrong public key — sig verification will fail.
 	iss := jwt.New([]jwk.PublicKey{{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"}})
@@ -284,12 +280,10 @@ func TestCustomValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	// Token with empty Email — our custom validator should reject it.
+	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
 	claims := goodClaims()
 	claims.Email = ""
-	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
-	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.SignWith(pk)
-	token := jws.Encode()
+	token, _ := signer.SignToString(&claims)
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 	jws2, err := jwt.Decode(token)
@@ -461,11 +455,9 @@ func TestRFCValidator(t *testing.T) {
 // independently of claim validation — the caller decides whether to validate.
 func TestVerifyWithoutValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
 	c := goodClaims()
-	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
-	jws, _ := jwt.NewJWS(&c)
-	_, _ = jws.SignWith(pk)
-	token := jws.Encode()
+	token, _ := signer.SignToString(&c)
 
 	iss := jwt.New([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
 
@@ -486,12 +478,10 @@ func TestVerifyWithoutValidation(t *testing.T) {
 func TestVerifierWrongKey(t *testing.T) {
 	signingKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: signingKey}})
 
 	claims := goodClaims()
-	pk := &jwk.PrivateKey{KID: "k", Signer: signingKey}
-	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.SignWith(pk)
-	token := jws.Encode()
+	token, _ := signer.SignToString(&claims)
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"})
 
@@ -507,12 +497,10 @@ func TestVerifierWrongKey(t *testing.T) {
 // TestVerifierUnknownKid confirms that an unknown kid is rejected.
 func TestVerifierUnknownKid(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "unknown-kid", Signer: privKey}})
 
 	claims := goodClaims()
-	pk := &jwk.PrivateKey{KID: "unknown-kid", Signer: privKey}
-	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.SignWith(pk)
-	token := jws.Encode()
+	token, _ := signer.SignToString(&claims)
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "known-kid"})
 
@@ -530,13 +518,11 @@ func TestVerifierUnknownKid(t *testing.T) {
 // mismatch appears as a soft validation error.
 func TestVerifierIssMismatch(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
 
 	claims := goodClaims()
 	claims.Iss = "https://evil.example.com"
-	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
-	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.SignWith(pk)
-	token := jws.Encode()
+	token, _ := signer.SignToString(&claims)
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 
@@ -578,12 +564,10 @@ func TestVerifierIssMismatch(t *testing.T) {
 // ES256 signature is kept, making the signing input mismatch detectable.
 func TestVerifyTamperedAlg(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
 
 	claims := goodClaims()
-	pk := &jwk.PrivateKey{KID: "k", Signer: privKey}
-	jws, _ := jwt.NewJWS(&claims)
-	_, _ = jws.SignWith(pk)
-	token := jws.Encode()
+	token, _ := signer.SignToString(&claims)
 
 	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 
