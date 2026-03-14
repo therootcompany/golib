@@ -623,9 +623,11 @@ type ValidatorCore struct {
 // It does not check sub, jti, or auth_time - use [IDTokenValidator] or [RFCValidator]
 // for those.
 //
-// Returns nil on success, or an [errors.Join] of all failures. Use [errors.Is]
-// to check for specific sentinels (e.g. [ErrAfterExp], [ErrMissingClaim]).
-func (v *ValidatorCore) Validate(claims Claims, now time.Time) error {
+// The first return value contains every finding, including checks that are
+// configured as "ignore" (soft). The second return value is non-nil only when
+// a non-ignored check fails; use [errors.Is] on it for specific sentinels.
+// When all checks pass (or only ignored checks fail), err is nil.
+func (v *ValidatorCore) Validate(claims Claims, now time.Time) ([]error, error) {
 	return validateClaims(*claims.GetIDTokenClaims(), *v, claimChecks{
 		checkIss: len(v.Iss) > 0,
 		checkAud: len(v.Aud) > 0,
@@ -663,9 +665,10 @@ type IDTokenValidator struct {
 
 // Validate checks the OIDC Core §2 ID Token claims.
 //
-// Returns nil on success, or an [errors.Join] of all failures. Use [errors.Is]
-// to check for specific sentinels (e.g. [ErrAfterExp], [ErrMissingClaim]).
-func (v *IDTokenValidator) Validate(claims Claims, now time.Time) error {
+// The first return value contains every finding, including checks that are
+// configured as "ignore" (soft). The second return value is non-nil only when
+// a non-ignored check fails; use [errors.Is] on it for specific sentinels.
+func (v *IDTokenValidator) Validate(claims Claims, now time.Time) ([]error, error) {
 	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      !v.IgnoreIss,
 		checkSub:      !v.IgnoreSub,
@@ -706,9 +709,10 @@ type RFCValidator struct {
 
 // Validate checks claims against RFC 7519 rules.
 //
-// Returns nil on success, or an [errors.Join] of all failures. Use [errors.Is]
-// to check for specific sentinels (e.g. [ErrAfterExp], [ErrMissingClaim]).
-func (v *RFCValidator) Validate(claims Claims, now time.Time) error {
+// The first return value contains every finding, including checks that are
+// configured as "ignore" (soft). The second return value is non-nil only when
+// a non-ignored check fails; use [errors.Is] on it for specific sentinels.
+func (v *RFCValidator) Validate(claims Claims, now time.Time) ([]error, error) {
 	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      len(v.Iss) > 0,
 		checkSub:      v.ExpectSub,
@@ -738,8 +742,18 @@ type claimChecks struct {
 	checkAzp      bool
 }
 
-func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks, now time.Time) error {
-	var errs []error
+func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks, now time.Time) ([]error, error) {
+	var details []error // all findings (hard + soft)
+	var errs []error    // hard failures only
+
+	// record adds a finding to details. When hard is true, it also
+	// adds the finding to errs (the hard-failure list).
+	record := func(hard bool, err error) {
+		details = append(details, err)
+		if hard {
+			errs = append(errs, err)
+		}
+	}
 
 	skew := core.GracePeriod
 	if skew == 0 {
@@ -750,109 +764,116 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 
 	if checks.checkIss {
 		if claims.Iss == "" {
-			errs = append(errs, fmt.Errorf("iss: %w", ErrMissingClaim))
+			record(true, fmt.Errorf("iss: %w", ErrMissingClaim))
 		} else if len(core.Iss) > 0 && !slices.Contains(core.Iss, claims.Iss) {
-			errs = append(errs, fmt.Errorf("iss %q not in allowed list: %w", claims.Iss, ErrInvalidClaim))
+			record(true, fmt.Errorf("iss %q not in allowed list: %w", claims.Iss, ErrInvalidClaim))
 		}
 	}
 
 	if checks.checkSub && claims.Sub == "" {
-		errs = append(errs, fmt.Errorf("sub: %w", ErrMissingClaim))
+		record(true, fmt.Errorf("sub: %w", ErrMissingClaim))
 	}
 
 	if checks.checkAud {
 		if len(claims.Aud) == 0 {
-			errs = append(errs, fmt.Errorf("aud: %w", ErrMissingClaim))
+			record(true, fmt.Errorf("aud: %w", ErrMissingClaim))
 		} else if len(core.Aud) > 0 && !slices.ContainsFunc([]string(claims.Aud), func(a string) bool {
 			return slices.Contains(core.Aud, a)
 		}) {
-			errs = append(errs, fmt.Errorf("aud %v not in allowed list: %w", claims.Aud, ErrInvalidClaim))
+			record(true, fmt.Errorf("aud %v not in allowed list: %w", claims.Aud, ErrInvalidClaim))
 		}
 	}
 
-	if checks.checkExp {
-		if claims.Exp <= 0 {
-			errs = append(errs, fmt.Errorf("exp: %w", ErrMissingClaim))
-		} else if now.After(time.Unix(claims.Exp, 0).Add(skew)) {
-			duration := now.Sub(time.Unix(claims.Exp, 0))
-			expTime := time.Unix(claims.Exp, 0).Format("2006-01-02 15:04:05 MST")
-			errs = append(errs, fmt.Errorf("expired %s ago (%s): %w", formatDuration(duration), expTime, ErrAfterExp))
+	// exp: always evaluated; hard-error only when checks.checkExp.
+	// Missing exp is only reported when enforced.
+	if claims.Exp <= 0 {
+		if checks.checkExp {
+			record(true, fmt.Errorf("exp: %w", ErrMissingClaim))
 		}
+	} else if now.After(time.Unix(claims.Exp, 0).Add(skew)) {
+		duration := now.Sub(time.Unix(claims.Exp, 0))
+		expTime := time.Unix(claims.Exp, 0).Format("2006-01-02 15:04:05 MST")
+		record(checks.checkExp, fmt.Errorf("expired %s ago (%s): %w", formatDuration(duration), expTime, ErrAfterExp))
 	}
 
-	// nbf is only validated when present (non-zero); absence is never an error.
-	if checks.checkNBF && claims.NBF > 0 {
+	// nbf: always evaluated when present; absence is never an error.
+	if claims.NBF > 0 {
 		nbfTime := time.Unix(claims.NBF, 0)
 		if nbfTime.After(now.Add(skew)) {
 			fromNow := nbfTime.Sub(now)
 			nbfStr := nbfTime.Format("2006-01-02 15:04:05 MST")
-			errs = append(errs, fmt.Errorf("nbf is %s in the future (%s): %w", formatDuration(fromNow), nbfStr, ErrBeforeNbf))
+			record(checks.checkNBF, fmt.Errorf("nbf is %s in the future (%s): %w", formatDuration(fromNow), nbfStr, ErrBeforeNbf))
 		}
 	}
 
-	if checks.checkIat {
-		if claims.Iat <= 0 {
-			errs = append(errs, fmt.Errorf("iat: %w", ErrMissingClaim))
-		} else if time.Unix(claims.Iat, 0).After(now.Add(skew)) {
-			duration := time.Unix(claims.Iat, 0).Sub(now)
-			iatTime := time.Unix(claims.Iat, 0).Format("2006-01-02 15:04:05 MST")
-			errs = append(errs, fmt.Errorf("iat is %s in the future (%s): %w", formatDuration(duration), iatTime, ErrBeforeIat))
+	// iat: always evaluated; hard-error only when checks.checkIat.
+	// Missing iat is only reported when enforced.
+	if claims.Iat <= 0 {
+		if checks.checkIat {
+			record(true, fmt.Errorf("iat: %w", ErrMissingClaim))
 		}
+	} else if time.Unix(claims.Iat, 0).After(now.Add(skew)) {
+		duration := time.Unix(claims.Iat, 0).Sub(now)
+		iatTime := time.Unix(claims.Iat, 0).Format("2006-01-02 15:04:05 MST")
+		record(checks.checkIat, fmt.Errorf("iat is %s in the future (%s): %w", formatDuration(duration), iatTime, ErrBeforeIat))
 	}
 
 	if checks.checkJTI && claims.JTI == "" {
-		errs = append(errs, fmt.Errorf("jti: %w", ErrMissingClaim))
+		record(true, fmt.Errorf("jti: %w", ErrMissingClaim))
 	}
 
-	if checks.checkAuthTime {
-		if claims.AuthTime == 0 {
-			errs = append(errs, fmt.Errorf("auth_time: %w", ErrMissingClaim))
-		} else {
-			authTime := time.Unix(claims.AuthTime, 0)
-			authTimeStr := authTime.Format("2006-01-02 15:04:05 MST")
-			age := now.Sub(authTime)
-			if authTime.After(now.Add(skew)) {
-				fromNow := authTime.Sub(now)
-				errs = append(errs, fmt.Errorf(
-					"auth_time %s is %s in the future: %w",
-					authTimeStr, formatDuration(fromNow), ErrBeforeAuthTime),
-				)
-			} else if core.MaxAge > 0 && age > core.MaxAge {
-				diff := age - core.MaxAge
-				errs = append(errs, fmt.Errorf(
-					"auth_time %s is %s old, exceeding max age %s by %s: %w",
-					authTimeStr, formatDuration(age), formatDuration(core.MaxAge), formatDuration(diff), ErrAfterAuthMaxAge),
-				)
-			}
+	// auth_time: time checks always evaluated when present;
+	// hard-error only when checks.checkAuthTime.
+	// Missing auth_time is only reported when enforced.
+	if claims.AuthTime == 0 {
+		if checks.checkAuthTime {
+			record(true, fmt.Errorf("auth_time: %w", ErrMissingClaim))
+		}
+	} else {
+		authTime := time.Unix(claims.AuthTime, 0)
+		authTimeStr := authTime.Format("2006-01-02 15:04:05 MST")
+		age := now.Sub(authTime)
+		if authTime.After(now.Add(skew)) {
+			fromNow := authTime.Sub(now)
+			record(checks.checkAuthTime, fmt.Errorf(
+				"auth_time %s is %s in the future: %w",
+				authTimeStr, formatDuration(fromNow), ErrBeforeAuthTime),
+			)
+		} else if core.MaxAge > 0 && age > core.MaxAge {
+			diff := age - core.MaxAge
+			record(checks.checkAuthTime, fmt.Errorf(
+				"auth_time %s is %s old, exceeding max age %s by %s: %w",
+				authTimeStr, formatDuration(age), formatDuration(core.MaxAge), formatDuration(diff), ErrAfterAuthMaxAge),
+			)
 		}
 	}
 
 	if checks.checkAMR {
 		if len(claims.AMR) == 0 {
-			errs = append(errs, fmt.Errorf("amr: %w", ErrMissingClaim))
+			record(true, fmt.Errorf("amr: %w", ErrMissingClaim))
 		} else {
 			for _, required := range core.RequiredAMRs {
 				if !slices.Contains(claims.AMR, required) {
-					errs = append(errs, fmt.Errorf("amr missing %q: %w", required, ErrInvalidClaim))
+					record(true, fmt.Errorf("amr missing %q: %w", required, ErrInvalidClaim))
 				}
 			}
 			if core.MinAMRCount > 0 && len(claims.AMR) < core.MinAMRCount {
-				errs = append(errs, fmt.Errorf("amr has %d factor(s), need at least %d: %w", len(claims.AMR), core.MinAMRCount, ErrInvalidClaim))
+				record(true, fmt.Errorf("amr has %d factor(s), need at least %d: %w", len(claims.AMR), core.MinAMRCount, ErrInvalidClaim))
 			}
 		}
 	}
 
 	if checks.checkAzp && len(core.Azp) > 0 && !slices.Contains(core.Azp, claims.Azp) {
-		errs = append(errs, fmt.Errorf("azp %q not in allowed list: %w", claims.Azp, ErrInvalidClaim))
+		record(true, fmt.Errorf("azp %q not in allowed list: %w", claims.Azp, ErrInvalidClaim))
 	}
 
 	if len(errs) > 0 {
 		// time.Local is loaded once at process start - no LoadLocation syscall needed.
 		serverTime := fmt.Sprintf("server time %s (%s)", now.Format("2006-01-02 15:04:05 MST"), time.Local)
 		errs = append(errs, fmt.Errorf("%s: %w", serverTime, ErrValidation))
-		return errors.Join(errs...)
+		return details, errors.Join(errs...)
 	}
-	return nil
+	return details, nil
 }
 
 // Verifier holds the public keys of a JWT issuer and verifies token signatures.
@@ -941,7 +962,9 @@ func (iss *Verifier) Verify(jws VerifiableJWS) error {
 //	if err != nil { /* bad sig, malformed token, unknown kid */ }
 //	var claims AppClaims
 //	if err := jwt.UnmarshalClaims(jws, &claims); err != nil { /* ... */ }
-//	if err := v.Validate(&claims, time.Now()); err != nil { /* ... */ }
+//	details, err := v.Validate(&claims, time.Now())
+//	if err != nil { /* hard failure */ }
+//	if len(details) > 0 { /* soft findings for debugging */ }
 //
 // For routing by kid/iss before verifying, use [Decode] then [Verifier.Verify].
 func (iss *Verifier) VerifyJWT(tokenStr string) (*JWS, error) {
