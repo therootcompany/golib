@@ -62,7 +62,7 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 		// Derive algorithm from key type; validate caller's Alg if already set.
 		alg, _, _, err := jwa.SigningParams(ss[i].Signer)
 		if err != nil {
-			return nil, fmt.Errorf("NewSigner: key[%d]: %w: %w", i, ErrUnsupportedKey, err)
+			return nil, fmt.Errorf("NewSigner: key[%d]: %w", i, err)
 		}
 		if ss[i].Alg != "" && ss[i].Alg != alg {
 			return nil, fmt.Errorf("NewSigner: key[%d] alg %q expected %s: %w", i, ss[i].Alg, alg, ErrAlgConflict)
@@ -126,7 +126,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 
 	alg, hash, ecKeySize, err := jwa.SigningParams(pk.Signer)
 	if err != nil {
-		return fmt.Errorf("signWith: %w: %w", ErrUnsupportedKey, err)
+		return fmt.Errorf("signWith: %w", err)
 	}
 
 	// Validate and set header algorithm.

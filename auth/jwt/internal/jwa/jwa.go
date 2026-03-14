@@ -13,6 +13,8 @@ import (
 	"crypto/elliptic"
 	"crypto/rsa"
 	"fmt"
+
+	"github.com/therootcompany/golib/auth/jwt/jose"
 )
 
 // CurveInfo holds the JWK/JWS identifiers and parameters for an EC curve.
@@ -41,7 +43,7 @@ func ECInfo(curve elliptic.Curve) (CurveInfo, error) {
 	case elliptic.P521():
 		return p521, nil
 	default:
-		return CurveInfo{}, fmt.Errorf("unsupported EC curve: %s", curve.Params().Name)
+		return CurveInfo{}, fmt.Errorf("EC curve %s: %w", curve.Params().Name, jose.ErrUnsupportedCurve)
 	}
 }
 
@@ -55,7 +57,7 @@ func ECInfoByCrv(crv string) (CurveInfo, error) {
 	case "P-521":
 		return p521, nil
 	default:
-		return CurveInfo{}, fmt.Errorf("unsupported EC crv: %q", crv)
+		return CurveInfo{}, fmt.Errorf("EC crv %q: %w", crv, jose.ErrUnsupportedCurve)
 	}
 }
 
@@ -83,6 +85,6 @@ func SigningParams(s crypto.Signer) (alg string, hash crypto.Hash, ecKeySize int
 	case ed25519.PublicKey:
 		return "EdDSA", 0, 0, nil
 	default:
-		return "", 0, 0, fmt.Errorf("unsupported key type: %T", pub)
+		return "", 0, 0, fmt.Errorf("%T: %w", pub, jose.ErrUnsupportedKeyType)
 	}
 }

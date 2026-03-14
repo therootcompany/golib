@@ -34,10 +34,9 @@ var (
 
 // Signing errors — returned by [NewSigner], [Signer.SignJWS], and [Signer.Sign].
 var (
-	ErrNoSigningKey   = errors.New("no signing key")
-	ErrAlgConflict    = errors.New("algorithm conflict")
-	ErrKIDConflict    = errors.New("kid conflict")
-	ErrUnsupportedKey = errors.New("unsupported key type")
+	ErrNoSigningKey = errors.New("no signing key")
+	ErrAlgConflict  = errors.New("algorithm conflict")
+	ErrKIDConflict  = errors.New("kid conflict")
 )
 
 // Validation errors — returned by [ValidatorCore.Validate],

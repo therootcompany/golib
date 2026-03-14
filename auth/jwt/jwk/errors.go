@@ -11,6 +11,8 @@ package jwk
 import (
 	"errors"
 	"fmt"
+
+	"github.com/therootcompany/golib/auth/jwt/jose"
 )
 
 // Key parsing errors — returned by [PublicKey.UnmarshalJSON],
@@ -21,10 +23,12 @@ var (
 	ErrInvalidKey = errors.New("invalid key")
 
 	// ErrUnsupportedKeyType indicates an unrecognized JWK "kty" value.
-	ErrUnsupportedKeyType = fmt.Errorf("%w: unsupported key type", ErrInvalidKey)
+	// Re-exported from [jose] so jwt, jwk, and internal/jwa share one sentinel.
+	ErrUnsupportedKeyType = jose.ErrUnsupportedKeyType
 
 	// ErrUnsupportedCurve indicates an unrecognized JWK "crv" value.
-	ErrUnsupportedCurve = fmt.Errorf("%w: unsupported curve", ErrInvalidKey)
+	// Re-exported from [jose] so jwt, jwk, and internal/jwa share one sentinel.
+	ErrUnsupportedCurve = jose.ErrUnsupportedCurve
 
 	// ErrKeyTooSmall indicates a key that does not meet the minimum size.
 	ErrKeyTooSmall = fmt.Errorf("%w: key too small", ErrInvalidKey)

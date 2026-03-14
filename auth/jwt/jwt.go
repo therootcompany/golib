@@ -914,7 +914,7 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 		}
 		ci, err := jwa.ECInfo(k.Curve)
 		if err != nil {
-			return fmt.Errorf("%w: %w", jwk.ErrUnsupportedCurve, err)
+			return err
 		}
 		if ci.Alg != alg {
 			return fmt.Errorf("key is %s, token alg is %s: %w", ci.Alg, alg, ErrCurveMismatch)

@@ -28,7 +28,6 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -142,7 +141,7 @@ func (k PublicKey) Thumbprint() (string, error) {
 
 	switch key := k.CryptoPublicKey.(type) {
 	case *ecdsa.PublicKey:
-		ci, err := curveInfo(key.Curve)
+		ci, err := jwa.ECInfo(key.Curve)
 		if err != nil {
 			return "", fmt.Errorf("Thumbprint: %w", err)
 		}
@@ -358,7 +357,7 @@ type JWKs struct {
 func encode(k PublicKey) (rawKey, error) {
 	switch key := k.CryptoPublicKey.(type) {
 	case *ecdsa.PublicKey:
-		ci, err := curveInfo(key.Curve)
+		ci, err := jwa.ECInfo(key.Curve)
 		if err != nil {
 			return rawKey{}, fmt.Errorf("Encode: %w", err)
 		}
@@ -529,7 +528,7 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 func decodePrivate(kj rawKey) (*PrivateKey, error) {
 	switch kj.Kty {
 	case "EC":
-		ci, err := curveInfoByCrv(kj.Crv)
+		ci, err := jwa.ECInfoByCrv(kj.Crv)
 		if err != nil {
 			return nil, fmt.Errorf("parse EC private key %q: %w", kj.KID, err)
 		}
@@ -639,7 +638,7 @@ func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("invalid ECDSA Y: %w: %w", ErrInvalidKey, err)
 	}
 
-	ci, err := curveInfoByCrv(kj.Crv)
+	ci, err := jwa.ECInfoByCrv(kj.Crv)
 	if err != nil {
 		return nil, err
 	}
@@ -676,22 +675,4 @@ func decodeOKP(kj rawKey) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("Ed25519 key size %d bytes, want %d: %w", len(x), ed25519.PublicKeySize, ErrInvalidKey)
 	}
 	return ed25519.PublicKey(x), nil
-}
-
-// curveInfo wraps jwa.ECInfo with jwk sentinel errors.
-func curveInfo(curve elliptic.Curve) (jwa.CurveInfo, error) {
-	ci, err := jwa.ECInfo(curve)
-	if err != nil {
-		return ci, fmt.Errorf("EC curve %s: %w", curve.Params().Name, ErrUnsupportedCurve)
-	}
-	return ci, nil
-}
-
-// curveInfoByCrv wraps jwa.ECInfoByCrv with jwk sentinel errors.
-func curveInfoByCrv(crv string) (jwa.CurveInfo, error) {
-	ci, err := jwa.ECInfoByCrv(crv)
-	if err != nil {
-		return ci, fmt.Errorf("EC crv %q: %w", crv, ErrUnsupportedCurve)
-	}
-	return ci, nil
 }
