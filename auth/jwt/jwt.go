@@ -24,7 +24,7 @@
 //
 // You'll almost never need a custom JOSE header. The algorithm is inferred
 // automatically from the key type; KID comes from [jwk.PrivateKey.KID]; typ is
-// always "JWT". [StandardJWS.Sign] handles all of this — you do not configure alg.
+// always "JWT". [StandardJWS.SignWith] handles all of this — you do not configure alg.
 //
 // You'll almost always need custom claims. [StandardJWS.UnmarshalClaims] accepts any
 // pointer — no interface to implement for decoding. Embed [IDTokenClaims] in
