@@ -194,6 +194,33 @@ func (raw *RawJWT) GetSignature() []byte { return raw.signature }
 // SetSignature implements [SignableJWS].
 func (raw *RawJWT) SetSignature(sig []byte) { raw.signature = sig }
 
+// UnmarshalHeader decodes the protected header into v.
+//
+// Use this to extract custom JOSE header fields beyond alg/kid/typ.
+// v should be a pointer to a struct — typically one that embeds [Header]
+// so the standard fields are captured alongside custom ones:
+//
+//	type DPoPHeader struct {
+//	    jwt.Header
+//	    JWK json.RawMessage `json:"jwk"`
+//	}
+//
+//	raw, err := jwt.DecodeRaw(tokenStr)
+//	var h DPoPHeader
+//	if err := raw.UnmarshalHeader(&h); err != nil { /* ... */ }
+//
+// Promoted to [*JWS] via embedding, so it works after [Decode] too.
+func (raw *RawJWT) UnmarshalHeader(v any) error {
+	data, err := base64.RawURLEncoding.DecodeString(string(raw.protected))
+	if err != nil {
+		return fmt.Errorf("header base64: %w: %w", ErrInvalidHeader, err)
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		return fmt.Errorf("header json: %w: %w", ErrInvalidHeader, err)
+	}
+	return nil
+}
+
 // JWS is a decoded JSON Web Signature / JWT.
 //
 // It holds only the parsed structure - header, raw base64url fields, and
@@ -365,11 +392,13 @@ type Claims interface {
 	GetIDTokenClaims() *IDTokenClaims
 }
 
-// Decode parses a compact JWT string (header.payload.signature) into a JWS.
+// DecodeRaw splits a compact JWT string into its three base64url segments
+// and decodes the signature bytes, but does not parse the header JSON.
 //
-// It does not unmarshal the claims payload - call [UnmarshalClaims] after
-// [Verifier.VerifyJWT] or [Verifier.Verify] to populate a typed claims struct.
-func Decode(tokenStr string) (*JWS, error) {
+// Use this when you need to unmarshal the header into a custom struct
+// with fields beyond alg/kid/typ. Call [RawJWT.UnmarshalHeader] to decode
+// the protected header, or build a full [*JWS] with [Decode] instead.
+func DecodeRaw(tokenStr string) (*RawJWT, error) {
 	parts := strings.Split(tokenStr, ".")
 	if len(parts) == 1 && parts[0] == "" {
 		parts = nil
@@ -378,20 +407,32 @@ func Decode(tokenStr string) (*JWS, error) {
 		return nil, fmt.Errorf("%w: expected 3 segments but got %d", ErrMalformedToken, len(parts))
 	}
 
-	var jws JWS
-	jws.protected, jws.payload = []byte(parts[0]), []byte(parts[1])
-
-	header, err := base64.RawURLEncoding.DecodeString(string(jws.protected))
-	if err != nil {
-		return nil, fmt.Errorf("header base64: %w: %w", ErrInvalidHeader, err)
-	}
-	if err := json.Unmarshal(header, &jws.header); err != nil {
-		return nil, fmt.Errorf("header json: %w: %w", ErrInvalidHeader, err)
-	}
-
-	jws.signature, err = base64.RawURLEncoding.DecodeString(parts[2])
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
 		return nil, fmt.Errorf("signature base64: %w: %w", ErrInvalidSignature, err)
+	}
+
+	return &RawJWT{
+		protected: []byte(parts[0]),
+		payload:   []byte(parts[1]),
+		signature: sig,
+	}, nil
+}
+
+// Decode parses a compact JWT string (header.payload.signature) into a JWS.
+//
+// It does not unmarshal the claims payload - call [UnmarshalClaims] after
+// [Verifier.VerifyJWT] or [Verifier.Verify] to populate a typed claims struct.
+func Decode(tokenStr string) (*JWS, error) {
+	raw, err := DecodeRaw(tokenStr)
+	if err != nil {
+		return nil, err
+	}
+
+	var jws JWS
+	jws.RawJWT = *raw
+	if err := jws.UnmarshalHeader(&jws.header); err != nil {
+		return nil, err
 	}
 
 	return &jws, nil

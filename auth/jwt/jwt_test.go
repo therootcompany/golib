@@ -890,3 +890,191 @@ func TestNewPrivateKey(t *testing.T) {
 		t.Errorf("sub: got %q, want %q", decoded.Sub, claims.Sub)
 	}
 }
+
+// --- DecodeRaw + UnmarshalHeader tests ---
+
+func TestDecodeRaw(t *testing.T) {
+	// Sign a real token to get a valid compact string.
+	pk, err := jwk.NewPrivateKey()
+	if err != nil {
+		t.Fatalf("NewPrivateKey() error: %v", err)
+	}
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{*pk})
+	if err != nil {
+		t.Fatalf("NewSigner() error: %v", err)
+	}
+	claims := goodClaims()
+	tokenStr, err := signer.SignToString(&claims)
+	if err != nil {
+		t.Fatalf("SignToString() error: %v", err)
+	}
+
+	raw, err := jwt.DecodeRaw(tokenStr)
+	if err != nil {
+		t.Fatalf("DecodeRaw() error: %v", err)
+	}
+
+	// protected and payload should be non-empty base64url segments.
+	if len(raw.GetProtected()) == 0 {
+		t.Error("GetProtected() is empty")
+	}
+	if len(raw.GetPayload()) == 0 {
+		t.Error("GetPayload() is empty")
+	}
+	if len(raw.GetSignature()) == 0 {
+		t.Error("GetSignature() is empty")
+	}
+}
+
+func TestDecodeRawErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		sentinel error
+	}{
+		{"empty string", "", jwt.ErrMalformedToken},
+		{"one segment", "abc", jwt.ErrMalformedToken},
+		{"two segments", "abc.def", jwt.ErrMalformedToken},
+		{"four segments", "a.b.c.d", jwt.ErrMalformedToken},
+		{"bad signature base64", "eyJhbGciOiJFZERTQSJ9.eyJpc3MiOiJ4In0.!!!bad!!!", jwt.ErrInvalidSignature},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := jwt.DecodeRaw(tc.input)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !errors.Is(err, tc.sentinel) {
+				t.Errorf("expected %v, got: %v", tc.sentinel, err)
+			}
+		})
+	}
+}
+
+func TestDecodeRawSegmentCount(t *testing.T) {
+	_, err := jwt.DecodeRaw("")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// Empty string normalizes to 0 segments.
+	if !strings.Contains(err.Error(), "got 0") {
+		t.Errorf("expected segment count 0 in error, got: %v", err)
+	}
+
+	_, err = jwt.DecodeRaw("a.b")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "got 2") {
+		t.Errorf("expected segment count 2 in error, got: %v", err)
+	}
+}
+
+func TestUnmarshalHeader(t *testing.T) {
+	// Sign a token and use DecodeRaw + UnmarshalHeader to recover the header.
+	pk, err := jwk.NewPrivateKey()
+	if err != nil {
+		t.Fatalf("NewPrivateKey() error: %v", err)
+	}
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{*pk})
+	if err != nil {
+		t.Fatalf("NewSigner() error: %v", err)
+	}
+	claims := goodClaims()
+	tokenStr, err := signer.SignToString(&claims)
+	if err != nil {
+		t.Fatalf("SignToString() error: %v", err)
+	}
+
+	raw, err := jwt.DecodeRaw(tokenStr)
+	if err != nil {
+		t.Fatalf("DecodeRaw() error: %v", err)
+	}
+
+	var h jwt.Header
+	if err := raw.UnmarshalHeader(&h); err != nil {
+		t.Fatalf("UnmarshalHeader() error: %v", err)
+	}
+
+	if h.Alg != "EdDSA" {
+		t.Errorf("alg: got %q, want %q", h.Alg, "EdDSA")
+	}
+	if h.KID != pk.KID {
+		t.Errorf("kid: got %q, want %q", h.KID, pk.KID)
+	}
+	if h.Typ != "JWT" {
+		t.Errorf("typ: got %q, want %q", h.Typ, "JWT")
+	}
+}
+
+func TestUnmarshalHeaderCustomFields(t *testing.T) {
+	// Build a token whose header has a custom "nonce" field by constructing
+	// the compact string manually: base64(header).base64(payload).base64(sig).
+	type CustomHeader struct {
+		jwt.Header
+		Nonce string `json:"nonce"`
+	}
+
+	hdr := CustomHeader{
+		Header: jwt.Header{Alg: "EdDSA", KID: "test-key", Typ: "dpop+jwt"},
+		Nonce:  "server-nonce-42",
+	}
+	hdrJSON, _ := json.Marshal(hdr)
+	payJSON := []byte(`{"sub":"user"}`)
+	fakeSig := []byte{0xDE, 0xAD}
+
+	compact := base64.RawURLEncoding.EncodeToString(hdrJSON) +
+		"." + base64.RawURLEncoding.EncodeToString(payJSON) +
+		"." + base64.RawURLEncoding.EncodeToString(fakeSig)
+
+	raw, err := jwt.DecodeRaw(compact)
+	if err != nil {
+		t.Fatalf("DecodeRaw() error: %v", err)
+	}
+
+	var got CustomHeader
+	if err := raw.UnmarshalHeader(&got); err != nil {
+		t.Fatalf("UnmarshalHeader() error: %v", err)
+	}
+
+	if got.Nonce != "server-nonce-42" {
+		t.Errorf("nonce: got %q, want %q", got.Nonce, "server-nonce-42")
+	}
+	if got.Alg != "EdDSA" {
+		t.Errorf("alg: got %q, want %q", got.Alg, "EdDSA")
+	}
+	if got.Typ != "dpop+jwt" {
+		t.Errorf("typ: got %q, want %q", got.Typ, "dpop+jwt")
+	}
+}
+
+func TestUnmarshalHeaderViaJWS(t *testing.T) {
+	// Verify that UnmarshalHeader is promoted from RawJWT to *JWS.
+	pk, err := jwk.NewPrivateKey()
+	if err != nil {
+		t.Fatalf("NewPrivateKey() error: %v", err)
+	}
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{*pk})
+	if err != nil {
+		t.Fatalf("NewSigner() error: %v", err)
+	}
+	claims := goodClaims()
+	tokenStr, err := signer.SignToString(&claims)
+	if err != nil {
+		t.Fatalf("SignToString() error: %v", err)
+	}
+
+	// Use Decode (not DecodeRaw) — UnmarshalHeader should still work via promotion.
+	jws, err := jwt.Decode(tokenStr)
+	if err != nil {
+		t.Fatalf("Decode() error: %v", err)
+	}
+
+	var h jwt.Header
+	if err := jws.UnmarshalHeader(&h); err != nil {
+		t.Fatalf("jws.UnmarshalHeader() error: %v", err)
+	}
+	if h.Alg != "EdDSA" {
+		t.Errorf("alg: got %q, want %q", h.Alg, "EdDSA")
+	}
+}
