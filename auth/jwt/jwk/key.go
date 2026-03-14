@@ -30,6 +30,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
@@ -247,6 +248,27 @@ func (k *PrivateKey) PublicKey() *PublicKey {
 // It delegates to [PublicKey.Thumbprint] on the result of [PrivateKey.PublicKey].
 func (k *PrivateKey) Thumbprint() (string, error) {
 	return k.PublicKey().Thumbprint()
+}
+
+// NewPrivateKey generates a new Ed25519 private key and returns it as a [PrivateKey].
+// The KID is auto-computed from the RFC 7638 thumbprint of the public key.
+//
+// Ed25519 is the recommended default: fast, compact 64-byte signatures, and
+// deterministic signing (no per-signature random nonce, unlike ECDSA).
+// To use a different algorithm, construct [PrivateKey] directly with
+// your own [crypto.Signer].
+func NewPrivateKey() (*PrivateKey, error) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("NewPrivateKey: generate Ed25519 key: %w", err)
+	}
+	pk := &PrivateKey{Signer: priv}
+	kid, err := pk.Thumbprint()
+	if err != nil {
+		return nil, fmt.Errorf("NewPrivateKey: compute thumbprint: %w", err)
+	}
+	pk.KID = kid
+	return pk, nil
 }
 
 // MarshalJSON implements [json.Marshaler], encoding the key as a JWK JSON object

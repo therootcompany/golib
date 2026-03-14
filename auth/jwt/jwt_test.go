@@ -870,3 +870,48 @@ func TestNoKidAutoThumbprint(t *testing.T) {
 		t.Errorf("auto-KID %q != direct Thumbprint %q", kid, thumb)
 	}
 }
+
+// TestNewPrivateKey verifies that jwk.NewPrivateKey generates an Ed25519 key
+// with a non-empty KID auto-derived from the thumbprint, and that the key
+// works end-to-end for signing and verification.
+func TestNewPrivateKey(t *testing.T) {
+	pk, err := jwk.NewPrivateKey()
+	if err != nil {
+		t.Fatalf("NewPrivateKey() error: %v", err)
+	}
+	if pk.KID == "" {
+		t.Fatal("NewPrivateKey() returned empty KID")
+	}
+	// KID must be base64url (no +, /, or =).
+	if strings.Contains(pk.KID, "+") || strings.Contains(pk.KID, "/") || strings.Contains(pk.KID, "=") {
+		t.Errorf("KID contains non-base64url characters: %s", pk.KID)
+	}
+	// Two calls must produce different keys but always produce valid base64url KIDs.
+	pk2, _ := jwk.NewPrivateKey()
+	if pk.KID == pk2.KID {
+		t.Error("NewPrivateKey() produced identical KIDs for two different keys")
+	}
+
+	// Full sign+verify round-trip with the generated key.
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{*pk})
+	if err != nil {
+		t.Fatalf("NewSigner() error: %v", err)
+	}
+	claims := goodClaims()
+	tokenStr, err := signer.SignToString(&claims)
+	if err != nil {
+		t.Fatalf("SignToString() error: %v", err)
+	}
+	iss := signer.Verifier()
+	jws, err := iss.VerifyJWT(tokenStr)
+	if err != nil {
+		t.Fatalf("VerifyJWT() error: %v", err)
+	}
+	var decoded AppClaims
+	if err := jwt.UnmarshalClaims(jws, &decoded); err != nil {
+		t.Fatalf("UnmarshalClaims() error: %v", err)
+	}
+	if decoded.Sub != claims.Sub {
+		t.Errorf("sub: got %q, want %q", decoded.Sub, claims.Sub)
+	}
+}
