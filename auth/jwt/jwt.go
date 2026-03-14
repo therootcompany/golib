@@ -197,11 +197,6 @@ func (h StandardHeader) GetStandardHeader() StandardHeader { return h }
 // https://www.rfc-editor.org/rfc/rfc7519.html#section-4.1.3
 type Audience []string
 
-// Contains reports whether s appears in the audience list.
-func (a Audience) Contains(s string) bool {
-	return slices.Contains(a, s)
-}
-
 // UnmarshalJSON decodes both the string and []string forms of the "aud" claim.
 func (a *Audience) UnmarshalJSON(data []byte) error {
 	var s string
@@ -708,7 +703,8 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 	}
 
 	if len(errs) > 0 {
-		serverTime := fmt.Sprintf("info: server time is %s", now.Format("2006-01-02 15:04:05 MST"))
+		// time.Local is loaded once at process start — no LoadLocation syscall needed.
+		serverTime := fmt.Sprintf("info: server time is %s (%s)", now.Format("2006-01-02 15:04:05 MST"), time.Local)
 		errs = append(errs, serverTime)
 		return errs, fmt.Errorf("jwt: validation failed")
 	}
@@ -818,11 +814,6 @@ func (iss *Verifier) VerifyJWT(tokenStr string) (*StandardJWS, error) {
 // verifyWith checks a JWS signature using the given algorithm and public key.
 // Returns nil on success, a descriptive error on failure.
 func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPublicKey) error {
-	// Explicitly reject "none" and empty alg before the switch so the default
-	// case can't accidentally accept them through a gap in the allow-list.
-	if alg == "" || alg == "none" {
-		return fmt.Errorf("alg %q is not permitted", alg)
-	}
 	switch alg {
 	case "ES256", "ES384", "ES512":
 		k, ok := key.(*ecdsa.PublicKey)

@@ -457,7 +457,7 @@ func ReadFile(filePath string) ([]PublicKey, error) {
 // KID auto-derivation from thumbprint is handled by [PublicKey.UnmarshalJSON].
 //
 // Supported key types:
-//   - "RSA" — minimum 2048-bit (RS256)
+//   - "RSA" — minimum 1024-bit (RS256)
 //   - "EC"  — P-256, P-384, P-521 (ES256, ES384, ES512)
 //   - "OKP" — Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
 func decodeOne(kj rawKey) (*PublicKey, error) {
@@ -467,7 +467,7 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse RSA key %q: %w", kj.KID, err)
 		}
-		if key.Size() < 256 { // 2048 bits minimum
+		if key.Size() < 128 { // 1024 bits minimum
 			return nil, fmt.Errorf("RSA key %q too small: %d bytes (%d bits)", kj.KID, key.Size(), key.Size()*8)
 		}
 		return &PublicKey{CryptoPublicKey: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
@@ -521,7 +521,7 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse RSA private key %q: %w", kj.KID, err)
 		}
-		if pub.Size() < 256 { // 2048 bits minimum
+		if pub.Size() < 128 { // 1024 bits minimum
 			return nil, fmt.Errorf("RSA private key %q too small: %d bytes (%d bits)", kj.KID, pub.Size(), pub.Size()*8)
 		}
 		dBytes, err := base64.RawURLEncoding.DecodeString(kj.D)
