@@ -105,6 +105,7 @@ func FetchOAuth2(ctx context.Context, baseURL string, client *http.Client) ([]Pu
 // fetchFromDiscovery fetches a discovery document from discoveryURL, then
 // fetches the JWKS from the jwks_uri field. Returns the keys and the issuer
 // URL from the discovery document's "issuer" field.
+// TODO this should return the URL, not the keys
 func fetchFromDiscovery(ctx context.Context, discoveryURL string, client *http.Client) ([]PublicKey, string, error) {
 	if client == nil {
 		client = defaultClient
@@ -134,6 +135,7 @@ func fetchFromDiscovery(ctx context.Context, discoveryURL string, client *http.C
 		return nil, "", fmt.Errorf("discovery doc missing jwks_uri: %w", ErrFetchFailed)
 	}
 
+	// TODO lift this up
 	keys, _, err := FetchURL(ctx, doc.JWKsURI, client)
 	if err != nil {
 		return nil, "", err

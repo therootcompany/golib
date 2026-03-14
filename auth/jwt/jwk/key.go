@@ -258,6 +258,7 @@ func toPublicKeyOps(ops []string) []string {
 		case "unwrapKey":
 			out = append(out, "wrapKey")
 		case "verify", "encrypt", "wrapKey":
+			// TODO if the private key had the wrong details, it probably should have been caught earlier
 			// Already a public-key op - pass through.
 			out = append(out, op)
 		}
@@ -506,6 +507,8 @@ func ReadFile(filePath string) ([]PublicKey, error) {
 //   - "RSA" - minimum 1024-bit (RS256)
 //   - "EC"  - P-256, P-384, P-521 (ES256, ES384, ES512)
 //   - "OKP" - Ed25519 crv (EdDSA, RFC 8037) https://www.rfc-editor.org/rfc/rfc8037.html
+//
+// TODO we may need to deduplicate this logic from jwt
 func decodeOne(kj rawKey) (*PublicKey, error) {
 	switch kj.Kty {
 	case "RSA":
@@ -539,6 +542,7 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 
 // decodePrivate parses a rawKey wire struct that contains private key material
 // into a [PrivateKey]. KID auto-derivation is handled by [PrivateKey.UnmarshalJSON].
+// TODO we may need to deduplicate this logic from jwt
 func decodePrivate(kj rawKey) (*PrivateKey, error) {
 	switch kj.Kty {
 	case "EC":

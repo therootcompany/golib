@@ -210,7 +210,7 @@ func (raw *RawJWT) SetSignature(sig []byte) { raw.signature = sig }
 //
 // Promoted to [*JWS] via embedding, so it works after [Decode] too.
 func (raw *RawJWT) UnmarshalHeader(v any) error {
-	data, err := base64.RawURLEncoding.DecodeString(string(raw.protected))
+	data, err := base64.RawURLEncoding.AppendDecode([]byte{}, raw.protected)
 	if err != nil {
 		return fmt.Errorf("header base64: %w: %w", ErrInvalidHeader, err)
 	}
@@ -399,10 +399,10 @@ type Claims interface {
 // the protected header, or build a full [*JWS] with [Decode] instead.
 func DecodeRaw(tokenStr string) (*RawJWT, error) {
 	parts := strings.Split(tokenStr, ".")
-	if len(parts) == 1 && parts[0] == "" {
-		parts = nil
-	}
 	if len(parts) != 3 {
+		if len(parts) == 1 && parts[0] == "" {
+			parts = nil
+		}
 		return nil, fmt.Errorf("%w: expected 3 segments but got %d", ErrMalformedToken, len(parts))
 	}
 
@@ -869,10 +869,7 @@ func (iss *Verifier) Verify(jws VerifiableJWS) error {
 	}
 
 	protected, payload := jws.GetProtected(), jws.GetPayload()
-	signingInput := make([]byte, 0, len(protected)+1+len(payload))
-	signingInput = append(signingInput, protected...)
-	signingInput = append(signingInput, '.')
-	signingInput = append(signingInput, payload...)
+	signingInput := signingInputBytes(protected, payload)
 	if err := verifyWith(signingInput, jws.GetSignature(), h.Alg, key); err != nil {
 		return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, err)
 	}
@@ -922,6 +919,7 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 		if expectedAlg != alg {
 			return fmt.Errorf("key is %s, token alg is %s: %w", expectedAlg, alg, ErrCurveMismatch)
 		}
+		// TODO I need to understand this. Is +7 for the compression bit to become a byte?
 		byteLen := (k.Curve.Params().BitSize + 7) / 8
 		if len(sig) != 2*byteLen {
 			return fmt.Errorf("%s sig len %d, want %d: %w", alg, len(sig), 2*byteLen, ErrSignatureInvalid)
@@ -930,6 +928,7 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 		if err != nil {
 			return err
 		}
+		// TODO use func ParseUncompressedPublicKey(curve elliptic.Curve, data []byte) (*PublicKey, error)
 		r := new(big.Int).SetBytes(sig[:byteLen])
 		s := new(big.Int).SetBytes(sig[byteLen:])
 		if !ecdsa.Verify(k, digest, r, s) {

@@ -48,6 +48,7 @@ type Signer struct {
 // the key type is unsupported, or a thumbprint cannot be computed.
 //
 // https://www.rfc-editor.org/rfc/rfc7638.html
+// TODO allow for non-signing keys (for key rotation)
 func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("NewSigner: %w", ErrNoSigningKey)
@@ -74,6 +75,7 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 		if ss[i].Use == "" {
 			ss[i].Use = "sig"
 		}
+		// TODO fail if not sig
 
 		// Auto-compute KID from thumbprint if empty.
 		if ss[i].KID == "" {
@@ -85,6 +87,7 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 		}
 	}
 
+	// TODO use slice rather than map, allow "none" or IgnoreKID
 	pubs := make([]jwk.PublicKey, len(ss))
 	for i := range ss {
 		pubs[i] = *ss[i].PublicKey()
@@ -141,6 +144,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 		return fmt.Errorf("signWith: header kid %q vs key kid %q: %w", hdr.KID, pk.KID, ErrKIDConflict)
 	}
 
+	// TODO Why aren't we switching on pk.Signer?
 	switch pub := pk.Signer.Public().(type) {
 	case *ecdsa.PublicKey:
 		alg, h, err := algForECKey(pub)
@@ -159,6 +163,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 		if err != nil {
 			return err
 		}
+		// TODO seems like we should just use func SignASN1(r io.Reader, priv *PrivateKey, hash []byte) ([]byte, error)
 		// crypto.Signer returns ASN.1 DER for ECDSA; convert to raw r||s for JWS.
 		derSig, err := pk.Signer.Sign(rand.Reader, digest, h)
 		if err != nil {
@@ -255,5 +260,6 @@ func (s *Signer) SignToString(claims Claims) (string, error) {
 //
 //	iss := jwt.New(append(signer.Keys, oldKeys...))
 func (s *Signer) Verifier() *Verifier {
+	// TODO can't we just do this once and store it?
 	return NewVerifier(s.Keys)
 }
