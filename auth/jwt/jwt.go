@@ -281,7 +281,7 @@ func (a *Audience) UnmarshalJSON(data []byte) error {
 	}
 	var ss []string
 	if err := json.Unmarshal(data, &ss); err != nil {
-		return fmt.Errorf("'aud' must be a string or array of strings: %w", err)
+		return fmt.Errorf("aud must be a string or array of strings: %w: %w", err, ErrInvalidPayload)
 	}
 	*a = ss
 	return nil
@@ -422,10 +422,10 @@ func Decode(tokenStr string) (*JWS, error) {
 func UnmarshalClaims(jws VerifiableJWS, claims Claims) error {
 	payload, err := base64.RawURLEncoding.DecodeString(string(jws.GetPayload()))
 	if err != nil {
-		return fmt.Errorf("invalid claims encoding: %w", err)
+		return fmt.Errorf("payload base64: %w: %w", err, ErrInvalidPayload)
 	}
 	if err := json.Unmarshal(payload, claims); err != nil {
-		return fmt.Errorf("invalid claims JSON: %w", err)
+		return fmt.Errorf("payload json: %w: %w", err, ErrInvalidPayload)
 	}
 	return nil
 }
@@ -487,7 +487,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 	case hdr.KID == "":
 		hdr.KID = pk.KID
 	case hdr.KID != pk.KID:
-		return fmt.Errorf("signWith: header kid %q conflicts with key KID %q", hdr.KID, pk.KID)
+		return fmt.Errorf("signWith: header kid %q vs key kid %q: %w", hdr.KID, pk.KID, ErrKIDConflict)
 	}
 
 	switch pub := pk.Signer.Public().(type) {

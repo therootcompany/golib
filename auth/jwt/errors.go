@@ -13,10 +13,12 @@ import (
 	"fmt"
 )
 
-// Decode errors — returned by [Decode] when the compact token is malformed.
+// Decode errors — returned by [Decode] and [UnmarshalClaims] when the
+// compact token or its components are malformed.
 var (
 	ErrMalformedToken   = errors.New("malformed token")
 	ErrInvalidHeader    = errors.New("invalid header")
+	ErrInvalidPayload   = errors.New("invalid payload")
 	ErrInvalidSignature = errors.New("invalid signature encoding")
 )
 
@@ -34,6 +36,7 @@ var (
 var (
 	ErrNoSigningKey   = errors.New("no signing key")
 	ErrAlgConflict    = errors.New("algorithm conflict")
+	ErrKIDConflict    = errors.New("kid conflict")
 	ErrUnsupportedKey = errors.New("unsupported key type")
 )
 
