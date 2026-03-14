@@ -58,9 +58,9 @@ var (
 	ErrInvalidClaim = errors.New("invalid claim value")
 
 	// Time-based claim errors — each wraps [ErrInvalidClaim].
-	ErrAfterExp        = fmt.Errorf("exp: token expired: %w", ErrInvalidClaim)
-	ErrBeforeNbf       = fmt.Errorf("nbf: token not yet valid: %w", ErrInvalidClaim)
-	ErrBeforeIat       = fmt.Errorf("iat: issued in the future: %w", ErrInvalidClaim)
-	ErrBeforeAuthTime  = fmt.Errorf("auth_time: in the future: %w", ErrInvalidClaim)
-	ErrAfterAuthMaxAge = fmt.Errorf("auth_time: exceeds max age: %w", ErrInvalidClaim)
+	ErrAfterExp        = fmt.Errorf("%w: exp: token expired", ErrInvalidClaim)
+	ErrBeforeNbf       = fmt.Errorf("%w: nbf: token not yet valid", ErrInvalidClaim)
+	ErrBeforeIat       = fmt.Errorf("%w: iat: issued in the future", ErrInvalidClaim)
+	ErrBeforeAuthTime  = fmt.Errorf("%w: auth_time: in the future", ErrInvalidClaim)
+	ErrAfterAuthMaxAge = fmt.Errorf("%w: auth_time: exceeds max age", ErrInvalidClaim)
 )
