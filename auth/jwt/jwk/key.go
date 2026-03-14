@@ -26,7 +26,6 @@ package jwk
 
 import (
 	"crypto"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -544,23 +543,25 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 func decodePrivate(kj rawKey) (*PrivateKey, error) {
 	switch kj.Kty {
 	case "EC":
-		pub, err := decodeEC(kj)
-		if err != nil {
-			return nil, fmt.Errorf("parse EC private key %q: %w", kj.KID, err)
+		var curve elliptic.Curve
+		switch kj.Crv {
+		case "P-256":
+			curve = elliptic.P256()
+		case "P-384":
+			curve = elliptic.P384()
+		case "P-521":
+			curve = elliptic.P521()
+		default:
+			return nil, fmt.Errorf("parse EC private key %q: unsupported curve %q", kj.KID, kj.Crv)
 		}
 		dBytes, err := base64.RawURLEncoding.DecodeString(kj.D)
 		if err != nil {
 			return nil, fmt.Errorf("parse EC private key %q: invalid d: %w", kj.KID, err)
 		}
-		// Validate the scalar is in [1, N-1] before constructing the key.
-		dInt := new(big.Int).SetBytes(dBytes)
-		n := pub.Curve.Params().N
-		if dInt.Sign() <= 0 || dInt.Cmp(n) >= 0 {
-			return nil, fmt.Errorf("parse EC private key %q: private scalar out of range", kj.KID)
-		}
-		priv := &ecdsa.PrivateKey{
-			PublicKey: *pub,
-			D:         dInt,
+		// ParseRawPrivateKey validates the scalar and derives the public key.
+		priv, err := ecdsa.ParseRawPrivateKey(curve, dBytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse EC private key %q: %w", kj.KID, err)
 		}
 		return &PrivateKey{Signer: priv, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}, nil
 
@@ -660,37 +661,30 @@ func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 	}
 
 	var curve elliptic.Curve
-	var ecdhCurve ecdh.Curve
 	switch kj.Crv {
 	case "P-256":
 		curve = elliptic.P256()
-		ecdhCurve = ecdh.P256()
 	case "P-384":
 		curve = elliptic.P384()
-		ecdhCurve = ecdh.P384()
 	case "P-521":
 		curve = elliptic.P521()
-		ecdhCurve = ecdh.P521()
 	default:
 		return nil, fmt.Errorf("unsupported EC curve: %s", kj.Crv)
 	}
 
-	// Build the uncompressed point (0x04 || X || Y) and use crypto/ecdh to
-	// validate the point is on the curve. NewPublicKey rejects invalid points.
+	// Build the uncompressed point (0x04 || X || Y), left-padding each
+	// coordinate to the expected byte length. ParseUncompressedPublicKey
+	// validates that the point is on the curve.
 	byteLen := (curve.Params().BitSize + 7) / 8
 	uncompressed := make([]byte, 1+2*byteLen)
 	uncompressed[0] = 0x04
 	copy(uncompressed[1+byteLen-len(x):1+byteLen], x) // left-pad X
 	copy(uncompressed[1+2*byteLen-len(y):], y)        // left-pad Y
-	if _, err := ecdhCurve.NewPublicKey(uncompressed); err != nil {
+	key, err := ecdsa.ParseUncompressedPublicKey(curve, uncompressed)
+	if err != nil {
 		return nil, fmt.Errorf("EC public key point is not on curve %s: %w", kj.Crv, err)
 	}
-
-	return &ecdsa.PublicKey{
-		Curve: curve,
-		X:     new(big.Int).SetBytes(x),
-		Y:     new(big.Int).SetBytes(y),
-	}, nil
+	return key, nil
 }
 
 func decodeOKP(kj rawKey) (ed25519.PublicKey, error) {
