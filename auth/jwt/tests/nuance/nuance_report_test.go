@@ -80,9 +80,9 @@ func TestNuance_ClockSkew_GoJose(t *testing.T) {
 		var decoded jwt.IDTokenClaims
 		jwt.UnmarshalClaims(jws, &decoded)
 		v := jwt.RFCValidator{ValidatorCore: jwt.ValidatorCore{Iss: []string{"https://example.com"}}}
-		warnings, valErr := v.Validate(&decoded, time.Now())
-		t.Logf("  our Validate (2s grace):  rejects=%v (err=%v, warnings=%v)",
-			valErr != nil, valErr, warnings)
+		valErr := v.Validate(&decoded, time.Now())
+		t.Logf("  our Validate (2s grace):  rejects=%v (err=%v)",
+			valErr != nil, valErr)
 		if valErr == nil {
 			t.Error("expected our Validate to reject a token expired 30s ago")
 		}
@@ -472,7 +472,7 @@ func TestNuance_IssuedAtValidation(t *testing.T) {
 		var decoded jwt.IDTokenClaims
 		jwt.UnmarshalClaims(jws, &decoded)
 		v := jwt.RFCValidator{ValidatorCore: jwt.ValidatorCore{Iss: []string{"https://example.com"}}}
-		_, valErr := v.Validate(&decoded, time.Now())
+		valErr := v.Validate(&decoded, time.Now())
 		t.Logf("  our Validate (2s grace):        rejects=%v", valErr != nil)
 		if valErr == nil {
 			t.Error("expected our Validate to reject future iat")

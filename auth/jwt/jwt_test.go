@@ -16,7 +16,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -38,15 +38,15 @@ type AppClaims struct {
 // validateAppClaims is a plain function - not a method satisfying an interface.
 // It demonstrates the Decode+Verify pattern: custom validation logic lives here,
 // calling Validator.Validate and adding app-specific checks.
-func validateAppClaims(c AppClaims, v *jwt.IDTokenValidator, now time.Time) ([]string, error) {
-	errs, _ := v.Validate(&c, now)
+func validateAppClaims(c AppClaims, v *jwt.IDTokenValidator, now time.Time) error {
+	var errs []error
+	if err := v.Validate(&c, now); err != nil {
+		errs = append(errs, err)
+	}
 	if c.Email == "" {
-		errs = append(errs, "missing email claim")
+		errs = append(errs, errors.New("missing email claim"))
 	}
-	if len(errs) > 0 {
-		return errs, fmt.Errorf("has errors")
-	}
-	return nil, nil
+	return errors.Join(errs...)
 }
 
 func goodClaims() AppClaims {
@@ -124,9 +124,8 @@ func TestRoundTrip(t *testing.T) {
 	if err := jwt.UnmarshalClaims(jws2, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
-	errs, _ := goodValidator().Validate(&decoded, time.Now())
-	if len(errs) > 0 {
-		t.Fatalf("claim validation failed: %v", errs)
+	if err := goodValidator().Validate(&decoded, time.Now()); err != nil {
+		t.Fatalf("claim validation failed: %v", err)
 	}
 	// Direct field access - no type assertion needed.
 	if decoded.Email != claims.Email {
@@ -167,9 +166,8 @@ func TestRoundTripRS256(t *testing.T) {
 	if err := jwt.UnmarshalClaims(jws2, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
-	errs, _ := goodValidator().Validate(&decoded, time.Now())
-	if len(errs) > 0 {
-		t.Fatalf("claim validation failed: %v", errs)
+	if err := goodValidator().Validate(&decoded, time.Now()); err != nil {
+		t.Fatalf("claim validation failed: %v", err)
 	}
 }
 
@@ -206,9 +204,8 @@ func TestRoundTripEdDSA(t *testing.T) {
 	if err := jwt.UnmarshalClaims(jws2, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
-	errs, _ := goodValidator().Validate(&decoded, time.Now())
-	if len(errs) > 0 {
-		t.Fatalf("claim validation failed: %v", errs)
+	if err := goodValidator().Validate(&decoded, time.Now()); err != nil {
+		t.Fatalf("claim validation failed: %v", err)
 	}
 }
 
@@ -236,9 +233,8 @@ func TestDecodeVerifyFlow(t *testing.T) {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
 
-	errs, err := goodValidator().Validate(&decoded, time.Now())
-	if err != nil {
-		t.Fatalf("Validate failed: %v - errs: %v", err, errs)
+	if err := goodValidator().Validate(&decoded, time.Now()); err != nil {
+		t.Fatalf("Validate failed: %v", err)
 	}
 }
 
@@ -297,18 +293,12 @@ func TestCustomValidation(t *testing.T) {
 	var decoded AppClaims
 	_ = jwt.UnmarshalClaims(jws2, &decoded)
 
-	errs, err := validateAppClaims(decoded, goodValidator(), time.Now())
+	err = validateAppClaims(decoded, goodValidator(), time.Now())
 	if err == nil {
 		t.Fatal("expected validation to fail: email is empty")
 	}
-	found := false
-	for _, e := range errs {
-		if e == "missing email claim" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected 'missing email claim' in errors: %v", errs)
+	if !strings.Contains(err.Error(), "missing email claim") {
+		t.Fatalf("expected 'missing email claim' in error: %v", err)
 	}
 }
 
@@ -334,32 +324,26 @@ func TestNBFValidation(t *testing.T) {
 	}
 
 	// No nbf: should pass.
-	if errs, err := rfc.Validate(&base, now); err != nil {
-		t.Fatalf("expected no error without nbf: %v - errs: %v", err, errs)
+	if err := rfc.Validate(&base, now); err != nil {
+		t.Fatalf("expected no error without nbf: %v", err)
 	}
 
 	// nbf in the past: should pass.
 	pastNBF := base
 	pastNBF.NBF = now.Add(-time.Hour).Unix()
-	if errs, err := rfc.Validate(&pastNBF, now); err != nil {
-		t.Fatalf("expected no error with past nbf: %v - errs: %v", err, errs)
+	if err := rfc.Validate(&pastNBF, now); err != nil {
+		t.Fatalf("expected no error with past nbf: %v", err)
 	}
 
 	// nbf in the future: must be rejected.
 	futureNBF := base
 	futureNBF.NBF = now.Add(time.Hour).Unix()
-	errs, err := rfc.Validate(&futureNBF, now)
+	err := rfc.Validate(&futureNBF, now)
 	if err == nil {
 		t.Fatal("expected error for future nbf")
 	}
-	found := false
-	for _, e := range errs {
-		if strings.Contains(e, "nbf") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected nbf error in: %v", errs)
+	if !errors.Is(err, jwt.ErrTokenNotYetValid) {
+		t.Fatalf("expected ErrTokenNotYetValid, got: %v", err)
 	}
 }
 
@@ -387,45 +371,23 @@ func TestRFCValidator(t *testing.T) {
 		},
 	}
 
-	errs, err := rfc.Validate(&minimal, now)
-	if err != nil {
-		t.Fatalf("RFCValidator rejected minimal valid claims: %v - errs: %v", err, errs)
+	if err := rfc.Validate(&minimal, now); err != nil {
+		t.Fatalf("RFCValidator rejected minimal valid claims: %v", err)
 	}
 
 	// Expired token must still be rejected.
 	expired := minimal
 	expired.Exp = now.Add(-time.Hour).Unix()
-	errs, err = rfc.Validate(&expired, now)
-	if err == nil {
-		t.Fatal("RFCValidator should reject expired token")
-	}
-	found := false
-	for _, e := range errs {
-		if strings.Contains(e, "expired") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected expiry error, got: %v", errs)
+	if err := rfc.Validate(&expired, now); !errors.Is(err, jwt.ErrTokenExpired) {
+		t.Fatalf("expected ErrTokenExpired, got: %v", err)
 	}
 
 	// Future iat must be rejected.
 	futureIat := minimal
 	futureIat.Iat = now.Add(time.Hour).Unix()
-	errs, err = rfc.Validate(&futureIat, now)
-	if err == nil {
-		t.Fatal("RFCValidator should reject future-dated iat")
+	if err := rfc.Validate(&futureIat, now); !errors.Is(err, jwt.ErrTokenFromFuture) {
+		t.Fatalf("expected ErrTokenFromFuture, got: %v", err)
 	}
-	found = false
-	for _, e := range errs {
-		if strings.Contains(e, "iat") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected iat error, got: %v", errs)
-	}
-
 }
 
 // TestVerifyWithoutValidation confirms that Verify + UnmarshalClaims succeeds
@@ -466,8 +428,8 @@ func TestVerifierWrongKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := iss.Verify(parsed); err == nil {
-		t.Fatal("expected Verify to fail with wrong key")
+	if err := iss.Verify(parsed); !errors.Is(err, jwt.ErrSignatureInvalid) {
+		t.Fatalf("expected ErrSignatureInvalid, got: %v", err)
 	}
 }
 
@@ -485,8 +447,8 @@ func TestVerifierUnknownKid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := iss.Verify(parsed); err == nil {
-		t.Fatal("expected Verify to fail for unknown kid")
+	if err := iss.Verify(parsed); !errors.Is(err, jwt.ErrUnknownKID) {
+		t.Fatalf("expected ErrUnknownKID, got: %v", err)
 	}
 }
 
@@ -521,18 +483,12 @@ func TestVerifierIssMismatch(t *testing.T) {
 	if err := jwt.UnmarshalClaims(jws2, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
-	errs, _ := goodValidator().Validate(&decoded, time.Now())
-	if len(errs) == 0 {
+	err = goodValidator().Validate(&decoded, time.Now())
+	if err == nil {
 		t.Fatal("expected validation errors for iss mismatch")
 	}
-	found := false
-	for _, e := range errs {
-		if strings.Contains(e, "iss") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected iss error in validation errors: %v", errs)
+	if !errors.Is(err, jwt.ErrInvalidClaim) {
+		t.Fatalf("expected ErrInvalidClaim for iss mismatch, got: %v", err)
 	}
 }
 
@@ -558,8 +514,8 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := iss.Verify(parsed); err == nil {
-		t.Fatal("expected Verify to fail for tampered alg")
+	if err := iss.Verify(parsed); !errors.Is(err, jwt.ErrUnsupportedAlg) {
+		t.Fatalf("expected ErrUnsupportedAlg for tampered alg, got: %v", err)
 	}
 }
 
@@ -590,9 +546,8 @@ func TestSignerRoundTrip(t *testing.T) {
 	if err := jwt.UnmarshalClaims(jws, &decoded); err != nil {
 		t.Fatalf("UnmarshalClaims failed: %v", err)
 	}
-	errs, _ := goodValidator().Validate(&decoded, time.Now())
-	if len(errs) > 0 {
-		t.Fatalf("claim validation failed: %v", errs)
+	if err := goodValidator().Validate(&decoded, time.Now()); err != nil {
+		t.Fatalf("claim validation failed: %v", err)
 	}
 	if decoded.Email != claims.Email {
 		t.Errorf("email: got %s, want %s", decoded.Email, claims.Email)
@@ -662,8 +617,8 @@ func TestSignerRoundRobin(t *testing.T) {
 		if err := jwt.UnmarshalClaims(jws, &decoded); err != nil {
 			t.Fatalf("UnmarshalClaims[%d] failed: %v", i, err)
 		}
-		if errs, _ := v.Validate(&decoded, time.Now()); len(errs) > 0 {
-			t.Fatalf("Validate[%d] failed: %v", i, errs)
+		if err := v.Validate(&decoded, time.Now()); err != nil {
+			t.Fatalf("Validate[%d] failed: %v", i, err)
 		}
 	}
 }

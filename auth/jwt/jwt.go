@@ -134,6 +134,7 @@ import (
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"slices"
@@ -391,7 +392,7 @@ type Claims interface {
 func Decode(tokenStr string) (*JWS, error) {
 	parts := strings.Split(tokenStr, ".")
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid JWT format")
+		return nil, fmt.Errorf("%w", ErrMalformedToken)
 	}
 
 	var jws JWS
@@ -399,15 +400,15 @@ func Decode(tokenStr string) (*JWS, error) {
 
 	header, err := base64.RawURLEncoding.DecodeString(string(jws.protected))
 	if err != nil {
-		return nil, fmt.Errorf("invalid header encoding: %w", err)
+		return nil, fmt.Errorf("header base64: %w: %w", err, ErrInvalidHeader)
 	}
 	if err := json.Unmarshal(header, &jws.header); err != nil {
-		return nil, fmt.Errorf("invalid header JSON: %w", err)
+		return nil, fmt.Errorf("header json: %w: %w", err, ErrInvalidHeader)
 	}
 
 	jws.signature, err = base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return nil, fmt.Errorf("invalid signature encoding: %w", err)
+		return nil, fmt.Errorf("signature base64: %w: %w", err, ErrInvalidSignature)
 	}
 
 	return &jws, nil
@@ -479,7 +480,7 @@ func Encode(jws VerifiableJWS) string {
 // if the header's KID is empty; an error is returned on mismatch.
 func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 	if pk.Signer == nil {
-		return fmt.Errorf("signWith: key %q has no Signer", pk.KID)
+		return fmt.Errorf("signWith: kid %q: %w", pk.KID, ErrNoSigningKey)
 	}
 	hdr := jws.GetHeader()
 	switch {
@@ -496,7 +497,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 			return err
 		}
 		if hdr.Alg != "" && hdr.Alg != alg {
-			return fmt.Errorf("signWith: key alg %s incompatible with header alg %q", alg, hdr.Alg)
+			return fmt.Errorf("signWith: key %s vs header %q: %w", alg, hdr.Alg, ErrAlgConflict)
 		}
 		hdr.Alg = alg
 		protected, err := jws.MarshalHeader(hdr)
@@ -521,7 +522,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 
 	case *rsa.PublicKey:
 		if hdr.Alg != "" && hdr.Alg != "RS256" {
-			return fmt.Errorf("signWith: RSA key incompatible with header alg %q (expected RS256)", hdr.Alg)
+			return fmt.Errorf("signWith: RSA vs header %q: %w", hdr.Alg, ErrAlgConflict)
 		}
 		hdr.Alg = "RS256"
 		protected, err := jws.MarshalHeader(hdr)
@@ -542,7 +543,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 
 	case ed25519.PublicKey:
 		if hdr.Alg != "" && hdr.Alg != "EdDSA" {
-			return fmt.Errorf("signWith: Ed25519 key incompatible with header alg %q (expected EdDSA)", hdr.Alg)
+			return fmt.Errorf("signWith: EdDSA vs header %q: %w", hdr.Alg, ErrAlgConflict)
 		}
 		hdr.Alg = "EdDSA"
 		protected, err := jws.MarshalHeader(hdr)
@@ -559,8 +560,8 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 
 	default:
 		return fmt.Errorf(
-			"signWith: unsupported public key type %T (supported: *ecdsa.PublicKey, *rsa.PublicKey, ed25519.PublicKey)",
-			pk.Signer.Public(),
+			"signWith: %T: %w",
+			pk.Signer.Public(), ErrUnsupportedKey,
 		)
 	}
 }
@@ -621,7 +622,10 @@ type ValidatorCore struct {
 // Validate checks exp, nbf, iat, and any configured value lists (iss, aud, azp, amr).
 // It does not check sub, jti, or auth_time - use [IDTokenValidator] or [RFCValidator]
 // for those.
-func (v *ValidatorCore) Validate(claims Claims, now time.Time) ([]string, error) {
+//
+// Returns nil on success, or an [errors.Join] of all failures. Use [errors.Is]
+// to check for specific sentinels (e.g. [ErrTokenExpired], [ErrMissingClaim]).
+func (v *ValidatorCore) Validate(claims Claims, now time.Time) error {
 	return validateClaims(*claims.GetIDTokenClaims(), *v, claimChecks{
 		checkIss: len(v.Iss) > 0,
 		checkAud: len(v.Aud) > 0,
@@ -657,8 +661,11 @@ type IDTokenValidator struct {
 	ExpectAuthTime bool // if true (or MaxAge > 0), auth_time is validated
 }
 
-// Validate checks the OIDC Core §2 ID Token claims and returns soft errors.
-func (v *IDTokenValidator) Validate(claims Claims, now time.Time) ([]string, error) {
+// Validate checks the OIDC Core §2 ID Token claims.
+//
+// Returns nil on success, or an [errors.Join] of all failures. Use [errors.Is]
+// to check for specific sentinels (e.g. [ErrTokenExpired], [ErrMissingClaim]).
+func (v *IDTokenValidator) Validate(claims Claims, now time.Time) error {
 	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      !v.IgnoreIss,
 		checkSub:      !v.IgnoreSub,
@@ -697,8 +704,11 @@ type RFCValidator struct {
 	ExpectAMR      bool // if true (or RequiredAMRs/MinAMRCount set), amr is validated
 }
 
-// Validate checks claims against RFC 7519 rules and returns soft errors.
-func (v *RFCValidator) Validate(claims Claims, now time.Time) ([]string, error) {
+// Validate checks claims against RFC 7519 rules.
+//
+// Returns nil on success, or an [errors.Join] of all failures. Use [errors.Is]
+// to check for specific sentinels (e.g. [ErrTokenExpired], [ErrMissingClaim]).
+func (v *RFCValidator) Validate(claims Claims, now time.Time) error {
 	return validateClaims(*claims.GetIDTokenClaims(), v.ValidatorCore, claimChecks{
 		checkIss:      len(v.Iss) > 0,
 		checkSub:      v.ExpectSub,
@@ -728,8 +738,8 @@ type claimChecks struct {
 	checkAzp      bool
 }
 
-func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks, now time.Time) ([]string, error) {
-	var errs []string
+func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks, now time.Time) error {
+	var errs []error
 
 	skew := core.GracePeriod
 	if skew == 0 {
@@ -740,33 +750,33 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 
 	if checks.checkIss {
 		if claims.Iss == "" {
-			errs = append(errs, "missing or malformed 'iss' (token issuer)")
+			errs = append(errs, fmt.Errorf("iss: %w", ErrMissingClaim))
 		} else if len(core.Iss) > 0 && !slices.Contains(core.Iss, claims.Iss) {
-			errs = append(errs, fmt.Sprintf("'iss' %q not in allowed list", claims.Iss))
+			errs = append(errs, fmt.Errorf("iss %q not in allowed list: %w", claims.Iss, ErrInvalidClaim))
 		}
 	}
 
 	if checks.checkSub && claims.Sub == "" {
-		errs = append(errs, "missing or malformed 'sub' (subject, typically pairwise user id)")
+		errs = append(errs, fmt.Errorf("sub: %w", ErrMissingClaim))
 	}
 
 	if checks.checkAud {
 		if len(claims.Aud) == 0 {
-			errs = append(errs, "missing or malformed 'aud' (audience receiving token)")
+			errs = append(errs, fmt.Errorf("aud: %w", ErrMissingClaim))
 		} else if len(core.Aud) > 0 && !slices.ContainsFunc([]string(claims.Aud), func(a string) bool {
 			return slices.Contains(core.Aud, a)
 		}) {
-			errs = append(errs, fmt.Sprintf("'aud' not in allowed list: %v", claims.Aud))
+			errs = append(errs, fmt.Errorf("aud %v not in allowed list: %w", claims.Aud, ErrInvalidClaim))
 		}
 	}
 
 	if checks.checkExp {
 		if claims.Exp <= 0 {
-			errs = append(errs, "missing or malformed 'exp' (expiration date in seconds)")
+			errs = append(errs, fmt.Errorf("exp: %w", ErrMissingClaim))
 		} else if now.After(time.Unix(claims.Exp, 0).Add(skew)) {
 			duration := now.Sub(time.Unix(claims.Exp, 0))
 			expTime := time.Unix(claims.Exp, 0).Format("2006-01-02 15:04:05 MST")
-			errs = append(errs, fmt.Sprintf("token expired %s ago (%s)", formatDuration(duration), expTime))
+			errs = append(errs, fmt.Errorf("expired %s ago (%s): %w", formatDuration(duration), expTime, ErrTokenExpired))
 		}
 	}
 
@@ -776,42 +786,42 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 		if nbfTime.After(now.Add(skew)) {
 			fromNow := nbfTime.Sub(now)
 			nbfStr := nbfTime.Format("2006-01-02 15:04:05 MST")
-			errs = append(errs, fmt.Sprintf("token not yet valid: 'nbf' is %s in the future (%s)", formatDuration(fromNow), nbfStr))
+			errs = append(errs, fmt.Errorf("nbf is %s in the future (%s): %w", formatDuration(fromNow), nbfStr, ErrTokenNotYetValid))
 		}
 	}
 
 	if checks.checkIat {
 		if claims.Iat <= 0 {
-			errs = append(errs, "missing or malformed 'iat' (issued at, when token was signed)")
+			errs = append(errs, fmt.Errorf("iat: %w", ErrMissingClaim))
 		} else if time.Unix(claims.Iat, 0).After(now.Add(skew)) {
 			duration := time.Unix(claims.Iat, 0).Sub(now)
 			iatTime := time.Unix(claims.Iat, 0).Format("2006-01-02 15:04:05 MST")
-			errs = append(errs, fmt.Sprintf("'iat' (issued at) is %s in the future (%s)", formatDuration(duration), iatTime))
+			errs = append(errs, fmt.Errorf("iat is %s in the future (%s): %w", formatDuration(duration), iatTime, ErrTokenFromFuture))
 		}
 	}
 
 	if checks.checkJTI && claims.JTI == "" {
-		errs = append(errs, "missing or malformed 'jti' (JWT ID)")
+		errs = append(errs, fmt.Errorf("jti: %w", ErrMissingClaim))
 	}
 
 	if checks.checkAuthTime {
 		if claims.AuthTime == 0 {
-			errs = append(errs, "missing or malformed 'auth_time' (time of real-world user authentication, in seconds)")
+			errs = append(errs, fmt.Errorf("auth_time: %w", ErrMissingClaim))
 		} else {
 			authTime := time.Unix(claims.AuthTime, 0)
 			authTimeStr := authTime.Format("2006-01-02 15:04:05 MST")
 			age := now.Sub(authTime)
 			if authTime.After(now.Add(skew)) {
 				fromNow := authTime.Sub(now)
-				errs = append(errs, fmt.Sprintf(
-					"'auth_time' of %s is %s in the future",
-					authTimeStr, formatDuration(fromNow)),
+				errs = append(errs, fmt.Errorf(
+					"auth_time %s is %s in the future: %w",
+					authTimeStr, formatDuration(fromNow), ErrTokenFromFuture),
 				)
 			} else if core.MaxAge > 0 && age > core.MaxAge {
 				diff := age - core.MaxAge
-				errs = append(errs, fmt.Sprintf(
-					"'auth_time' of %s is %s old, exceeding max age %s by %s",
-					authTimeStr, formatDuration(age), formatDuration(core.MaxAge), formatDuration(diff)),
+				errs = append(errs, fmt.Errorf(
+					"auth_time %s is %s old, exceeding max age %s by %s: %w",
+					authTimeStr, formatDuration(age), formatDuration(core.MaxAge), formatDuration(diff), ErrAuthTooOld),
 				)
 			}
 		}
@@ -819,30 +829,30 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 
 	if checks.checkAMR {
 		if len(claims.AMR) == 0 {
-			errs = append(errs, "missing or malformed 'amr' (authorization methods, as json list)")
+			errs = append(errs, fmt.Errorf("amr: %w", ErrMissingClaim))
 		} else {
 			for _, required := range core.RequiredAMRs {
 				if !slices.Contains(claims.AMR, required) {
-					errs = append(errs, fmt.Sprintf("missing required '%s' from 'amr'", required))
+					errs = append(errs, fmt.Errorf("amr missing %q: %w", required, ErrInvalidClaim))
 				}
 			}
 			if core.MinAMRCount > 0 && len(claims.AMR) < core.MinAMRCount {
-				errs = append(errs, fmt.Sprintf("'amr' has %d factor(s), need at least %d", len(claims.AMR), core.MinAMRCount))
+				errs = append(errs, fmt.Errorf("amr has %d factor(s), need at least %d: %w", len(claims.AMR), core.MinAMRCount, ErrInvalidClaim))
 			}
 		}
 	}
 
 	if checks.checkAzp && len(core.Azp) > 0 && !slices.Contains(core.Azp, claims.Azp) {
-		errs = append(errs, fmt.Sprintf("'azp' %q not in allowed list", claims.Azp))
+		errs = append(errs, fmt.Errorf("azp %q not in allowed list: %w", claims.Azp, ErrInvalidClaim))
 	}
 
 	if len(errs) > 0 {
 		// time.Local is loaded once at process start - no LoadLocation syscall needed.
-		serverTime := fmt.Sprintf("info: server time is %s (%s)", now.Format("2006-01-02 15:04:05 MST"), time.Local)
-		errs = append(errs, serverTime)
-		return errs, fmt.Errorf("jwt: validation failed")
+		serverTime := fmt.Sprintf("server time %s (%s)", now.Format("2006-01-02 15:04:05 MST"), time.Local)
+		errs = append(errs, fmt.Errorf("%s: %w", serverTime, ErrValidation))
+		return errors.Join(errs...)
 	}
-	return nil, nil
+	return nil
 }
 
 // Verifier holds the public keys of a JWT issuer and verifies token signatures.
@@ -902,11 +912,11 @@ func (iss *Verifier) PublicKeys() []jwk.PublicKey {
 func (iss *Verifier) Verify(jws VerifiableJWS) error {
 	h := jws.GetHeader()
 	if h.KID == "" {
-		return fmt.Errorf("missing 'kid' header")
+		return fmt.Errorf("%w", ErrMissingKID)
 	}
 	key, ok := iss.keys[h.KID]
 	if !ok {
-		return fmt.Errorf("unknown kid: %q", h.KID)
+		return fmt.Errorf("kid %q: %w", h.KID, ErrUnknownKID)
 	}
 
 	protected, payload := jws.GetProtected(), jws.GetPayload()
@@ -915,7 +925,7 @@ func (iss *Verifier) Verify(jws VerifiableJWS) error {
 	signingInput = append(signingInput, '.')
 	signingInput = append(signingInput, payload...)
 	if err := verifyWith(signingInput, jws.GetSignature(), h.Alg, key); err != nil {
-		return fmt.Errorf("signature verification failed: %w", err)
+		return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, err)
 	}
 	return nil
 }
@@ -931,7 +941,7 @@ func (iss *Verifier) Verify(jws VerifiableJWS) error {
 //	if err != nil { /* bad sig, malformed token, unknown kid */ }
 //	var claims AppClaims
 //	if err := jwt.UnmarshalClaims(jws, &claims); err != nil { /* ... */ }
-//	errs, _ := v.Validate(&claims, time.Now())
+//	if err := v.Validate(&claims, time.Now()); err != nil { /* ... */ }
 //
 // For routing by kid/iss before verifying, use [Decode] then [Verifier.Verify].
 func (iss *Verifier) VerifyJWT(tokenStr string) (*JWS, error) {
@@ -952,18 +962,18 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 	case "ES256", "ES384", "ES512":
 		k, ok := key.(*ecdsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("alg %s requires *ecdsa.PublicKey, got %T", alg, key)
+			return fmt.Errorf("alg %s requires *ecdsa.PublicKey, got %T: %w", alg, key, ErrKeyTypeMismatch)
 		}
 		expectedAlg, h, err := algForECKey(k)
 		if err != nil {
 			return err
 		}
 		if expectedAlg != alg {
-			return fmt.Errorf("key curve mismatch: key is %s, token alg is %s", expectedAlg, alg)
+			return fmt.Errorf("key is %s, token alg is %s: %w", expectedAlg, alg, ErrCurveMismatch)
 		}
 		byteLen := (k.Curve.Params().BitSize + 7) / 8
 		if len(sig) != 2*byteLen {
-			return fmt.Errorf("invalid %s signature length: got %d, want %d", alg, len(sig), 2*byteLen)
+			return fmt.Errorf("%s sig len %d, want %d: %w", alg, len(sig), 2*byteLen, ErrSignatureInvalid)
 		}
 		digest, err := digestFor(h, signingInput)
 		if err != nil {
@@ -972,36 +982,36 @@ func verifyWith(signingInput []byte, sig []byte, alg string, key jwk.CryptoPubli
 		r := new(big.Int).SetBytes(sig[:byteLen])
 		s := new(big.Int).SetBytes(sig[byteLen:])
 		if !ecdsa.Verify(k, digest, r, s) {
-			return fmt.Errorf("%s signature invalid", alg)
+			return fmt.Errorf("%s: %w", alg, ErrSignatureInvalid)
 		}
 		return nil
 
 	case "RS256":
 		k, ok := key.(*rsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("alg RS256 requires *rsa.PublicKey, got %T", key)
+			return fmt.Errorf("alg RS256 requires *rsa.PublicKey, got %T: %w", key, ErrKeyTypeMismatch)
 		}
 		digest, err := digestFor(crypto.SHA256, signingInput)
 		if err != nil {
 			return err
 		}
 		if err := rsa.VerifyPKCS1v15(k, crypto.SHA256, digest, sig); err != nil {
-			return fmt.Errorf("RS256 signature invalid: %w", err)
+			return fmt.Errorf("RS256: %w: %w", err, ErrSignatureInvalid)
 		}
 		return nil
 
 	case "EdDSA":
 		k, ok := key.(ed25519.PublicKey)
 		if !ok {
-			return fmt.Errorf("alg EdDSA requires ed25519.PublicKey, got %T", key)
+			return fmt.Errorf("alg EdDSA requires ed25519.PublicKey, got %T: %w", key, ErrKeyTypeMismatch)
 		}
 		if !ed25519.Verify(k, signingInput, sig) {
-			return fmt.Errorf("EdDSA signature invalid")
+			return fmt.Errorf("EdDSA: %w", ErrSignatureInvalid)
 		}
 		return nil
 
 	default:
-		return fmt.Errorf("unsupported alg: %q", alg)
+		return fmt.Errorf("alg %q: %w", alg, ErrUnsupportedAlg)
 	}
 }
 
@@ -1016,7 +1026,7 @@ func algForECKey(pub *ecdsa.PublicKey) (alg string, h crypto.Hash, err error) {
 	case elliptic.P521():
 		return "ES512", crypto.SHA512, nil
 	default:
-		return "", 0, fmt.Errorf("unsupported EC curve: %s", pub.Curve.Params().Name)
+		return "", 0, fmt.Errorf("EC curve %s: %w", pub.Curve.Params().Name, ErrUnsupportedKey)
 	}
 }
 

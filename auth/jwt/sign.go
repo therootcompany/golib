@@ -49,14 +49,14 @@ type Signer struct {
 // https://www.rfc-editor.org/rfc/rfc7638.html
 func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 	if len(keys) == 0 {
-		return nil, fmt.Errorf("NewSigner: at least one key is required")
+		return nil, fmt.Errorf("NewSigner: %w", ErrNoSigningKey)
 	}
 	// Copy so the caller can't mutate after construction.
 	ss := make([]jwk.PrivateKey, len(keys))
 	copy(ss, keys)
 	for i := range ss {
 		if ss[i].Signer == nil {
-			return nil, fmt.Errorf("NewSigner: key[%d] (kid=%q) has no Signer", i, ss[i].KID)
+			return nil, fmt.Errorf("NewSigner: key[%d] kid %q: %w", i, ss[i].KID, ErrNoSigningKey)
 		}
 
 		// Derive algorithm from key type; validate caller's Alg if already set.
@@ -65,7 +65,7 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 			return nil, fmt.Errorf("NewSigner: key[%d]: %w", i, err)
 		}
 		if ss[i].Alg != "" && ss[i].Alg != alg {
-			return nil, fmt.Errorf("NewSigner: key[%d] Alg %q conflicts with key type (expected %s)", i, ss[i].Alg, alg)
+			return nil, fmt.Errorf("NewSigner: key[%d] alg %q expected %s: %w", i, ss[i].Alg, alg, ErrAlgConflict)
 		}
 		ss[i].Alg = alg
 
@@ -104,7 +104,7 @@ func algForSigner(s crypto.Signer) (string, error) {
 	case ed25519.PublicKey:
 		return "EdDSA", nil
 	default:
-		return "", fmt.Errorf("unsupported key type %T (supported: *ecdsa.PublicKey, *rsa.PublicKey, ed25519.PublicKey)", pub)
+		return "", fmt.Errorf("%T: %w", pub, ErrUnsupportedKey)
 	}
 }
 
