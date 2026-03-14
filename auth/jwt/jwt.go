@@ -453,12 +453,12 @@ func UnmarshalClaims(jws VerifiableJWS, claims Claims) error {
 	return nil
 }
 
-// NewJWS creates an unsigned JWS from the provided claims.
+// New creates an unsigned JWS from the provided claims.
 //
 // The "alg" and "kid" header fields are set automatically by [Signer.SignJWS]
 // based on the key type and [jwk.PrivateKey.KID]. Call [Encode] to
 // produce the compact JWT string after signing.
-func NewJWS(claims Claims) (*JWS, error) {
+func New(claims Claims) (*JWS, error) {
 	var jws JWS
 
 	jws.header.Header = Header{

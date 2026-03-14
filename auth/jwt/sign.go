@@ -229,7 +229,7 @@ func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 // headers or read the raw signature). For the common case of producing a
 // compact token string, use [Signer.SignToString].
 func (s *Signer) Sign(claims Claims) (*JWS, error) {
-	jws, err := NewJWS(claims)
+	jws, err := New(claims)
 	if err != nil {
 		return nil, err
 	}
