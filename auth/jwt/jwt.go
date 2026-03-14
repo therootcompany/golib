@@ -127,7 +127,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/rsa"
 	_ "crypto/sha256" // register SHA-256 with crypto.Hash
 	_ "crypto/sha512" // register SHA-384 and SHA-512 with crypto.Hash
@@ -493,101 +492,6 @@ func Encode(jws VerifiableJWS) string {
 	out = append(out, '.')
 	out = append(out, sig...)
 	return string(out)
-}
-
-// signWith is the shared implementation used by [Signer.SignJWS]. It selects
-// the algorithm from the key type, validates any
-// pre-set alg/kid in the JWS header, then calls [SignableJWS.MarshalHeader]
-// and [SignableJWS.SetSignature] so custom JWS types need no crypto knowledge.
-//
-// pk must have a non-nil Signer. KID is taken from pk.KID - set automatically
-// if the header's KID is empty; an error is returned on mismatch.
-func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
-	if pk.Signer == nil {
-		return fmt.Errorf("signWith: kid %q: %w", pk.KID, ErrNoSigningKey)
-	}
-	hdr := jws.GetHeader()
-	switch {
-	case hdr.KID == "":
-		hdr.KID = pk.KID
-	case hdr.KID != pk.KID:
-		return fmt.Errorf("signWith: header kid %q vs key kid %q: %w", hdr.KID, pk.KID, ErrKIDConflict)
-	}
-
-	switch pub := pk.Signer.Public().(type) {
-	case *ecdsa.PublicKey:
-		alg, h, err := algForECKey(pub)
-		if err != nil {
-			return err
-		}
-		if hdr.Alg != "" && hdr.Alg != alg {
-			return fmt.Errorf("signWith: key %s vs header %q: %w", alg, hdr.Alg, ErrAlgConflict)
-		}
-		hdr.Alg = alg
-		protected, err := jws.MarshalHeader(hdr)
-		if err != nil {
-			return err
-		}
-		digest, err := digestFor(h, signingInputBytes(protected, jws.GetPayload()))
-		if err != nil {
-			return err
-		}
-		// crypto.Signer returns ASN.1 DER for ECDSA; convert to raw r||s for JWS.
-		derSig, err := pk.Signer.Sign(rand.Reader, digest, h)
-		if err != nil {
-			return fmt.Errorf("signWith %s: %w", alg, err)
-		}
-		sig, err := ecdsaDERToRaw(derSig, pub.Curve)
-		if err != nil {
-			return err
-		}
-		jws.SetSignature(sig)
-		return nil
-
-	case *rsa.PublicKey:
-		if hdr.Alg != "" && hdr.Alg != "RS256" {
-			return fmt.Errorf("signWith: RSA vs header %q: %w", hdr.Alg, ErrAlgConflict)
-		}
-		hdr.Alg = "RS256"
-		protected, err := jws.MarshalHeader(hdr)
-		if err != nil {
-			return err
-		}
-		digest, err := digestFor(crypto.SHA256, signingInputBytes(protected, jws.GetPayload()))
-		if err != nil {
-			return err
-		}
-		// crypto.Signer returns raw PKCS#1 v1.5 bytes for RSA; use directly.
-		sig, err := pk.Signer.Sign(rand.Reader, digest, crypto.SHA256)
-		if err != nil {
-			return fmt.Errorf("signWith RS256: %w", err)
-		}
-		jws.SetSignature(sig)
-		return nil
-
-	case ed25519.PublicKey:
-		if hdr.Alg != "" && hdr.Alg != "EdDSA" {
-			return fmt.Errorf("signWith: EdDSA vs header %q: %w", hdr.Alg, ErrAlgConflict)
-		}
-		hdr.Alg = "EdDSA"
-		protected, err := jws.MarshalHeader(hdr)
-		if err != nil {
-			return err
-		}
-		// Ed25519 signs the raw message with no pre-hashing; pass crypto.Hash(0).
-		sig, err := pk.Signer.Sign(rand.Reader, signingInputBytes(protected, jws.GetPayload()), crypto.Hash(0))
-		if err != nil {
-			return fmt.Errorf("signWith EdDSA: %w", err)
-		}
-		jws.SetSignature(sig)
-		return nil
-
-	default:
-		return fmt.Errorf(
-			"signWith: %T: %w",
-			pk.Signer.Public(), ErrUnsupportedKey,
-		)
-	}
 }
 
 // signingInputBytes builds the protected.payload byte slice used as the signing input.
