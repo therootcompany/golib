@@ -53,22 +53,21 @@
 // a framework: it gives you composable pieces you call and control, not
 // scaffolding you must conform to.
 //
-// Simple embedded types to make it effortless to provide your own Claims.
-// and easy to use custom a Header if needed, or use any part of the system independently.
+//   - Sane defaults for everything, without hiding anything you may need to inspect.
+//   - There should be one obvious right way to do it.
+//   - Claims are the most important building-facing detail.
+//   - Use simple type embedded for maximum convenience without sacrificing optionality.
+//   - [StandardClaims] for typical user info, [IDTokenClaims] for minimal auth info.
+//     (both satisfy [Claims] for free via Go method promotion)
+//   - [UnmarshalClaims] to get your type-safe claims effortlessly.
+//   - [IDTokenValidator] for typical, strict auth validation, [RFCValidator] for special use cases
+//     (or bring your own, or ignore it and do it how you like)
+//   - Header always always used in the standard way, and tightly coupled to signing and
+//     verification - it stays fully and customizable as part of the JWS interfaces
+//     (embedding [RawJWT] and [Header] make it easy to satisfy [VerifiableJWS] or [SignableJWS])
+//   - Accessible error details (so that you don't have to round trip just to get the next one)
 //
-// Sane defaults for everything, without hiding any information you may need for testing or debugging.
-//
-// Embed [StandardClaims] (typical user info) or [IDTokenClaims] (minimal auth info) in
-// your struct to satisfy [Claims] "for free" via Go method promotion.
-//
-// Your custom claims validation logic is your own. [Verifier.VerifyJWT] authenticates the
-// signature; [UnmarshalClaims] decodes the payload; [IDTokenValidator.Validate]
-// or [RFCValidator.Validate] checks the registered claim values (iss, aud, exp, etc.). These are three
-// separate calls - you compose them in whatever order your application needs.
-//
-// Embed [RawJWT] in your own JWS type and provide [VerifiableJWS.GetHeader] to be able to access
-// custom Header values, and add [SignableJWS.MarshalHeader] and [SignableJWS.SetSignature] to sign
-// your own custom tokens.
+// Key takeaway: Your claims are your own. You can take what you get for free, or add what you need at no cost to you.
 //
 // # Security
 //
@@ -478,88 +477,88 @@ func Encode(jws VerifiableJWS) string {
 //
 // pk must have a non-nil Signer. KID is taken from pk.KID - set automatically
 // if the header's KID is empty; an error is returned on mismatch.
-func signWith(jws SignableJWS, pk *jwk.PrivateKey) ([]byte, error) {
+func signWith(jws SignableJWS, pk *jwk.PrivateKey) error {
 	if pk.Signer == nil {
-		return nil, fmt.Errorf("signWith: key %q has no Signer", pk.KID)
+		return fmt.Errorf("signWith: key %q has no Signer", pk.KID)
 	}
 	hdr := jws.GetHeader()
 	switch {
 	case hdr.KID == "":
 		hdr.KID = pk.KID
 	case hdr.KID != pk.KID:
-		return nil, fmt.Errorf("signWith: header kid %q conflicts with key KID %q", hdr.KID, pk.KID)
+		return fmt.Errorf("signWith: header kid %q conflicts with key KID %q", hdr.KID, pk.KID)
 	}
 
 	switch pub := pk.Signer.Public().(type) {
 	case *ecdsa.PublicKey:
 		alg, h, err := algForECKey(pub)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if hdr.Alg != "" && hdr.Alg != alg {
-			return nil, fmt.Errorf("signWith: key alg %s incompatible with header alg %q", alg, hdr.Alg)
+			return fmt.Errorf("signWith: key alg %s incompatible with header alg %q", alg, hdr.Alg)
 		}
 		hdr.Alg = alg
 		protected, err := jws.MarshalHeader(hdr)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		digest, err := digestFor(h, signingInputBytes(protected, jws.GetPayload()))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		// crypto.Signer returns ASN.1 DER for ECDSA; convert to raw r||s for JWS.
 		derSig, err := pk.Signer.Sign(rand.Reader, digest, h)
 		if err != nil {
-			return nil, fmt.Errorf("signWith %s: %w", alg, err)
+			return fmt.Errorf("signWith %s: %w", alg, err)
 		}
 		sig, err := ecdsaDERToRaw(derSig, pub.Curve)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		jws.SetSignature(sig)
-		return sig, nil
+		return nil
 
 	case *rsa.PublicKey:
 		if hdr.Alg != "" && hdr.Alg != "RS256" {
-			return nil, fmt.Errorf("signWith: RSA key incompatible with header alg %q (expected RS256)", hdr.Alg)
+			return fmt.Errorf("signWith: RSA key incompatible with header alg %q (expected RS256)", hdr.Alg)
 		}
 		hdr.Alg = "RS256"
 		protected, err := jws.MarshalHeader(hdr)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		digest, err := digestFor(crypto.SHA256, signingInputBytes(protected, jws.GetPayload()))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		// crypto.Signer returns raw PKCS#1 v1.5 bytes for RSA; use directly.
 		sig, err := pk.Signer.Sign(rand.Reader, digest, crypto.SHA256)
 		if err != nil {
-			return nil, fmt.Errorf("signWith RS256: %w", err)
+			return fmt.Errorf("signWith RS256: %w", err)
 		}
 		jws.SetSignature(sig)
-		return sig, nil
+		return nil
 
 	case ed25519.PublicKey:
 		if hdr.Alg != "" && hdr.Alg != "EdDSA" {
-			return nil, fmt.Errorf("signWith: Ed25519 key incompatible with header alg %q (expected EdDSA)", hdr.Alg)
+			return fmt.Errorf("signWith: Ed25519 key incompatible with header alg %q (expected EdDSA)", hdr.Alg)
 		}
 		hdr.Alg = "EdDSA"
 		protected, err := jws.MarshalHeader(hdr)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		// Ed25519 signs the raw message with no pre-hashing; pass crypto.Hash(0).
 		sig, err := pk.Signer.Sign(rand.Reader, signingInputBytes(protected, jws.GetPayload()), crypto.Hash(0))
 		if err != nil {
-			return nil, fmt.Errorf("signWith EdDSA: %w", err)
+			return fmt.Errorf("signWith EdDSA: %w", err)
 		}
 		jws.SetSignature(sig)
-		return sig, nil
+		return nil
 
 	default:
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"signWith: unsupported public key type %T (supported: *ecdsa.PublicKey, *rsa.PublicKey, ed25519.PublicKey)",
 			pk.Signer.Public(),
 		)
