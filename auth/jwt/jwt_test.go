@@ -708,44 +708,27 @@ func TestJWKsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestKeyAccessors confirms the ECDSA, RSA, and EdDSA typed accessor methods on jwk.Key.
-func TestKeyAccessors(t *testing.T) {
+// TestKeyType verifies that KeyType returns the correct JWK kty string for each key type.
+func TestKeyType(t *testing.T) {
 	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
 
-	ecJWK := jwk.PublicKey{CryptoPublicKey: &ecKey.PublicKey, KID: "ec-1"}
-	rsaJWK := jwk.PublicKey{CryptoPublicKey: &rsaKey.PublicKey, KID: "rsa-1"}
-	edJWK := jwk.PublicKey{CryptoPublicKey: edPub, KID: "ed-1"}
-
-	if k, ok := ecJWK.ECDSA(); !ok || k == nil {
-		t.Error("expected ECDSA() to succeed for EC key")
+	tests := []struct {
+		name    string
+		key     jwk.PublicKey
+		wantKty string
+	}{
+		{"EC P-256", jwk.PublicKey{CryptoPublicKey: &ecKey.PublicKey}, "EC"},
+		{"RSA 2048", jwk.PublicKey{CryptoPublicKey: &rsaKey.PublicKey}, "RSA"},
+		{"Ed25519", jwk.PublicKey{CryptoPublicKey: edPub}, "OKP"},
 	}
-	if _, ok := ecJWK.RSA(); ok {
-		t.Error("expected RSA() to fail for EC key")
-	}
-	if _, ok := ecJWK.EdDSA(); ok {
-		t.Error("expected EdDSA() to fail for EC key")
-	}
-
-	if k, ok := rsaJWK.RSA(); !ok || k == nil {
-		t.Error("expected RSA() to succeed for RSA key")
-	}
-	if _, ok := rsaJWK.ECDSA(); ok {
-		t.Error("expected ECDSA() to fail for RSA key")
-	}
-	if _, ok := rsaJWK.EdDSA(); ok {
-		t.Error("expected EdDSA() to fail for RSA key")
-	}
-
-	if k, ok := edJWK.EdDSA(); !ok || k == nil {
-		t.Error("expected EdDSA() to succeed for Ed25519 key")
-	}
-	if _, ok := edJWK.ECDSA(); ok {
-		t.Error("expected ECDSA() to fail for Ed25519 key")
-	}
-	if _, ok := edJWK.RSA(); ok {
-		t.Error("expected RSA() to fail for Ed25519 key")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.key.KeyType(); got != tt.wantKty {
+				t.Errorf("KeyType() = %q, want %q", got, tt.wantKty)
+			}
+		})
 	}
 }
 
@@ -773,13 +756,13 @@ func TestDecodePublicJWKJSON(t *testing.T) {
 
 	var ecCount, rsaCount int
 	for _, k := range keys {
-		if _, ok := k.ECDSA(); ok {
+		switch k.KeyType() {
+		case "EC":
 			ecCount++
 			if k.KID != "ec-256" {
 				t.Errorf("unexpected EC kid: %s", k.KID)
 			}
-		}
-		if _, ok := k.RSA(); ok {
+		case "RSA":
 			rsaCount++
 			if k.KID != "rsa-2048" {
 				t.Errorf("unexpected RSA kid: %s", k.KID)

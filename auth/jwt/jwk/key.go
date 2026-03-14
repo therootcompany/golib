@@ -51,9 +51,10 @@ type CryptoPublicKey interface {
 
 // PublicKey wraps a parsed public key with its JWKS metadata.
 //
-// PublicKey is the in-memory representation of a JWK. Use the typed accessor
-// methods [PublicKey.ECDSA], [PublicKey.RSA], and [PublicKey.EdDSA] to assert
-// the underlying type without a raw type switch.
+// PublicKey is the in-memory representation of a JWK.
+// [PublicKey.KeyType] returns the JWK kty string ("EC", "RSA", or "OKP").
+// To access the raw Go key, type-switch on [PublicKey.CryptoPublicKey] —
+// see [PublicKey.KeyType] for an example.
 //
 // For signing keys, use [PrivateKey] instead — it holds the [crypto.Signer]
 // and derives a PublicKey on demand.
@@ -65,26 +66,21 @@ type PublicKey struct {
 	KeyOps []string
 }
 
-// ECDSA returns the key as *ecdsa.PublicKey if it is one, else (nil, false).
-func (k PublicKey) ECDSA() (*ecdsa.PublicKey, bool) {
-	key, ok := k.CryptoPublicKey.(*ecdsa.PublicKey)
-	return key, ok
-}
-
-// RSA returns the key as *rsa.PublicKey if it is one, else (nil, false).
-func (k PublicKey) RSA() (*rsa.PublicKey, bool) {
-	key, ok := k.CryptoPublicKey.(*rsa.PublicKey)
-	return key, ok
-}
-
-// EdDSA returns the key as ed25519.PublicKey if it is one, else (nil, false).
-func (k PublicKey) EdDSA() (ed25519.PublicKey, bool) {
-	key, ok := k.CryptoPublicKey.(ed25519.PublicKey)
-	return key, ok
-}
-
 // KeyType returns the JWK "kty" string for the key: "EC", "RSA", or "OKP".
 // Returns "" if the key type is unrecognized.
+//
+// To access the underlying Go key, use a type switch on [PublicKey.CryptoPublicKey]:
+//
+//	switch key := k.CryptoPublicKey.(type) {
+//	case *ecdsa.PublicKey:  // kty "EC"
+//	    // key is *ecdsa.PublicKey
+//	case *rsa.PublicKey:    // kty "RSA"
+//	    // key is *rsa.PublicKey
+//	case ed25519.PublicKey: // kty "OKP"
+//	    // key is ed25519.PublicKey
+//	default:
+//	    // unrecognized key type
+//	}
 func (k PublicKey) KeyType() string {
 	switch k.CryptoPublicKey.(type) {
 	case *ecdsa.PublicKey:
@@ -316,7 +312,7 @@ type rawKey struct {
 	Crv    string   `json:"crv,omitempty"`
 	X      string   `json:"x,omitempty"`
 	Y      string   `json:"y,omitempty"`
-	D      string   `json:"d,omitempty"`  // EC/OKP: private scalar; RSA: private exponent
+	D      string   `json:"d,omitempty"` // EC/OKP: private scalar; RSA: private exponent
 	N      string   `json:"n,omitempty"`
 	E      string   `json:"e,omitempty"`
 	P      string   `json:"p,omitempty"`  // RSA: first prime factor
@@ -655,7 +651,7 @@ func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 	uncompressed := make([]byte, 1+2*byteLen)
 	uncompressed[0] = 0x04
 	copy(uncompressed[1+byteLen-len(x):1+byteLen], x) // left-pad X
-	copy(uncompressed[1+2*byteLen-len(y):], y)         // left-pad Y
+	copy(uncompressed[1+2*byteLen-len(y):], y)        // left-pad Y
 	if _, err := ecdhCurve.NewPublicKey(uncompressed); err != nil {
 		return nil, fmt.Errorf("EC public key point is not on curve %s: %w", kj.Crv, err)
 	}
