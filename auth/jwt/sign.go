@@ -88,7 +88,6 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 		}
 	}
 
-	// TODO use slice rather than map, allow "none" or IgnoreKID
 	pubs := make([]jwk.PublicKey, len(ss))
 	for i := range ss {
 		pub, err := ss[i].PublicKey()
