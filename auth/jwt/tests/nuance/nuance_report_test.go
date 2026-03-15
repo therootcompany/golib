@@ -79,7 +79,7 @@ func TestNuance_ClockSkew_GoJose(t *testing.T) {
 	if jws != nil {
 		var decoded jwt.IDTokenClaims
 		jwt.UnmarshalClaims(jws, &decoded)
-		v := jwt.RFCValidator{Iss: []string{"https://example.com"}}
+		v := jwt.IDTokenValidator{Iss: []string{"https://example.com"}, IgnoreSub: true}
 		_, valErr := v.Validate(&decoded, time.Now())
 		t.Logf("  our Validate (2s grace):  rejects=%v (err=%v)",
 			valErr != nil, valErr)
@@ -471,7 +471,7 @@ func TestNuance_IssuedAtValidation(t *testing.T) {
 	if jws != nil {
 		var decoded jwt.IDTokenClaims
 		jwt.UnmarshalClaims(jws, &decoded)
-		v := jwt.RFCValidator{Iss: []string{"https://example.com"}}
+		v := jwt.IDTokenValidator{Iss: []string{"https://example.com"}, IgnoreSub: true}
 		_, valErr := v.Validate(&decoded, time.Now())
 		t.Logf("  our Validate (2s grace):        rejects=%v", valErr != nil)
 		if valErr == nil {

@@ -70,7 +70,7 @@
 //   - [StandardClaims] for typical user info, [IDTokenClaims] for minimal auth info.
 //     (both satisfy [Claims] for free via Go method promotion)
 //   - [UnmarshalClaims] to get your type-safe claims effortlessly.
-//   - [IDTokenValidator] for typical, strict auth validation, [RFCValidator] for special use cases
+//   - [IDTokenValidator] for typical auth validation — strict by default, permissive when configured
 //     (or bring your own, or ignore it and do it how you like)
 //   - Header is always used in the standard way, and tightly coupled to signing and
 //     verification - it stays fully customizable as part of the JWS interfaces
@@ -547,7 +547,7 @@ func signingInputBytes(protected, payload []byte) []byte {
 }
 
 // DefaultGracePeriod is the tolerance applied to exp, iat, and auth_time checks
-// when ValidatorCore.GracePeriod is zero.
+// when IDTokenValidator.GracePeriod is zero.
 //
 // It should be set to at least 2s in most cases to account for practical edge
 // cases of corresponding systems having even a millisecond of clock skew between
@@ -563,69 +563,39 @@ func signingInputBytes(protected, payload []byte) []byte {
 // systems.
 var DefaultGracePeriod = 2 * time.Second
 
-// ValidatorCore holds the fields shared by [IDTokenValidator] and [RFCValidator].
-// It can also be used directly as a minimal validator.
-//
-// Exp and Iat are checked by default; set IgnoreExp or IgnoreIat to opt out.
-//
-// Iss distinguishes nil from empty: nil means unconfigured (no check),
-// a non-nil empty slice is always a misconfiguration error (the empty set
-// allows nothing), and ["*"] accepts any non-empty issuer value.
-// See also [IDTokenValidator.IgnoreIss] and [jose.ErrMisconfigured].
-//
-// Aud and Azp are allowlists - when non-empty the token's claim value
-// must appear in the list and the claim must be present. RequiredAMRs and
-// MinAMRCount constrain the amr claim when set.
-//
-// GracePeriod is applied to exp, iat, and auth_time to tolerate minor clock
-// differences between distributed systems. If zero, [DefaultGracePeriod] (2s)
-// is used. Set to a negative value to disable skew tolerance entirely.
-//
-// MaxAge applies to auth_time: when set, authentication must have occurred
-// within MaxAge of now.
-type ValidatorCore struct {
-	GracePeriod  time.Duration // 0 = DefaultGracePeriod (2s); negative = no tolerance
+// validatorCore holds the fields passed to [validateClaims]. It is constructed
+// internally by [IDTokenValidator.Validate].
+type validatorCore struct {
+	GracePeriod  time.Duration
 	MaxAge       time.Duration
 	IgnoreExp    bool
-	IgnoreNBF    bool // rarely appropriate; nbf is a security boundary like exp
+	IgnoreNBF    bool
 	IgnoreIat    bool
-	Iss          []string // nil=unchecked, []=misconfigured, ["*"]=any, ["x"]=must match
-	Aud          []string // token's aud must intersect list (if set)
-	Azp          []string // token's azp must appear in list (if set)
-	RequiredAMRs []string // all of these must appear in the token's amr list
-	MinAMRCount  int      // token's amr must have at least this many values; 0 = no minimum
+	Iss          []string
+	Aud          []string
+	Azp          []string
+	RequiredAMRs []string
+	MinAMRCount  int
 }
 
-// Validate checks exp, nbf, iat, and any configured value lists (iss, aud, azp, amr).
-// It does not check sub, jti, or auth_time - use [IDTokenValidator] or [RFCValidator]
-// for those.
-//
-// The first return value contains every finding, including checks that are
-// configured as "ignore" (soft). The second return value is non-nil only when
-// a non-ignored check fails; use [errors.Is] on it for specific sentinels.
-// When all checks pass (or only ignored checks fail), err is nil.
-func (v *ValidatorCore) Validate(claims Claims, now time.Time) ([]error, error) {
-	return validateClaims(*claims.GetIDTokenClaims(), *v, claimChecks{
-		checkIss: len(v.Iss) > 0,
-		checkAud: len(v.Aud) > 0,
-		checkExp: !v.IgnoreExp,
-		checkNBF: !v.IgnoreNBF,
-		checkIat: !v.IgnoreIat,
-		checkAMR: len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
-		checkAzp: len(v.Azp) > 0,
-	}, now)
-}
-
-// IDTokenValidator checks the OIDC Core §2 unconditionally required claims by default.
-// It is the strict counterpart to [RFCValidator].
+// IDTokenValidator checks OIDC Core §2 ID Token claims.
 //
 // OIDC unconditionally requires iss, sub, aud, exp, and iat — these are checked
 // unless explicitly disabled with Ignore* fields. JTI and AuthTime are opt-in
 // (Expect* fields) because OIDC only requires auth_time when max_age was
 // requested. Azp and AMR are driven by their respective allowlists.
 //
+// Iss distinguishes nil from empty: nil means unconfigured (no check),
+// a non-nil empty slice is always a misconfiguration error (the empty set
+// allows nothing), and ["*"] accepts any non-empty issuer value.
+// See also [IDTokenValidator.IgnoreIss] and [jose.ErrMisconfigured].
+//
 // Sub is presence-only: it must be non-empty, but its value is not matched —
 // per-token/per-user identity checks belong in the application.
+//
+// GracePeriod is applied to exp, iat, and auth_time to tolerate minor clock
+// differences between distributed systems. If zero, [DefaultGracePeriod] (2s)
+// is used. Set to a negative value to disable skew tolerance entirely.
 //
 // Call [IDTokenValidator.Validate] to check the standard fields.
 //
@@ -654,7 +624,7 @@ type IDTokenValidator struct {
 // configured as "ignore" (soft). The second return value is non-nil only when
 // a non-ignored check fails; use [errors.Is] on it for specific sentinels.
 func (v *IDTokenValidator) Validate(claims Claims, now time.Time) ([]error, error) {
-	return validateClaims(*claims.GetIDTokenClaims(), ValidatorCore{
+	return validateClaims(*claims.GetIDTokenClaims(), validatorCore{
 		GracePeriod:  v.GracePeriod,
 		MaxAge:       v.MaxAge,
 		IgnoreExp:    v.IgnoreExp,
@@ -679,70 +649,6 @@ func (v *IDTokenValidator) Validate(claims Claims, now time.Time) ([]error, erro
 	}, now)
 }
 
-// RFCValidator checks only the most critical claims by default — exp and iat.
-// It is the lax counterpart to [IDTokenValidator], matching RFC 7519 semantics
-// where almost all claims are optional.
-//
-// Exp and Iat are checked by default (IgnoreExp and IgnoreIat can disable
-// them, but this is rarely appropriate). Iss, Aud, and Azp are checked
-// automatically when their allowlists are populated. Everything else
-// (Sub, JTI, AuthTime, AMR) requires explicit opt-in via Expect* fields,
-// expressing that the claim is expected and it is an error if it is absent
-// or invalid.
-//
-// Use RFCValidator when tokens legitimately omit optional claims such as
-// amr, jti, or auth_time. Prefer [IDTokenValidator] when you control token
-// issuance and want full OIDC compliance enforced.
-//
-// Call [RFCValidator.Validate] to check claims.
-type RFCValidator struct {
-	GracePeriod    time.Duration // 0 = DefaultGracePeriod (2s); negative = no tolerance
-	MaxAge         time.Duration
-	IgnoreExp      bool
-	IgnoreNBF      bool     // rarely appropriate; nbf is a security boundary like exp
-	IgnoreIat      bool
-	Iss            []string // nil=unchecked, []=misconfigured, ["*"]=any, ["x"]=must match
-	Aud            []string // token's aud must intersect list (if set)
-	Azp            []string // token's azp must appear in list (if set)
-	RequiredAMRs   []string // all of these must appear in the token's amr list
-	MinAMRCount    int      // token's amr must have at least this many values; 0 = no minimum
-	ExpectSub      bool     // if true, sub must be present (non-empty)
-	ExpectJTI      bool     // if true, jti must be present (non-empty)
-	ExpectAuthTime bool     // if true (or MaxAge > 0), auth_time is validated
-	ExpectAMR      bool     // if true (or RequiredAMRs/MinAMRCount set), amr is validated
-}
-
-// Validate checks claims against RFC 7519 rules.
-//
-// The first return value contains every finding, including checks that are
-// configured as "ignore" (soft). The second return value is non-nil only when
-// a non-ignored check fails; use [errors.Is] on it for specific sentinels.
-func (v *RFCValidator) Validate(claims Claims, now time.Time) ([]error, error) {
-	return validateClaims(*claims.GetIDTokenClaims(), ValidatorCore{
-		GracePeriod:  v.GracePeriod,
-		MaxAge:       v.MaxAge,
-		IgnoreExp:    v.IgnoreExp,
-		IgnoreNBF:    v.IgnoreNBF,
-		IgnoreIat:    v.IgnoreIat,
-		Iss:          v.Iss,
-		Aud:          v.Aud,
-		Azp:          v.Azp,
-		RequiredAMRs: v.RequiredAMRs,
-		MinAMRCount:  v.MinAMRCount,
-	}, claimChecks{
-		checkIss:      len(v.Iss) > 0,
-		checkSub:      v.ExpectSub,
-		checkAud:      len(v.Aud) > 0,
-		checkExp:      !v.IgnoreExp,
-		checkNBF:      !v.IgnoreNBF,
-		checkIat:      !v.IgnoreIat,
-		checkJTI:      v.ExpectJTI,
-		checkAuthTime: v.ExpectAuthTime || v.MaxAge > 0,
-		checkAMR:      v.ExpectAMR || len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
-		checkAzp:      len(v.Azp) > 0,
-	}, now)
-}
-
 // claimChecks holds the resolved per-check flags computed from a validator
 // before passing to [validateClaims].
 type claimChecks struct {
@@ -758,7 +664,7 @@ type claimChecks struct {
 	checkAzp      bool
 }
 
-func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks, now time.Time) ([]error, error) {
+func validateClaims(claims IDTokenClaims, core validatorCore, checks claimChecks, now time.Time) ([]error, error) {
 	var details []error // all findings (hard + soft)
 	var errs []error    // hard failures only
 
@@ -1066,7 +972,7 @@ func verifyOneKey(h Header, key jwk.CryptoPublicKey, signingInput, sig []byte) e
 //
 // Returns (nil, err) on any failure - the caller never receives an
 // unauthenticated JWS. Claim values (iss, aud, exp, etc.) are NOT checked;
-// call [IDTokenValidator.Validate] or [RFCValidator.Validate] on the unmarshalled claims after VerifyJWT:
+// call [IDTokenValidator.Validate] on the unmarshalled claims after VerifyJWT:
 //
 //	jws, err := iss.VerifyJWT(tokenStr)
 //	if err != nil { /* bad sig, malformed token, unknown kid */ }

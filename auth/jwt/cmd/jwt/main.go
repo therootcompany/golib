@@ -361,7 +361,11 @@ func cmdInspect(args []string) error {
 	}
 
 	// Run basic validation.
-	validator := &jwt.RFCValidator{}
+	validator := &jwt.IDTokenValidator{
+		IgnoreIss: true,
+		IgnoreSub: true,
+		IgnoreAud: true,
+	}
 	details, valErr := validator.Validate(&claims, time.Now())
 	if valErr == nil {
 		result.Validated = true
@@ -523,7 +527,10 @@ func cmdVerify(args []string) error {
 	if err := jwt.UnmarshalClaims(jws, &claims); err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("unmarshal claims: %v", err))
 	} else {
-		validator := &jwt.RFCValidator{
+		validator := &jwt.IDTokenValidator{
+			IgnoreIss:   true,
+			IgnoreSub:   true,
+			IgnoreAud:   true,
 			GracePeriod: *gracePeriod,
 			IgnoreExp:   *ignoreExp,
 			IgnoreNBF:   *ignoreNBF,

@@ -319,73 +319,33 @@ func TestNBFValidation(t *testing.T) {
 		},
 	}
 
-	rfc := &jwt.RFCValidator{
-		Iss: []string{"https://example.com"},
-		Aud: []string{"myapp"},
+	v := &jwt.IDTokenValidator{
+		Iss:       []string{"https://example.com"},
+		Aud:       []string{"myapp"},
+		IgnoreSub: true,
 	}
 
 	// No nbf: should pass.
-	if _, err := rfc.Validate(&base, now); err != nil {
+	if _, err := v.Validate(&base, now); err != nil {
 		t.Fatalf("expected no error without nbf: %v", err)
 	}
 
 	// nbf in the past: should pass.
 	pastNBF := base
 	pastNBF.NBF = now.Add(-time.Hour).Unix()
-	if _, err := rfc.Validate(&pastNBF, now); err != nil {
+	if _, err := v.Validate(&pastNBF, now); err != nil {
 		t.Fatalf("expected no error with past nbf: %v", err)
 	}
 
 	// nbf in the future: must be rejected.
 	futureNBF := base
 	futureNBF.NBF = now.Add(time.Hour).Unix()
-	_, err := rfc.Validate(&futureNBF, now)
+	_, err := v.Validate(&futureNBF, now)
 	if err == nil {
 		t.Fatal("expected error for future nbf")
 	}
 	if !errors.Is(err, jose.ErrBeforeNbf) {
 		t.Fatalf("expected ErrBeforeNbf, got: %v", err)
-	}
-}
-
-// TestRFCValidator confirms that RFCValidator always checks exp/iat, checks
-// iss/aud/azp when configured, and skips sub/jti/auth_time/amr by default.
-func TestRFCValidator(t *testing.T) {
-	now := time.Now()
-
-	// Minimal claims: only the fields RFCValidator checks by default.
-	minimal := AppClaims{
-		IDTokenClaims: jwt.IDTokenClaims{
-			Iss: "https://example.com",
-			Aud: jwt.Audience{"myapp"},
-			Exp: now.Add(time.Hour).Unix(),
-			Iat: now.Unix(),
-			// Sub, JTI, AuthTime, AMR, Azp intentionally absent
-		},
-		Email: "user@example.com",
-	}
-
-	rfc := &jwt.RFCValidator{
-		Iss: []string{"https://example.com"},
-		Aud: []string{"myapp"},
-	}
-
-	if _, err := rfc.Validate(&minimal, now); err != nil {
-		t.Fatalf("RFCValidator rejected minimal valid claims: %v", err)
-	}
-
-	// Expired token must still be rejected.
-	expired := minimal
-	expired.Exp = now.Add(-time.Hour).Unix()
-	if _, err := rfc.Validate(&expired, now); !errors.Is(err, jose.ErrAfterExp) {
-		t.Fatalf("expected ErrAfterExp, got: %v", err)
-	}
-
-	// Future iat must be rejected.
-	futureIat := minimal
-	futureIat.Iat = now.Add(time.Hour).Unix()
-	if _, err := rfc.Validate(&futureIat, now); !errors.Is(err, jose.ErrBeforeIat) {
-		t.Fatalf("expected ErrBeforeIat, got: %v", err)
 	}
 }
 
