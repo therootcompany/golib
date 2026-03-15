@@ -562,7 +562,7 @@ type ValidatorCore struct {
 	IgnoreExp    bool
 	IgnoreNBF    bool // rarely appropriate; nbf is a security boundary like exp
 	IgnoreIat    bool
-	Iss          []string // token's iss must appear in list (if set)
+	Iss          []string // if non-empty, token's iss must appear in list; IDTokenValidator.IgnoreIss overrides this
 	Aud          []string // token's aud must intersect list (if set)
 	Azp          []string // token's azp must appear in list (if set)
 	RequiredAMRs []string // all of these must appear in the token's amr list
@@ -606,7 +606,7 @@ func (v *ValidatorCore) Validate(claims Claims, now time.Time) ([]error, error) 
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 type IDTokenValidator struct {
 	ValidatorCore
-	IgnoreIss      bool
+	IgnoreIss      bool // if true, iss is not checked even if ValidatorCore.Iss is populated
 	IgnoreSub      bool // if false, sub must be present (non-empty)
 	IgnoreAud      bool
 	ExpectJTI      bool // if true, jti must be present (non-empty)

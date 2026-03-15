@@ -17,22 +17,17 @@
 
 ### #20 — TODO comments in production code
 
-| File | Line | Comment | Notes |
-|------|------|---------|-------|
-| sign.go | 52 | `// TODO allow for non-signing keys (for key rotation)` | |
-| sign.go | 79 | `// TODO fail if not sig` | |
-| sign.go | 91 | `// TODO use slice rather than map, allow "none" or IgnoreKID` | **Stale** — Verifier already uses slice, no map |
-| jwk/fetch.go | 99 | `// TODO this should return the URL, not the keys` | On `fetchFromDiscovery` |
-| jwk/fetch.go | 123 | `// TODO lift this up` | On `FetchURL` call inside `fetchFromDiscovery` |
-| jwk/key.go | 229 | `// TODO if the private key had the wrong details, it probably should have been caught earlier` | In `publicKeyOps` switch |
+| File | Line | Comment | Response | Status |
+|------|------|---------|----------|--------|
+| sign.go | 52 | `// TODO allow for non-signing keys (for key rotation)` | | |
+| sign.go | 79 | `// TODO fail if not sig` | | |
+| sign.go | 91 | `// TODO use slice rather than map, allow "none" or IgnoreKID` | **Stale** — removed | ✅ Fixed |
+| jwk/fetch.go | 99 | `// TODO this should return the URL, not the keys` | | |
+| jwk/fetch.go | 123 | `// TODO lift this up` | | |
+| jwk/key.go | 229 | `// TODO if the private key had the wrong details, it probably should have been caught earlier` | | |
 
 ### #10 — Contradictory RFCValidator config
 
-`RFCValidator` has fields like `Iss string` and `IgnoreIss bool`. Setting both
-`Iss: "https://example.com"` and `IgnoreIss: true` is contradictory but produces
-no warning. Current behavior: `IgnoreIss` wins — the `Iss` value is simply not
-checked. Possible approaches:
-
-- Rename `Ignore*` to `Optional*` or `Skip*`
-- Return an error from `Validate` if both are set
-- Leave as-is with a doc comment explaining precedence
+IgnoreIss overrides the Iss slice. Iss slice is the primary mechanism; IgnoreIss is a
+blanket skip. When both are set, IgnoreIss wins — iss is not checked at all.
+No warning needed. Added doc comments clarifying precedence. | ✅ Documented |
