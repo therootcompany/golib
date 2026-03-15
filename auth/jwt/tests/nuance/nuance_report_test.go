@@ -184,7 +184,7 @@ func TestNuance_KIDHeader_GoJose(t *testing.T) {
 	t.Log("go-jose omits 'kid' from the JWS header unless:")
 	t.Log("  1. The signing key is wrapped in jose.JSONWebKey{KeyID: ...}, or")
 	t.Log("  2. opts.WithHeader(jose.HeaderKey(\"kid\"), ...) is used.")
-	t.Log("Our verifier REQUIRES kid to look up the correct public key.")
+	t.Log("Our verifier tries all keys when kid is missing (fallback).")
 	t.Log("")
 
 	ks := testkeys.GenerateEdDSA("kid-test")
@@ -209,7 +209,7 @@ func TestNuance_KIDHeader_GoJose(t *testing.T) {
 	_, hasKID := header["kid"]
 	t.Logf("  raw key signing: kid in header = %v (header: %s)", hasKID, headerJSON)
 
-	// Our verifier rejects because kid is missing.
+	// Our verifier accepts via try-all-keys fallback (no kid → try every key).
 	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 	_, ourErr := verifier.VerifyJWT(rawToken)
 	t.Logf("  our VerifyJWT:   err = %v", ourErr)
@@ -234,8 +234,8 @@ func TestNuance_KIDHeader_GoJose(t *testing.T) {
 	if hasKID {
 		t.Error("expected raw key signing to NOT have kid in header")
 	}
-	if ourErr == nil {
-		t.Error("expected our verifier to reject token without kid")
+	if ourErr != nil {
+		t.Errorf("expected our verifier to accept token without kid (try-all-keys fallback), got: %v", ourErr)
 	}
 	if !hasKID2 {
 		t.Error("expected JSONWebKey signing to have kid in header")
@@ -245,15 +245,15 @@ func TestNuance_KIDHeader_GoJose(t *testing.T) {
 	}
 
 	t.Log("")
-	t.Log("ACTION: When generating tokens with go-jose for consumption by our lib,")
-	t.Log("always wrap the signing key in jose.JSONWebKey{Key: priv, KeyID: kid}.")
+	t.Log("NOTE: When kid is missing, our verifier tries all keys (first match wins).")
+	t.Log("For multi-key verifiers, always set kid for efficient key lookup.")
 }
 
 func TestNuance_KIDHeader_JWX(t *testing.T) {
 	t.Log("=== Nuance: jwx kid header emission ===")
 	t.Log("")
 	t.Log("jwx omits 'kid' unless jwk.KeyIDKey is set on the key before signing.")
-	t.Log("Our verifier REQUIRES kid.")
+	t.Log("Our verifier tries all keys when kid is missing (fallback).")
 	t.Log("")
 
 	ks := testkeys.GenerateEdDSA("kid-jwx")
@@ -297,8 +297,8 @@ func TestNuance_KIDHeader_JWX(t *testing.T) {
 	if hasKID {
 		t.Error("expected no-kid key to omit kid from header")
 	}
-	if ourErr == nil {
-		t.Error("expected our verifier to reject token without kid")
+	if ourErr != nil {
+		t.Errorf("expected our verifier to accept token without kid (try-all-keys fallback), got: %v", ourErr)
 	}
 	if !hasKID2 {
 		t.Error("expected kid-set key to include kid in header")
@@ -308,8 +308,8 @@ func TestNuance_KIDHeader_JWX(t *testing.T) {
 	}
 
 	t.Log("")
-	t.Log("ACTION: When generating tokens with jwx for consumption by our lib,")
-	t.Log("always call jwxKey.Set(jwk.KeyIDKey, kid) before signing.")
+	t.Log("NOTE: When kid is missing, our verifier tries all keys (first match wins).")
+	t.Log("For multi-key verifiers, always set kid for efficient key lookup.")
 }
 
 // -----------------------------------------------------------------------
