@@ -6,13 +6,11 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-// Package keyfile loads cryptographic keys from files or URLs in JWK, PEM,
+// Package keyfile loads cryptographic keys from local files in JWK, PEM,
 // or DER format. All functions auto-compute KID from the RFC 7638 thumbprint
 // when not already set.
 //
 // The Load* functions accept a source string that can be:
-//   - An HTTPS URL: https://example.com/keys.json
-//   - An HTTP URL: http://localhost:8080/keys.json
 //   - A file URI: file:///path/to/key.pem, file://path, file:path
 //   - A bare file path: /path/to/key.pem, ./relative, C:\windows\key.pem
 //
@@ -21,10 +19,12 @@
 // For JWK JSON format, the Parse functions in the [jwk] package
 // ([jwk.ParsePublicJWK], [jwk.ParsePrivateJWK], [jwk.ParsePublicJWKs])
 // can also be used directly.
+//
+// For fetching keys from remote URLs, use [jwk.FetchURL] (JWKS endpoints)
+// or fetch the bytes yourself and pass them to Parse*.
 package keyfile
 
 import (
-	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -32,19 +32,13 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/therootcompany/golib/auth/jwt/internal/jwa"
 	"github.com/therootcompany/golib/auth/jwt/jose"
 	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
-
-// maxResponseBody is the maximum response body size for HTTP fetches (1 MiB).
-const maxResponseBody = 1 << 20
 
 // --- Parse functions (bytes → key) ---
 
@@ -107,63 +101,63 @@ func ParsePrivateDER(data []byte) (*jwk.PrivateKey, error) {
 
 // --- Load functions (source → key) ---
 
-// LoadPublicJWK loads a single JWK from a file or URL.
+// LoadPublicJWK loads a single JWK from a local file.
 func LoadPublicJWK(source string) (*jwk.PublicKey, error) {
-	data, err := readSource(source)
+	data, err := ReadFile(source)
 	if err != nil {
 		return nil, err
 	}
 	return jwk.ParsePublicJWK(data)
 }
 
-// LoadPublicJWKs loads a JWKS document from a file or URL.
+// LoadPublicJWKs loads a JWKS document from a local file.
 func LoadPublicJWKs(source string) (jwk.JWKs, error) {
-	data, err := readSource(source)
+	data, err := ReadFile(source)
 	if err != nil {
 		return jwk.JWKs{}, err
 	}
 	return jwk.ParsePublicJWKs(data)
 }
 
-// LoadPrivateJWK loads a single private JWK from a file or URL.
+// LoadPrivateJWK loads a single private JWK from a local file.
 func LoadPrivateJWK(source string) (*jwk.PrivateKey, error) {
-	data, err := readSource(source)
+	data, err := ReadFile(source)
 	if err != nil {
 		return nil, err
 	}
 	return jwk.ParsePrivateJWK(data)
 }
 
-// LoadPublicPEM loads a PEM-encoded public key from a file or URL.
+// LoadPublicPEM loads a PEM-encoded public key from a local file.
 func LoadPublicPEM(source string) (*jwk.PublicKey, error) {
-	data, err := readSource(source)
+	data, err := ReadFile(source)
 	if err != nil {
 		return nil, err
 	}
 	return ParsePublicPEM(data)
 }
 
-// LoadPrivatePEM loads a PEM-encoded private key from a file or URL.
+// LoadPrivatePEM loads a PEM-encoded private key from a local file.
 func LoadPrivatePEM(source string) (*jwk.PrivateKey, error) {
-	data, err := readSource(source)
+	data, err := ReadFile(source)
 	if err != nil {
 		return nil, err
 	}
 	return ParsePrivatePEM(data)
 }
 
-// LoadPublicDER loads a DER-encoded public key from a file or URL.
+// LoadPublicDER loads a DER-encoded public key from a local file.
 func LoadPublicDER(source string) (*jwk.PublicKey, error) {
-	data, err := readSource(source)
+	data, err := ReadFile(source)
 	if err != nil {
 		return nil, err
 	}
 	return ParsePublicDER(data)
 }
 
-// LoadPrivateDER loads a DER-encoded private key from a file or URL.
+// LoadPrivateDER loads a DER-encoded private key from a local file.
 func LoadPrivateDER(source string) (*jwk.PrivateKey, error) {
-	data, err := readSource(source)
+	data, err := ReadFile(source)
 	if err != nil {
 		return nil, err
 	}
@@ -172,22 +166,16 @@ func LoadPrivateDER(source string) (*jwk.PrivateKey, error) {
 
 // --- Source resolution ---
 
-// readSource resolves a source string to raw bytes.
+// ReadFile resolves a source string to raw bytes from a local file.
 //
 // Supported sources:
-//   - https:// or http:// — HTTP GET with 30s timeout, 1 MiB body limit
-//   - file: URI (file:///path, file://path, file:/path, file:path) — local file
-//   - bare file path (/path, ./relative, C:\windows) — local file
-func readSource(source string) ([]byte, error) {
-	switch {
-	case strings.HasPrefix(source, "https://"), strings.HasPrefix(source, "http://"):
-		return fetchURL(source)
-	case strings.HasPrefix(source, "file:"):
-		path := fileURIToPath(source)
-		return os.ReadFile(path)
-	default:
-		return os.ReadFile(source)
+//   - file: URI (file:///path, file://path, file:/path, file:path)
+//   - bare file path (/path, ./relative, C:\windows)
+func ReadFile(source string) ([]byte, error) {
+	if strings.HasPrefix(source, "file:") {
+		source = fileURIToPath(source)
 	}
+	return os.ReadFile(source)
 }
 
 // fileURIToPath extracts a file path from a file: URI.
@@ -204,32 +192,6 @@ func fileURIToPath(uri string) string {
 	// On Windows file:///C:/key → C:/key.
 	s = strings.TrimPrefix(s, "//")
 	return s
-}
-
-// fetchURL performs an HTTP GET and returns the response body.
-func fetchURL(url string) ([]byte, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("fetch %q: %w: %w", url, jose.ErrFetchFailed, err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch %q: %w: %w", url, jose.ErrFetchFailed, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch %q: status %d: %w", url, resp.StatusCode, jose.ErrUnexpectedStatus)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return nil, fmt.Errorf("fetch %q: read body: %w: %w", url, jose.ErrFetchFailed, err)
-	}
-	return body, nil
 }
 
 // --- Internal helpers ---
