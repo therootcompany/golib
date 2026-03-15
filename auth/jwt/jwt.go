@@ -1005,7 +1005,6 @@ func formatDuration(d time.Duration) string {
 	}
 	if len(parts) == 0 {
 		// Sub-second duration: fall back to milliseconds.
-		d -= time.Duration(seconds) * time.Second
 		millis := int(d / time.Millisecond)
 		parts = append(parts, fmt.Sprintf("%dms", millis))
 	}
