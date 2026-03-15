@@ -1,36 +1,38 @@
-## Senior Go Engineer Review — Findings
+## Remaining Review Items
 
-### Critical
+### #19 — Package doc editing artifacts (jwt.go)
 
-| # | Finding | File | Response | Status |
-|---|---------|------|----------|--------|
-| 1 | `Audience.MarshalJSON`: empty slice → `null` instead of `[]` (lossy round-trip) | jwt.go | Empty slice → empty string `""`, not null | ✅ Fixed |
-| 2 | `PrivateKey.PublicKey()` silently returns nil `CryptoPublicKey` for non-standard signers | jwk/key.go | Added `ErrSanityFail` sentinel; `PublicKey()` now returns `(*PublicKey, error)` | ✅ Fixed |
-| 3 | `Signer` round-robin uint64 wrap at 2⁶⁴ (theoretical, not real) | sign.go | CAS loop keeps counter bounded to `[0, n)` — never approaches overflow | ✅ Fixed |
+| Line | Issue | Response | Status |
+|------|-------|----------|--------|
+| 9 | Very long single line — consider wrapping | | |
+| 21 | `This package implements So rather than implementing...` — garbled merge of two sentences | | |
+| 38 | `2. Relying Party:` — stray numbering under heading | Intentional — "1." is the Issuer heading above | ✅ Keep |
+| 41 | `use [New]` — should be `[NewVerifier]` | Fix | ✅ Fixed |
+| 48-49 | `# Use case: MCP / Agents` section empty | Built out: MCP Host as RP to MCP Server; Server as Issuer or RP to main auth | ✅ Fixed |
+| 58 | `building-facing` | `builder-facing` | ✅ Fixed |
+| 65-66 | `always always` + `fully and customizable` | Fixed both | ✅ Fixed |
+| 74 | `crypto export` | `crypto expert` | ✅ Fixed |
+| 109 | `only is provided` | `provided only` | ✅ Fixed |
+| 120-121 | Outdated kid matching description | | |
 
-### Important
+### #20 — TODO comments in production code
 
-| # | Finding | File | Response | Status |
-|---|---------|------|----------|--------|
-| 4 | `DefaultGracePeriod` comment says "5s" but value is `2 * time.Second` | jwt.go | Intentionally a variable; fixed comment to say 2s | ✅ Fixed |
-| 5 | `KeyFetcher` creates redundant context timeout (both client timeout + ctx timeout) | fetcher.go | Context timeout only applied when no HTTPClient timeout is set | ✅ Fixed |
-| 6 | `KeyFetcher.Verifier()` doesn't take `context.Context` | fetcher.go | Intentional — background refresh must not be canceled by client request. Added doc comment. | ✅ Documented |
-| 7 | `NewVerifier` silently accepts duplicate KIDs | jwt.go | Consolidates same-thumbprint keys; returns error for different material with same KID | ✅ Fixed |
-| 8 | `Verifier.Verify` requires KID — tokens without `kid` always fail | jwt.go | Now iterates over slice; tokens without KID try all keys with fallthrough | ✅ Fixed |
-| 9 | EC private key `encodePrivate`: does `(*ecdsa.PrivateKey).Bytes()` return DER or raw scalar in Go 1.26? | jwk/key.go | Returns fixed-length big-endian per SEC 1 §2.3.6 (raw format). Already correct. | ✅ Confirmed |
-| 10 | Contradictory `RFCValidator` config (IgnoreIss + Iss populated) — no warning | jwt.go | Deferred — may rename Ignore* to Optional* or use different logic | ⏳ Later |
-| 11 | `formatDuration` dead subtraction on line ~1008 | jwt.go | Already removed. Negative durations handled by `if d < 0 { d = -d }`. | ✅ Confirmed |
-| 12 | `fetchFromDiscovery` doesn't validate `jwks_uri` scheme (SSRF vector) | jwk/fetch.go | Added `https://` scheme validation | ✅ Fixed |
+| File | Line | Comment | Notes |
+|------|------|---------|-------|
+| sign.go | 52 | `// TODO allow for non-signing keys (for key rotation)` | |
+| sign.go | 79 | `// TODO fail if not sig` | |
+| sign.go | 91 | `// TODO use slice rather than map, allow "none" or IgnoreKID` | **Stale** — Verifier already uses slice, no map |
+| jwk/fetch.go | 99 | `// TODO this should return the URL, not the keys` | On `fetchFromDiscovery` |
+| jwk/fetch.go | 123 | `// TODO lift this up` | On `FetchURL` call inside `fetchFromDiscovery` |
+| jwk/key.go | 229 | `// TODO if the private key had the wrong details, it probably should have been caught earlier` | In `publicKeyOps` switch |
 
-### Minor
+### #10 — Contradictory RFCValidator config
 
-| # | Finding | File | Response | Status |
-|---|---------|------|----------|--------|
-| 13 | `DefaultGracePeriod` is a mutable `var` (should be `const` or unexported) | jwt.go | Intentional. Added comment: Verifier() has no context because background refresh shouldn't be tied to client requests. | ✅ Documented |
-| 14 | `Signer` embeds `JWKs`, leaking `Keys` as mutable public field | sign.go | Can't lowercase (breaks `json:"keys"` tag). Added comment: must be exported for json.Marshal. | ✅ Documented |
-| 15 | `Audience` empty slice round-trip lossy (same as #1) | jwt.go | Empty string → empty slice, empty slice → empty string | ✅ Fixed |
-| 16 | Stale doc (same as #4) | jwt.go | Fixed (same as #4) | ✅ Fixed |
-| 17 | 1024-bit RSA minimum is low (2048 recommended) | jwk/key.go | Added comment: for real-world compatibility and testing | ✅ Documented |
-| 18 | `ecdsaDERToP1363` doesn't validate R/S fit in keySize (potential panic) | jwt.go | Added R/S byte-length check before FillBytes | ✅ Fixed |
-| 19 | Package doc has editing artifacts (garbled sentence) | jwt.go | Review at the end | ⏳ Later |
-| 20 | TODO comments in production code | various | Review at the end | ⏳ Later |
+`RFCValidator` has fields like `Iss string` and `IgnoreIss bool`. Setting both
+`Iss: "https://example.com"` and `IgnoreIss: true` is contradictory but produces
+no warning. Current behavior: `IgnoreIss` wins — the `Iss` value is simply not
+checked. Possible approaches:
+
+- Rename `Ignore*` to `Optional*` or `Skip*`
+- Return an error from `Validate` if both are set
+- Leave as-is with a doc comment explaining precedence

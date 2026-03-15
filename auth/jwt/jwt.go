@@ -38,7 +38,7 @@
 // 2. Relying Party: you're building a thing that uses Public Keys to verify and validates tokens
 //   - you may already know the public keys (and redeploy when they change)
 //   - or you fetch them at runtime from a /jwks.json endpoint (and cache and update periodically)
-//   - Relying party, known keys: use [New] with a []jwk.PublicKey slice.
+//   - Relying party, known keys: use [NewVerifier] with a []jwk.PublicKey slice.
 //   - Relying party, remote keys: use [KeyFetcher]; it fetches lazily and caches.
 //   - use [Verifier.Verify] to verify the JWT (bearer token)
 //   - use [UnmarshalClaims] to get your user info
@@ -46,6 +46,16 @@
 //   - use custom Validation for your own Claims type with a [Validator], or by hand - dealer's choice
 //
 // # Use case: MCP / Agents
+//
+// An MCP Host (the AI application) is a Relying Party to the MCP Server.
+// The MCP Server may be an Issuer — minting tokens specifically for Agents
+// to call your API — or it may be a Relying Party to your main auth system,
+// forwarding tokens it received from an upstream Issuer.
+//
+// In either case the same building blocks apply: the Host verifies and
+// validates tokens from the Server, and the Server either signs its own
+// tokens ([NewSigner]) or verifies tokens from your auth provider
+// ([NewVerifier] or [KeyFetcher]).
 //
 // # Design choices
 //
@@ -55,15 +65,15 @@
 //
 //   - Sane defaults for everything, without hiding anything you may need to inspect.
 //   - There should be one obvious right way to do it.
-//   - Claims are the most important building-facing detail.
+//   - Claims are the most important builder-facing detail.
 //   - Use simple type embedded for maximum convenience without sacrificing optionality.
 //   - [StandardClaims] for typical user info, [IDTokenClaims] for minimal auth info.
 //     (both satisfy [Claims] for free via Go method promotion)
 //   - [UnmarshalClaims] to get your type-safe claims effortlessly.
 //   - [IDTokenValidator] for typical, strict auth validation, [RFCValidator] for special use cases
 //     (or bring your own, or ignore it and do it how you like)
-//   - Header always always used in the standard way, and tightly coupled to signing and
-//     verification - it stays fully and customizable as part of the JWS interfaces
+//   - Header is always used in the standard way, and tightly coupled to signing and
+//     verification - it stays fully customizable as part of the JWS interfaces
 //     (embedding [RawJWT] and [Header] make it easy to satisfy [VerifiableJWS] or [SignableJWS])
 //   - Accessible error details (so that you don't have to round trip just to get the next one)
 //
@@ -71,7 +81,7 @@
 //
 // # Security
 //
-// You don't need to be a crypto export to use this library - but if you are, hopefully
+// You don't need to be a crypto expert to use this library - but if you are, hopefully
 // you find it to be the best you've ever used.
 //
 // 1. YAGNI: Don't implement what you don't need = less surface area = greater security.
@@ -106,7 +116,7 @@
 //
 // Ed25519 is the default for this library.
 // ECDSA is probably the most popular, so it's provided for backwards compatibility.
-// RSA is only is provided for backwards compatibility - it's larger, slower, and no real benefit.
+// RSA is provided only for backwards compatibility - it's larger, slower, and no real benefit.
 //
 //   - EC P-256  => ES256 (ECDSA + SHA-256, RFC 7518 §3.4)
 //   - EC P-384  => ES384 (ECDSA + SHA-384)
