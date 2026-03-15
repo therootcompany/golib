@@ -1040,3 +1040,294 @@ func TestUnmarshalHeaderViaJWS(t *testing.T) {
 		t.Errorf("alg: got %q, want %q", h.Alg, "EdDSA")
 	}
 }
+
+// --- Scope tests ---
+
+func TestScopeMarshalJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		in   jwt.Scope
+		want string
+	}{
+		{"multiple", jwt.Scope{"openid", "profile", "email"}, `"openid profile email"`},
+		{"single", jwt.Scope{"openid"}, `"openid"`},
+		{"empty", jwt.Scope{}, `""`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := json.Marshal(tt.in)
+			if err != nil {
+				t.Fatalf("Marshal error: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("got %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScopeUnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    jwt.Scope
+		wantNil bool
+	}{
+		{"multiple", `"openid profile email"`, jwt.Scope{"openid", "profile", "email"}, false},
+		{"single", `"openid"`, jwt.Scope{"openid"}, false},
+		{"empty", `""`, nil, true},
+		{"extra whitespace", `"openid  profile\temail"`, jwt.Scope{"openid", "profile", "email"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got jwt.Scope
+			if err := json.Unmarshal([]byte(tt.in), &got); err != nil {
+				t.Fatalf("Unmarshal error: %v", err)
+			}
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("got %v, want nil", got)
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v (len %d), want %v (len %d)", got, len(got), tt.want, len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("got[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestScopeRoundTrip(t *testing.T) {
+	type claims struct {
+		Scope jwt.Scope `json:"scope,omitempty"`
+	}
+	orig := claims{Scope: jwt.Scope{"openid", "profile"}}
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify wire format is a space-separated string.
+	if !strings.Contains(string(data), `"openid profile"`) {
+		t.Fatalf("expected space-separated scope in JSON, got %s", data)
+	}
+
+	var decoded claims
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Scope) != 2 || decoded.Scope[0] != "openid" || decoded.Scope[1] != "profile" {
+		t.Errorf("round-trip failed: got %v", decoded.Scope)
+	}
+}
+
+// --- SetTyp / NewAccessToken tests ---
+
+func TestSetTyp(t *testing.T) {
+	claims := &jwt.IDTokenClaims{
+		Iss: "https://example.com",
+		Sub: "user1",
+		Aud: jwt.Audience{"api"},
+		Exp: time.Now().Add(time.Hour).Unix(),
+		Iat: time.Now().Unix(),
+	}
+	jws, err := jwt.New(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Default typ is "JWT".
+	if got := jws.GetHeader().Typ; got != "JWT" {
+		t.Fatalf("default typ: got %q, want %q", got, "JWT")
+	}
+
+	jws.SetTyp(jwt.AccessTokenTyp)
+
+	if got := jws.GetHeader().Typ; got != jwt.AccessTokenTyp {
+		t.Fatalf("after SetTyp: got %q, want %q", got, jwt.AccessTokenTyp)
+	}
+}
+
+func TestSetTypSurvivesSigning(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := jwt.NewSigner([]jwk.PrivateKey{{Signer: priv}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	claims := &jwt.AccessTokenClaims{
+		Iss:      "https://auth.example.com",
+		Sub:      "user1",
+		Aud:      jwt.Audience{"https://api.example.com"},
+		Exp:      now.Add(time.Hour).Unix(),
+		Iat:      now.Unix(),
+		JTI:      "tok-001",
+		ClientID: "webapp",
+		Scope:    jwt.Scope{"openid", "profile"},
+	}
+
+	jws, err := jwt.NewAccessToken(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := signer.SignJWS(jws); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify typ survived signing.
+	if got := jws.GetHeader().Typ; got != jwt.AccessTokenTyp {
+		t.Fatalf("typ after signing: got %q, want %q", got, jwt.AccessTokenTyp)
+	}
+
+	// Decode the token and verify typ is in the wire format.
+	token := jwt.Encode(jws)
+	decoded, err := jwt.Decode(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded.GetHeader().Typ; got != jwt.AccessTokenTyp {
+		t.Fatalf("typ after decode: got %q, want %q", got, jwt.AccessTokenTyp)
+	}
+
+	// Verify claims round-trip.
+	var rt jwt.AccessTokenClaims
+	if err := jwt.UnmarshalClaims(decoded, &rt); err != nil {
+		t.Fatal(err)
+	}
+	if rt.ClientID != "webapp" {
+		t.Errorf("client_id: got %q, want %q", rt.ClientID, "webapp")
+	}
+	if len(rt.Scope) != 2 || rt.Scope[0] != "openid" {
+		t.Errorf("scope: got %v, want [openid profile]", rt.Scope)
+	}
+}
+
+// --- AccessTokenValidator tests ---
+
+func goodAccessTokenClaims() *jwt.AccessTokenClaims {
+	now := time.Now()
+	return &jwt.AccessTokenClaims{
+		Iss:      "https://auth.example.com",
+		Sub:      "user1",
+		Aud:      jwt.Audience{"https://api.example.com"},
+		Exp:      now.Add(time.Hour).Unix(),
+		Iat:      now.Unix(),
+		JTI:      "tok-001",
+		ClientID: "webapp",
+		Scope:    jwt.Scope{"openid", "profile"},
+		AMR:      []string{"pwd"},
+	}
+}
+
+func TestAccessTokenValidatorHappyPath(t *testing.T) {
+	v := &jwt.AccessTokenValidator{
+		Iss: []string{"https://auth.example.com"},
+		Aud: []string{"https://api.example.com"},
+	}
+	claims := goodAccessTokenClaims()
+	if _, err := v.Validate(claims, time.Now()); err != nil {
+		t.Fatalf("valid access token rejected: %v", err)
+	}
+}
+
+func TestAccessTokenValidatorRequiresJTI(t *testing.T) {
+	v := &jwt.AccessTokenValidator{
+		Iss: []string{"https://auth.example.com"},
+		Aud: []string{"https://api.example.com"},
+	}
+	claims := goodAccessTokenClaims()
+	claims.JTI = ""
+	_, err := v.Validate(claims, time.Now())
+	if !errors.Is(err, jose.ErrMissingClaim) {
+		t.Fatalf("expected ErrMissingClaim for missing jti, got: %v", err)
+	}
+}
+
+func TestAccessTokenValidatorRequiresClientID(t *testing.T) {
+	v := &jwt.AccessTokenValidator{
+		Iss: []string{"https://auth.example.com"},
+		Aud: []string{"https://api.example.com"},
+	}
+	claims := goodAccessTokenClaims()
+	claims.ClientID = ""
+	_, err := v.Validate(claims, time.Now())
+	if !errors.Is(err, jose.ErrMissingClaim) {
+		t.Fatalf("expected ErrMissingClaim for missing client_id, got: %v", err)
+	}
+}
+
+func TestAccessTokenValidatorIgnoreClientID(t *testing.T) {
+	v := &jwt.AccessTokenValidator{
+		Iss:            []string{"https://auth.example.com"},
+		Aud:            []string{"https://api.example.com"},
+		IgnoreClientID: true,
+	}
+	claims := goodAccessTokenClaims()
+	claims.ClientID = ""
+	if _, err := v.Validate(claims, time.Now()); err != nil {
+		t.Fatalf("IgnoreClientID=true should accept empty client_id: %v", err)
+	}
+}
+
+func TestAccessTokenValidatorExpiredToken(t *testing.T) {
+	v := &jwt.AccessTokenValidator{
+		Iss: []string{"https://auth.example.com"},
+		Aud: []string{"https://api.example.com"},
+	}
+	claims := goodAccessTokenClaims()
+	claims.Exp = time.Now().Add(-time.Hour).Unix()
+	_, err := v.Validate(claims, time.Now())
+	if !errors.Is(err, jose.ErrAfterExp) {
+		t.Fatalf("expected ErrAfterExp, got: %v", err)
+	}
+}
+
+func TestAccessTokenValidatorRequiredScopes(t *testing.T) {
+	v := &jwt.AccessTokenValidator{
+		Iss:            []string{"https://auth.example.com"},
+		Aud:            []string{"https://api.example.com"},
+		RequiredScopes: []string{"openid", "admin"},
+	}
+	claims := goodAccessTokenClaims()
+	// claims has ["openid", "profile"] — missing "admin"
+	_, err := v.Validate(claims, time.Now())
+	if !errors.Is(err, jose.ErrInvalidClaim) {
+		t.Fatalf("expected ErrInvalidClaim for missing scope, got: %v", err)
+	}
+}
+
+func TestAccessTokenValidatorExpectScope(t *testing.T) {
+	v := &jwt.AccessTokenValidator{
+		Iss:         []string{"https://auth.example.com"},
+		Aud:         []string{"https://api.example.com"},
+		ExpectScope: true,
+	}
+	claims := goodAccessTokenClaims()
+	claims.Scope = nil
+	_, err := v.Validate(claims, time.Now())
+	if !errors.Is(err, jose.ErrMissingClaim) {
+		t.Fatalf("expected ErrMissingClaim for empty scope, got: %v", err)
+	}
+}
+
+func TestAccessTokenValidatorIgnoreJTI(t *testing.T) {
+	v := &jwt.AccessTokenValidator{
+		Iss:       []string{"https://auth.example.com"},
+		Aud:       []string{"https://api.example.com"},
+		IgnoreJTI: true,
+	}
+	claims := goodAccessTokenClaims()
+	claims.JTI = ""
+	if _, err := v.Validate(claims, time.Now()); err != nil {
+		t.Fatalf("IgnoreJTI=true should accept empty jti: %v", err)
+	}
+}

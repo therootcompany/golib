@@ -80,7 +80,7 @@ var (
 )
 
 // --- Validation errors ---
-// Returned by jwt.IDTokenValidator.Validate.
+// Returned by jwt.IDTokenValidator.Validate and jwt.AccessTokenValidator.Validate.
 //
 // Validate returns all failures at once via errors.Join, so callers can
 // check for specific issues with errors.Is:

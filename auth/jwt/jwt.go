@@ -263,6 +263,15 @@ func (jws *JWS) MarshalHeader(hdr Header) ([]byte, error) {
 	return jws.protected, nil
 }
 
+// SetTyp overrides the JOSE "typ" header field. The new value takes effect
+// when [Signer.SignJWS] re-encodes the protected header. Use this after [New]
+// to change the token type before signing:
+//
+//	jws, _ := jwt.New(claims)
+//	jws.SetTyp(jwt.AccessTokenTyp)
+//	signer.SignJWS(jws)
+func (jws *JWS) SetTyp(typ string) { jws.header.Typ = typ }
+
 // jwsHeader is an example of the pattern callers use when embedding Header in
 // a custom JWS type. Embed Header, and all its fields are promoted through the
 // struct. To implement a custom JWS type, copy this struct and replace Header
@@ -322,6 +331,42 @@ func (a Audience) MarshalJSON() ([]byte, error) {
 	default:
 		return json.Marshal([]string(a))
 	}
+}
+
+// AccessTokenTyp is the JOSE "typ" header value for OAuth 2.0 access tokens
+// per RFC 9068 §2.1. Use [NewAccessToken] or [JWS.SetTyp] to set this.
+//
+// https://www.rfc-editor.org/rfc/rfc9068.html#section-2.1
+const AccessTokenTyp = "at+JWT"
+
+// Scope is a list of OAuth 2.0 scope values.
+//
+// It marshals as a single space-separated string per RFC 6749 §3.3,
+// but Go code works with a []string. An empty scope marshals as "" and
+// unmarshals back to a nil slice.
+//
+// https://www.rfc-editor.org/rfc/rfc6749.html#section-3.3
+type Scope []string
+
+// UnmarshalJSON decodes a space-separated scope string into a string slice.
+func (s *Scope) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return fmt.Errorf("scope must be a string: %w: %w", jose.ErrInvalidPayload, err)
+	}
+	if str == "" {
+		*s = nil
+		return nil
+	}
+	*s = strings.Fields(str)
+	return nil
+}
+
+// MarshalJSON encodes the scope as a single space-separated string.
+// A nil Scope marshals as JSON null; an empty (non-nil) Scope marshals
+// as the empty string "".
+func (s Scope) MarshalJSON() ([]byte, error) {
+	return json.Marshal(strings.Join(s, " "))
 }
 
 // IDTokenClaims holds the OIDC Core §2 ID Token claims: the RFC 7519
@@ -424,6 +469,49 @@ func (sc *StandardClaims) GetIDTokenClaims() *IDTokenClaims {
 // Any struct embedding IDTokenClaims gets this method for free via promotion.
 func (sc *IDTokenClaims) GetIDTokenClaims() *IDTokenClaims { return sc }
 
+// AccessTokenClaims holds the payload of an OAuth 2.0 access token per
+// RFC 9068 §2.2.
+//
+// Required claims: iss, sub, aud, exp, iat, jti, client_id.
+// Required-if-granted: scope (when scopes were requested), auth_time and
+// amr (when the token is user-bound).
+//
+// Use [NewAccessToken] to create a JWS with the correct "typ": "at+JWT" header,
+// and [AccessTokenValidator] to validate incoming access tokens.
+//
+// https://www.rfc-editor.org/rfc/rfc9068.html#section-2.2
+type AccessTokenClaims struct {
+	// RFC 7519 registered claims — all REQUIRED for access tokens.
+	Iss string   `json:"iss"`
+	Sub string   `json:"sub"`
+	Aud Audience `json:"aud"`
+	Exp int64    `json:"exp"`
+	Iat int64    `json:"iat"`
+	JTI string   `json:"jti"`
+
+	// OAuth 2.0 claims.
+	ClientID string `json:"client_id"`          // the OAuth client that requested the token
+	Scope    Scope  `json:"scope,omitempty"`     // granted scopes (required if scopes were requested)
+
+	// Authentication context — required if granted.
+	AuthTime int64    `json:"auth_time,omitempty"` // when the end-user authenticated
+	AMR      []string `json:"amr,omitempty"`       // authentication methods references
+
+	// NBF is optional but common for access tokens.
+	NBF int64 `json:"nbf,omitempty"`
+}
+
+// GetIDTokenClaims implements [Claims] by returning a copy of the shared fields.
+// Access-token-specific fields (ClientID, Scope) are not included.
+func (ac *AccessTokenClaims) GetIDTokenClaims() *IDTokenClaims {
+	return &IDTokenClaims{
+		Iss: ac.Iss, Sub: ac.Sub, Aud: ac.Aud,
+		Exp: ac.Exp, NBF: ac.NBF, Iat: ac.Iat,
+		JTI: ac.JTI, AuthTime: ac.AuthTime,
+		AMR: ac.AMR,
+	}
+}
+
 // Claims is implemented for free by any struct that embeds [IDTokenClaims].
 //
 //	type AppClaims struct {
@@ -521,6 +609,23 @@ func New(claims Claims) (*JWS, error) {
 	jws.payload = []byte(base64.RawURLEncoding.EncodeToString(claimsJSON))
 
 	return &jws, nil
+}
+
+// NewAccessToken creates an unsigned JWS from access token claims with
+// "typ" set to "at+JWT" per RFC 9068 §2.1. Sign with [Signer.SignJWS]:
+//
+//	jws, err := jwt.NewAccessToken(&claims)
+//	if err := signer.SignJWS(jws); err != nil { /* ... */ }
+//	token := jwt.Encode(jws)
+//
+// https://www.rfc-editor.org/rfc/rfc9068.html
+func NewAccessToken(claims *AccessTokenClaims) (*JWS, error) {
+	jws, err := New(claims)
+	if err != nil {
+		return nil, err
+	}
+	jws.SetTyp(AccessTokenTyp)
+	return jws, nil
 }
 
 // Encode produces the compact JWT string (header.payload.signature).
@@ -647,6 +752,107 @@ func (v *IDTokenValidator) Validate(claims Claims, now time.Time) ([]error, erro
 		checkAMR:      len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
 		checkAzp:      len(v.Azp) > 0,
 	}, now)
+}
+
+// AccessTokenValidator checks OAuth 2.0 access token claims per RFC 9068 §2.2.
+//
+// By default it requires iss, sub, aud, exp, iat, jti, and client_id — the
+// mandatory set for JWT access tokens. Scope and auth_time are opt-in via
+// ExpectScope / RequiredScopes and ExpectAuthTime.
+//
+// The Iss slice follows the same nil/empty/wildcard semantics as
+// [IDTokenValidator]. See that type's doc for details.
+//
+// https://www.rfc-editor.org/rfc/rfc9068.html#section-2.2
+type AccessTokenValidator struct {
+	GracePeriod    time.Duration // 0 = DefaultGracePeriod (2s); negative = no tolerance
+	MaxAge         time.Duration
+	IgnoreExp      bool
+	IgnoreNBF      bool
+	IgnoreIat      bool
+	Iss            []string // nil=unchecked, []=misconfigured, ["*"]=any, ["x"]=must match
+	Aud            []string // token's aud must intersect list (if set)
+	RequiredAMRs   []string // all of these must appear in the token's amr list
+	MinAMRCount    int      // token's amr must have at least this many values; 0 = no minimum
+	IgnoreIss      bool     // if true and Iss is nil, iss is not checked
+	IgnoreAud      bool
+	IgnoreClientID bool     // client_id required by default
+	IgnoreJTI      bool     // jti required by default (opposite of IDTokenValidator.ExpectJTI)
+	ExpectScope    bool     // if true, scope must be non-empty
+	RequiredScopes []string // all of these must appear in the token's scope
+	ExpectAuthTime bool
+}
+
+// Validate checks the access token claims per RFC 9068 §2.2.
+//
+// The first return value contains every finding, including soft checks.
+// The second return value is non-nil only when a hard failure occurs.
+func (v *AccessTokenValidator) Validate(claims *AccessTokenClaims, now time.Time) ([]error, error) {
+	// Delegate shared claims to validateClaims via the IDTokenClaims subset.
+	details, err := validateClaims(*claims.GetIDTokenClaims(), validatorCore{
+		GracePeriod:  v.GracePeriod,
+		MaxAge:       v.MaxAge,
+		IgnoreExp:    v.IgnoreExp,
+		IgnoreNBF:    v.IgnoreNBF,
+		IgnoreIat:    v.IgnoreIat,
+		Iss:          v.Iss,
+		Aud:          v.Aud,
+		RequiredAMRs: v.RequiredAMRs,
+		MinAMRCount:  v.MinAMRCount,
+	}, claimChecks{
+		checkIss:      !v.IgnoreIss,
+		checkSub:      true, // sub always required for access tokens
+		checkAud:      !v.IgnoreAud,
+		checkExp:      !v.IgnoreExp,
+		checkNBF:      !v.IgnoreNBF,
+		checkIat:      !v.IgnoreIat,
+		checkJTI:      !v.IgnoreJTI, // jti required by default
+		checkAuthTime: v.ExpectAuthTime || v.MaxAge > 0,
+		checkAMR:      len(v.RequiredAMRs) > 0 || v.MinAMRCount > 0,
+	}, now)
+
+	// Unpack the joined error into individual hard failures so we can append.
+	var errs []error
+	if err != nil {
+		errs = append(errs, unwrapJoined(err)...)
+	}
+
+	// record adds a finding; when hard is true it's a hard failure.
+	record := func(hard bool, e error) {
+		details = append(details, e)
+		if hard {
+			errs = append(errs, e)
+		}
+	}
+
+	// Access-token-specific checks.
+	if claims.ClientID == "" {
+		record(!v.IgnoreClientID, fmt.Errorf("client_id: %w", jose.ErrMissingClaim))
+	}
+
+	checkScope := v.ExpectScope || len(v.RequiredScopes) > 0
+	if checkScope && len(claims.Scope) == 0 {
+		record(true, fmt.Errorf("scope: %w", jose.ErrMissingClaim))
+	} else if len(v.RequiredScopes) > 0 {
+		for _, req := range v.RequiredScopes {
+			if !slices.Contains(claims.Scope, req) {
+				record(true, fmt.Errorf("scope %q not granted: %w", req, jose.ErrInvalidClaim))
+			}
+		}
+	}
+
+	return details, errors.Join(errs...)
+}
+
+// unwrapJoined extracts individual errors from an errors.Join result.
+func unwrapJoined(err error) []error {
+	if u, ok := err.(interface{ Unwrap() []error }); ok {
+		return u.Unwrap()
+	}
+	if err != nil {
+		return []error{err}
+	}
+	return nil
 }
 
 // claimChecks holds the resolved per-check flags computed from a validator
