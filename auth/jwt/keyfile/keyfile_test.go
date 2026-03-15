@@ -22,8 +22,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/therootcompany/golib/auth/jwt/jose"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
+	"github.com/therootcompany/golib/auth/jwt"
 	"github.com/therootcompany/golib/auth/jwt/keyfile"
 )
 
@@ -130,14 +129,14 @@ func TestParsePublicPEM(t *testing.T) {
 func TestParsePrivatePEM_UnsupportedBlockType(t *testing.T) {
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("dummy")})
 	_, err := keyfile.ParsePrivatePEM(pemBytes)
-	if !errors.Is(err, jose.ErrUnsupportedFormat) {
+	if !errors.Is(err, jwt.ErrUnsupportedFormat) {
 		t.Fatalf("expected ErrUnsupportedFormat, got: %v", err)
 	}
 }
 
 func TestParsePrivatePEM_NoPEMBlock(t *testing.T) {
 	_, err := keyfile.ParsePrivatePEM([]byte("not pem data"))
-	if !errors.Is(err, jose.ErrInvalidKey) {
+	if !errors.Is(err, jwt.ErrInvalidKey) {
 		t.Fatalf("expected ErrInvalidKey, got: %v", err)
 	}
 }
@@ -190,7 +189,7 @@ func TestParsePublicDER_SPKI(t *testing.T) {
 
 func TestParsePrivateDER_InvalidData(t *testing.T) {
 	_, err := keyfile.ParsePrivateDER([]byte("not der data"))
-	if !errors.Is(err, jose.ErrInvalidKey) {
+	if !errors.Is(err, jwt.ErrInvalidKey) {
 		t.Fatalf("expected ErrInvalidKey, got: %v", err)
 	}
 }
@@ -202,7 +201,7 @@ func TestParsePublicJWK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer := &jwk.PrivateKey{Signer: priv}
+	signer := &jwt.PrivateKey{Signer: priv}
 	pub, err := signer.PublicKey()
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +211,7 @@ func TestParsePublicJWK(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pk, err := jwk.ParsePublicJWK(data)
+	pk, err := jwt.ParsePublicJWK(data)
 	if err != nil {
 		t.Fatalf("ParsePublicJWK: %v", err)
 	}
@@ -229,13 +228,13 @@ func TestParsePrivateJWK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pk := jwk.PrivateKey{Signer: priv, KID: "test-kid"}
+	pk := jwt.PrivateKey{Signer: priv, KID: "test-kid"}
 	data, err := json.Marshal(pk)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	parsed, err := jwk.ParsePrivateJWK(data)
+	parsed, err := jwt.ParsePrivateJWK(data)
 	if err != nil {
 		t.Fatalf("ParsePrivateJWK: %v", err)
 	}
@@ -282,7 +281,7 @@ func TestLoadPublicJWK_FromFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer := &jwk.PrivateKey{Signer: priv}
+	signer := &jwt.PrivateKey{Signer: priv}
 	pub, err := signer.PublicKey()
 	if err != nil {
 		t.Fatal(err)
@@ -384,12 +383,12 @@ func TestKIDConsistency_PEM_vs_JWK(t *testing.T) {
 	}
 
 	// Load via JWK.
-	jwkPK := jwk.PrivateKey{Signer: priv}
+	jwkPK := jwt.PrivateKey{Signer: priv}
 	jwkJSON, err := json.Marshal(jwkPK)
 	if err != nil {
 		t.Fatal(err)
 	}
-	jwkKey, err := jwk.ParsePrivateJWK(jwkJSON)
+	jwkKey, err := jwt.ParsePrivateJWK(jwkJSON)
 	if err != nil {
 		t.Fatalf("ParsePrivateJWK: %v", err)
 	}

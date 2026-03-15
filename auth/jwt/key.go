@@ -6,23 +6,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-// Package jwk provides JWK (JSON Web Key) and JWKS (JSON Web Key Set) types
-// and key management utilities.
-//
-// [PublicKey] is the primary in-memory representation of a public key with its
-// JWKS metadata (KID, Use, Alg, KeyOps). It implements [json.Marshaler] and
-// [json.Unmarshaler], so [JWKs] can be marshalled and unmarshalled directly:
-//
-//	var jwks jwk.JWKs
-//	json.Unmarshal(data, &jwks)   // parse a JWKS document
-//	json.Marshal(jwks)             // serialize a JWKS document
-//
-// For signing, use [PrivateKey] which wraps a [crypto.Signer] and derives its
-// [PublicKey] on demand via [PrivateKey.PublicKey].
-//
-// JSON encoding and decoding are handled transparently - there are no exported
-// wire types to deal with.
-package jwk
+package jwt
 
 import (
 	"crypto"
@@ -35,9 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-
-	"github.com/therootcompany/golib/auth/jwt/internal/jwa"
-	"github.com/therootcompany/golib/auth/jwt/jose"
 )
 
 // CryptoPublicKey is the constraint for public key types stored in [PublicKey].
@@ -158,7 +139,7 @@ func (k PublicKey) Thumbprint() (string, error) {
 			X   string `json:"x"`
 		}{Crv: rk.Crv, Kty: rk.Kty, X: rk.X})
 	default:
-		return "", fmt.Errorf("thumbprint: kty %q: %w", rk.Kty, jose.ErrUnsupportedKeyType)
+		return "", fmt.Errorf("thumbprint: kty %q: %w", rk.Kty, ErrUnsupportedKeyType)
 	}
 	if err != nil {
 		return "", fmt.Errorf("thumbprint: marshal canonical JSON: %w", err)
@@ -197,7 +178,7 @@ type PrivateKey struct {
 func (k *PrivateKey) PublicKey() (*PublicKey, error) {
 	pub, ok := k.Signer.Public().(CryptoPublicKey)
 	if !ok {
-		return nil, fmt.Errorf("%w: private key type %T did not produce a known public key type", jose.ErrSanityFail, k.Signer)
+		return nil, fmt.Errorf("%w: private key type %T did not produce a known public key type", ErrSanityFail, k.Signer)
 	}
 	return &PublicKey{
 		CryptoPublicKey: pub,
@@ -328,7 +309,7 @@ func encode(k PublicKey) (rawKey, error) {
 
 	switch key := k.CryptoPublicKey.(type) {
 	case *ecdsa.PublicKey:
-		ci, err := jwa.ECInfo(key.Curve)
+		ci, err := ecInfo(key.Curve)
 		if err != nil {
 			return rawKey{}, err
 		}
@@ -356,7 +337,7 @@ func encode(k PublicKey) (rawKey, error) {
 		return rk, nil
 
 	default:
-		return rawKey{}, fmt.Errorf("%T: %w", k.CryptoPublicKey, jose.ErrUnsupportedKeyType)
+		return rawKey{}, fmt.Errorf("%T: %w", k.CryptoPublicKey, ErrUnsupportedKeyType)
 	}
 }
 
@@ -398,7 +379,7 @@ func encodePrivate(k PrivateKey) (rawKey, error) {
 		rk.D = base64.RawURLEncoding.EncodeToString(priv.Seed())
 
 	default:
-		return rawKey{}, fmt.Errorf("%T: %w", k.Signer, jose.ErrUnsupportedKeyType)
+		return rawKey{}, fmt.Errorf("%T: %w", k.Signer, ErrUnsupportedKeyType)
 	}
 
 	return rk, nil
@@ -413,6 +394,69 @@ func ReadFile(filePath string) ([]PublicKey, error) {
 		return nil, err
 	}
 	return jwks.Keys, nil
+}
+
+// FromPublicKey wraps a Go crypto public key in a [PublicKey] with
+// auto-computed KID (RFC 7638 thumbprint) and Alg.
+//
+// Supported key types: *ecdsa.PublicKey, *rsa.PublicKey, ed25519.PublicKey.
+// Returns an error for unsupported types or if the thumbprint cannot be computed.
+func FromPublicKey(pub crypto.PublicKey) (*PublicKey, error) {
+	cpk, ok := pub.(CryptoPublicKey)
+	if !ok {
+		return nil, fmt.Errorf("%T: %w", pub, ErrUnsupportedKeyType)
+	}
+
+	pk := &PublicKey{CryptoPublicKey: cpk}
+
+	// Derive Alg from key type.
+	switch key := pub.(type) {
+	case *ecdsa.PublicKey:
+		ci, err := ecInfo(key.Curve)
+		if err != nil {
+			return nil, err
+		}
+		pk.Alg = ci.Alg
+	case *rsa.PublicKey:
+		pk.Alg = "RS256"
+	case ed25519.PublicKey:
+		pk.Alg = "EdDSA"
+	default:
+		return nil, fmt.Errorf("%T: %w", pub, ErrUnsupportedKeyType)
+	}
+
+	kid, err := pk.Thumbprint()
+	if err != nil {
+		return nil, fmt.Errorf("compute thumbprint: %w", err)
+	}
+	pk.KID = kid
+
+	return pk, nil
+}
+
+// FromPrivateKey wraps a [crypto.Signer] in a [PrivateKey] with
+// auto-computed KID (RFC 7638 thumbprint) and Alg.
+//
+// Supported signer types: *ecdsa.PrivateKey, *rsa.PrivateKey,
+// ed25519.PrivateKey, or any crypto.Signer whose Public() returns a
+// supported public key type.
+func FromPrivateKey(signer crypto.Signer) (*PrivateKey, error) {
+	pk := &PrivateKey{Signer: signer}
+
+	// Derive Alg from key type.
+	alg, _, _, err := signingParams(signer)
+	if err != nil {
+		return nil, err
+	}
+	pk.Alg = alg
+
+	kid, err := pk.Thumbprint()
+	if err != nil {
+		return nil, fmt.Errorf("compute thumbprint: %w", err)
+	}
+	pk.KID = kid
+
+	return pk, nil
 }
 
 // decodeOne parses a single rawKey wire struct into a [PublicKey].
@@ -447,7 +491,7 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 		pk = kj.newPublicKey(key)
 
 	default:
-		return nil, fmt.Errorf("kid %q: kty %q: %w", kj.KID, kj.Kty, jose.ErrUnsupportedKeyType)
+		return nil, fmt.Errorf("kid %q: kty %q: %w", kj.KID, kj.Kty, ErrUnsupportedKeyType)
 	}
 
 	if pk.KID == "" {
@@ -465,13 +509,13 @@ func decodeOne(kj rawKey) (*PublicKey, error) {
 // via [PublicKey.Thumbprint]. Returns an error if the "d" field is missing.
 func decodePrivate(kj rawKey) (*PrivateKey, error) {
 	if kj.D == "" {
-		return nil, fmt.Errorf("\"d\" field missing: %w", jose.ErrMissingKeyData)
+		return nil, fmt.Errorf("\"d\" field missing: %w", ErrMissingKeyData)
 	}
 
 	var pk *PrivateKey
 	switch kj.Kty {
 	case "EC":
-		ci, err := jwa.ECInfoByCrv(kj.Crv)
+		ci, err := ecInfoByCrv(kj.Crv)
 		if err != nil {
 			return nil, fmt.Errorf("parse EC private key %q: %w", kj.KID, err)
 		}
@@ -482,7 +526,7 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 		// ParseRawPrivateKey validates the scalar and derives the public key.
 		priv, err := ecdsa.ParseRawPrivateKey(ci.Curve, dBytes)
 		if err != nil {
-			return nil, fmt.Errorf("parse EC private key %q: %w: %w", kj.KID, jose.ErrInvalidKey, err)
+			return nil, fmt.Errorf("parse EC private key %q: %w: %w", kj.KID, ErrInvalidKey, err)
 		}
 		pk = kj.newPrivateKey(priv)
 
@@ -515,26 +559,26 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 			priv.Precompute()
 		}
 		if err := priv.Validate(); err != nil {
-			return nil, fmt.Errorf("parse RSA private key %q: %w: %w", kj.KID, jose.ErrInvalidKey, err)
+			return nil, fmt.Errorf("parse RSA private key %q: %w: %w", kj.KID, ErrInvalidKey, err)
 		}
 		pk = kj.newPrivateKey(priv)
 
 	case "OKP":
 		if kj.Crv != "Ed25519" {
-			return nil, fmt.Errorf("parse OKP private key %q: crv %q: %w", kj.KID, kj.Crv, jose.ErrUnsupportedCurve)
+			return nil, fmt.Errorf("parse OKP private key %q: crv %q: %w", kj.KID, kj.Crv, ErrUnsupportedCurve)
 		}
 		seed, err := decodeB64Field("Ed25519", kj.KID, "d", kj.D)
 		if err != nil {
 			return nil, err
 		}
 		if len(seed) != ed25519.SeedSize {
-			return nil, fmt.Errorf("parse Ed25519 private key %q: seed size %d, want %d: %w", kj.KID, len(seed), ed25519.SeedSize, jose.ErrInvalidKey)
+			return nil, fmt.Errorf("parse Ed25519 private key %q: seed size %d, want %d: %w", kj.KID, len(seed), ed25519.SeedSize, ErrInvalidKey)
 		}
 		priv := ed25519.NewKeyFromSeed(seed)
 		pk = kj.newPrivateKey(priv)
 
 	default:
-		return nil, fmt.Errorf("kid %q: kty %q: %w", kj.KID, kj.Kty, jose.ErrUnsupportedKeyType)
+		return nil, fmt.Errorf("kid %q: kty %q: %w", kj.KID, kj.Kty, ErrUnsupportedKeyType)
 	}
 
 	if pk.KID == "" {
@@ -564,7 +608,7 @@ func (kj rawKey) newPrivateKey(signer crypto.Signer) *PrivateKey {
 func decodeB64Field(kty, kid, field, value string) ([]byte, error) {
 	b, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s private key %q: invalid %s: %w: %w", kty, kid, field, jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("parse %s private key %q: invalid %s: %w: %w", kty, kid, field, ErrInvalidKey, err)
 	}
 	return b, nil
 }
@@ -572,25 +616,25 @@ func decodeB64Field(kty, kid, field, value string) ([]byte, error) {
 func decodeRSA(kj rawKey) (*rsa.PublicKey, error) {
 	n, err := base64.RawURLEncoding.DecodeString(kj.N)
 	if err != nil {
-		return nil, fmt.Errorf("invalid n: %w: %w", jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("invalid n: %w: %w", ErrInvalidKey, err)
 	}
 	e, err := base64.RawURLEncoding.DecodeString(kj.E)
 	if err != nil {
-		return nil, fmt.Errorf("invalid e: %w: %w", jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("invalid e: %w: %w", ErrInvalidKey, err)
 	}
 
 	eInt := new(big.Int).SetBytes(e)
 	if !eInt.IsInt64() {
-		return nil, fmt.Errorf("RSA exponent too large: %w", jose.ErrInvalidKey)
+		return nil, fmt.Errorf("RSA exponent too large: %w", ErrInvalidKey)
 	}
 	eVal := eInt.Int64()
 	// Minimum exponent of 3 rejects degenerate keys (e=1 makes RSA trivial).
 	// Cap at MaxInt32 so the value fits in an int on 32-bit platforms.
 	if eVal < 3 {
-		return nil, fmt.Errorf("RSA exponent must be at least 3, got %d: %w", eVal, jose.ErrInvalidKey)
+		return nil, fmt.Errorf("RSA exponent must be at least 3, got %d: %w", eVal, ErrInvalidKey)
 	}
 	if eVal > 1<<31-1 {
-		return nil, fmt.Errorf("RSA exponent too large for 32-bit platforms: %d: %w", eVal, jose.ErrInvalidKey)
+		return nil, fmt.Errorf("RSA exponent too large for 32-bit platforms: %d: %w", eVal, ErrInvalidKey)
 	}
 
 	key := &rsa.PublicKey{
@@ -601,7 +645,7 @@ func decodeRSA(kj rawKey) (*rsa.PublicKey, error) {
 	// but allows real-world compatibility with older keys and is useful
 	// for testing. Production deployments should use 2048+ bits.
 	if key.Size() < 128 { // 1024 bits minimum
-		return nil, fmt.Errorf("%d bits: %w", key.Size()*8, jose.ErrKeyTooSmall)
+		return nil, fmt.Errorf("%d bits: %w", key.Size()*8, ErrKeyTooSmall)
 	}
 	return key, nil
 }
@@ -609,14 +653,14 @@ func decodeRSA(kj rawKey) (*rsa.PublicKey, error) {
 func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 	x, err := base64.RawURLEncoding.DecodeString(kj.X)
 	if err != nil {
-		return nil, fmt.Errorf("invalid x: %w: %w", jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("invalid x: %w: %w", ErrInvalidKey, err)
 	}
 	y, err := base64.RawURLEncoding.DecodeString(kj.Y)
 	if err != nil {
-		return nil, fmt.Errorf("invalid y: %w: %w", jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("invalid y: %w: %w", ErrInvalidKey, err)
 	}
 
-	ci, err := jwa.ECInfoByCrv(kj.Crv)
+	ci, err := ecInfoByCrv(kj.Crv)
 	if err != nil {
 		return nil, err
 	}
@@ -625,10 +669,10 @@ func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 	// coordinate to the expected byte length. ParseUncompressedPublicKey
 	// validates that the point is on the curve.
 	if len(x) > ci.KeySize {
-		return nil, fmt.Errorf("x coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(x), ci.KeySize, jose.ErrInvalidKey)
+		return nil, fmt.Errorf("x coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(x), ci.KeySize, ErrInvalidKey)
 	}
 	if len(y) > ci.KeySize {
-		return nil, fmt.Errorf("y coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(y), ci.KeySize, jose.ErrInvalidKey)
+		return nil, fmt.Errorf("y coordinate too long for %s: got %d bytes, want %d: %w", kj.Crv, len(y), ci.KeySize, ErrInvalidKey)
 	}
 	uncompressed := make([]byte, 1+2*ci.KeySize)
 	uncompressed[0] = 0x04
@@ -636,21 +680,21 @@ func decodeEC(kj rawKey) (*ecdsa.PublicKey, error) {
 	copy(uncompressed[1+2*ci.KeySize-len(y):], y)            // left-pad Y
 	key, err := ecdsa.ParseUncompressedPublicKey(ci.Curve, uncompressed)
 	if err != nil {
-		return nil, fmt.Errorf("EC point not on curve %s: %w: %w", kj.Crv, jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("EC point not on curve %s: %w: %w", kj.Crv, ErrInvalidKey, err)
 	}
 	return key, nil
 }
 
 func decodeOKP(kj rawKey) (ed25519.PublicKey, error) {
 	if kj.Crv != "Ed25519" {
-		return nil, fmt.Errorf("crv %q (only Ed25519 supported): %w", kj.Crv, jose.ErrUnsupportedCurve)
+		return nil, fmt.Errorf("crv %q (only Ed25519 supported): %w", kj.Crv, ErrUnsupportedCurve)
 	}
 	x, err := base64.RawURLEncoding.DecodeString(kj.X)
 	if err != nil {
-		return nil, fmt.Errorf("invalid x: %w: %w", jose.ErrInvalidKey, err)
+		return nil, fmt.Errorf("invalid x: %w: %w", ErrInvalidKey, err)
 	}
 	if len(x) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("Ed25519 key size %d bytes, want %d: %w", len(x), ed25519.PublicKeySize, jose.ErrInvalidKey)
+		return nil, fmt.Errorf("Ed25519 key size %d bytes, want %d: %w", len(x), ed25519.PublicKeySize, ErrInvalidKey)
 	}
 	return ed25519.PublicKey(x), nil
 }

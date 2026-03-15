@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/auth/jwt"
-	"github.com/therootcompany/golib/auth/jwt/jose"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 // AppClaims embeds IDTokenClaims and adds application-specific fields.
@@ -82,8 +80,8 @@ func goodValidator() *jwt.IDTokenValidator {
 	}
 }
 
-func goodVerifier(pub jwk.PublicKey) *jwt.Verifier {
-	v, err := jwt.NewVerifier([]jwk.PublicKey{pub})
+func goodVerifier(pub jwt.PublicKey) *jwt.Verifier {
+	v, err := jwt.NewVerifier([]jwt.PublicKey{pub})
 	if err != nil {
 		panic(err)
 	}
@@ -98,7 +96,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "key-1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "key-1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +112,7 @@ func TestRoundTrip(t *testing.T) {
 
 	token := jwt.Encode(jws)
 
-	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "key-1"})
+	iss := goodVerifier(jwt.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -144,7 +142,7 @@ func TestRoundTripRS256(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "key-1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "key-1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +158,7 @@ func TestRoundTripRS256(t *testing.T) {
 
 	token := jwt.Encode(jws)
 
-	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "key-1"})
+	iss := goodVerifier(jwt.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -182,7 +180,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "key-1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "key-1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +196,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 
 	token := jwt.Encode(jws)
 
-	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: pubKeyBytes, KID: "key-1"})
+	iss := goodVerifier(jwt.PublicKey{CryptoPublicKey: pubKeyBytes, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -217,12 +215,12 @@ func TestRoundTripEdDSA(t *testing.T) {
 // The caller owns the full validation pipeline.
 func TestDecodeVerifyFlow(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{{KID: "k", Signer: privKey}})
 
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	iss, _ := jwt.NewVerifier([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
+	iss, _ := jwt.NewVerifier([]jwt.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
 
 	jws2, err := jwt.Decode(token)
 	if err != nil {
@@ -248,13 +246,13 @@ func TestDecodeVerifyFlow(t *testing.T) {
 func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	signingKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: signingKey}})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{{KID: "k", Signer: signingKey}})
 
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
 	// Verifier has wrong public key - sig verification will fail.
-	iss, _ := jwt.NewVerifier([]jwk.PublicKey{{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"}})
+	iss, _ := jwt.NewVerifier([]jwt.PublicKey{{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"}})
 
 	// Decode always succeeds for well-formed tokens.
 	result, err := jwt.Decode(token)
@@ -280,12 +278,12 @@ func TestCustomValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	// Token with empty Email - our custom validator should reject it.
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{{KID: "k", Signer: privKey}})
 	claims := goodClaims()
 	claims.Email = ""
 	token, _ := signer.SignToString(&claims)
 
-	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwt.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 	jws2, err := jwt.Decode(token)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
@@ -345,7 +343,7 @@ func TestNBFValidation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for future nbf")
 	}
-	if !errors.Is(err, jose.ErrBeforeNbf) {
+	if !errors.Is(err, jwt.ErrBeforeNbf) {
 		t.Fatalf("expected ErrBeforeNbf, got: %v", err)
 	}
 }
@@ -354,11 +352,11 @@ func TestNBFValidation(t *testing.T) {
 // independently of claim validation - the caller decides whether to validate.
 func TestVerifyWithoutValidation(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{{KID: "k", Signer: privKey}})
 	c := goodClaims()
 	token, _ := signer.SignToString(&c)
 
-	iss, _ := jwt.NewVerifier([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
+	iss, _ := jwt.NewVerifier([]jwt.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -377,18 +375,18 @@ func TestVerifyWithoutValidation(t *testing.T) {
 func TestVerifierWrongKey(t *testing.T) {
 	signingKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	wrongKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: signingKey}})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{{KID: "k", Signer: signingKey}})
 
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwt.PublicKey{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"})
 
 	parsed, err := jwt.Decode(token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := iss.Verify(parsed); !errors.Is(err, jose.ErrSignatureInvalid) {
+	if err := iss.Verify(parsed); !errors.Is(err, jwt.ErrSignatureInvalid) {
 		t.Fatalf("expected ErrSignatureInvalid, got: %v", err)
 	}
 }
@@ -396,18 +394,18 @@ func TestVerifierWrongKey(t *testing.T) {
 // TestVerifierUnknownKid confirms that an unknown kid is rejected.
 func TestVerifierUnknownKid(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "unknown-kid", Signer: privKey}})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{{KID: "unknown-kid", Signer: privKey}})
 
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "known-kid"})
+	iss := goodVerifier(jwt.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "known-kid"})
 
 	parsed, err := jwt.Decode(token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := iss.Verify(parsed); !errors.Is(err, jose.ErrUnknownKID) {
+	if err := iss.Verify(parsed); !errors.Is(err, jwt.ErrUnknownKID) {
 		t.Fatalf("expected ErrUnknownKID, got: %v", err)
 	}
 }
@@ -417,13 +415,13 @@ func TestVerifierUnknownKid(t *testing.T) {
 // mismatch appears as a soft validation error.
 func TestVerifierIssMismatch(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{{KID: "k", Signer: privKey}})
 
 	claims := goodClaims()
 	claims.Iss = "https://evil.example.com"
 	token, _ := signer.SignToString(&claims)
 
-	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwt.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 
 	// Decode+Verify succeeds - iss is not checked at the Verifier level.
 	parsed, err := jwt.Decode(token)
@@ -447,7 +445,7 @@ func TestVerifierIssMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation errors for iss mismatch")
 	}
-	if !errors.Is(err, jose.ErrInvalidClaim) {
+	if !errors.Is(err, jwt.ErrInvalidClaim) {
 		t.Fatalf("expected ErrInvalidClaim for iss mismatch, got: %v", err)
 	}
 }
@@ -457,12 +455,12 @@ func TestVerifierIssMismatch(t *testing.T) {
 // ES256 signature is kept, making the signing input mismatch detectable.
 func TestVerifyTamperedAlg(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{{KID: "k", Signer: privKey}})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{{KID: "k", Signer: privKey}})
 
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	iss := goodVerifier(jwk.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwt.PublicKey{CryptoPublicKey: &privKey.PublicKey, KID: "k"})
 
 	// Replace the protected header with one that has alg:"none".
 	// The original ES256 signature stays - the signing input will mismatch.
@@ -474,7 +472,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := iss.Verify(parsed); !errors.Is(err, jose.ErrUnsupportedAlg) {
+	if err := iss.Verify(parsed); !errors.Is(err, jwt.ErrUnsupportedAlg) {
 		t.Fatalf("expected ErrUnsupportedAlg for tampered alg, got: %v", err)
 	}
 }
@@ -486,7 +484,7 @@ func TestSignerRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "k1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "k1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +517,7 @@ func TestSignerRoundTrip(t *testing.T) {
 func TestSignerAutoKID(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{{Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{{Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +550,7 @@ func TestSignerRoundRobin(t *testing.T) {
 	key1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{
 		{KID: "k1", Signer: key1},
 		{KID: "k2", Signer: key2},
 	})
@@ -587,7 +585,7 @@ func TestSignerRoundRobin(t *testing.T) {
 func TestJWKsRoundTrip(t *testing.T) {
 	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "k1", Signer: privKey}})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "k1", Signer: privKey}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -598,7 +596,7 @@ func TestJWKsRoundTrip(t *testing.T) {
 	}
 
 	// Round-trip: parse the JWKS JSON and verify it produces a working Verifier.
-	var jwks jwk.JWKs
+	var jwks jwt.JWKs
 	if err := json.Unmarshal(jwksBytes, &jwks); err != nil {
 		t.Fatal(err)
 	}
@@ -631,12 +629,12 @@ func TestKeyType(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		key     jwk.PublicKey
+		key     jwt.PublicKey
 		wantKty string
 	}{
-		{"EC P-256", jwk.PublicKey{CryptoPublicKey: &ecKey.PublicKey}, "EC"},
-		{"RSA 2048", jwk.PublicKey{CryptoPublicKey: &rsaKey.PublicKey}, "RSA"},
-		{"Ed25519", jwk.PublicKey{CryptoPublicKey: edPub}, "OKP"},
+		{"EC P-256", jwt.PublicKey{CryptoPublicKey: &ecKey.PublicKey}, "EC"},
+		{"RSA 2048", jwt.PublicKey{CryptoPublicKey: &rsaKey.PublicKey}, "RSA"},
+		{"Ed25519", jwt.PublicKey{CryptoPublicKey: edPub}, "OKP"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -663,7 +661,7 @@ func TestPublicKeyOps(t *testing.T) {
 		{"no public equivalent dropped", []string{"deriveKey"}, nil},
 		{"empty", nil, nil},
 	}
-	base, err := jwk.NewPrivateKey()
+	base, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -700,7 +698,7 @@ func TestDecodePublicJWKJSON(t *testing.T) {
 		 "e":"AQAB","kid":"rsa-2048","use":"sig"}
 	]}`)
 
-	var jwks jwk.JWKs
+	var jwks jwt.JWKs
 	if err := json.Unmarshal(jwksJSON, &jwks); err != nil {
 		t.Fatal(err)
 	}
@@ -741,16 +739,16 @@ func TestThumbprint(t *testing.T) {
 
 	tests := []struct {
 		name string
-		jwk  jwk.PublicKey
+		pub  jwt.PublicKey
 	}{
-		{"EC P-256", jwk.PublicKey{CryptoPublicKey: &ecKey.PublicKey}},
-		{"RSA 2048", jwk.PublicKey{CryptoPublicKey: &rsaKey.PublicKey}},
-		{"Ed25519", jwk.PublicKey{CryptoPublicKey: edPub}},
+		{"EC P-256", jwt.PublicKey{CryptoPublicKey: &ecKey.PublicKey}},
+		{"RSA 2048", jwt.PublicKey{CryptoPublicKey: &rsaKey.PublicKey}},
+		{"Ed25519", jwt.PublicKey{CryptoPublicKey: edPub}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			thumb, err := tt.jwk.Thumbprint()
+			thumb, err := tt.pub.Thumbprint()
 			if err != nil {
 				t.Fatalf("Thumbprint() error: %v", err)
 			}
@@ -762,7 +760,7 @@ func TestThumbprint(t *testing.T) {
 				t.Errorf("Thumbprint() contains non-base64url characters: %s", thumb)
 			}
 			// Same key, same thumbprint
-			thumb2, _ := tt.jwk.Thumbprint()
+			thumb2, _ := tt.pub.Thumbprint()
 			if thumb != thumb2 {
 				t.Errorf("Thumbprint() not deterministic: %s != %s", thumb, thumb2)
 			}
@@ -781,7 +779,7 @@ func TestNoKidAutoThumbprint(t *testing.T) {
 		 "use":"sig"}
 	]}`)
 
-	var jwks jwk.JWKs
+	var jwks jwt.JWKs
 	if err := json.Unmarshal(jwksJSON, &jwks); err != nil {
 		t.Fatal(err)
 	}
@@ -809,11 +807,11 @@ func TestNoKidAutoThumbprint(t *testing.T) {
 	}
 }
 
-// TestNewPrivateKey verifies that jwk.NewPrivateKey generates an Ed25519 key
+// TestNewPrivateKey verifies that jwt.NewPrivateKey generates an Ed25519 key
 // with a non-empty KID auto-derived from the thumbprint, and that the key
 // works end-to-end for signing and verification.
 func TestNewPrivateKey(t *testing.T) {
-	pk, err := jwk.NewPrivateKey()
+	pk, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatalf("NewPrivateKey() error: %v", err)
 	}
@@ -825,13 +823,13 @@ func TestNewPrivateKey(t *testing.T) {
 		t.Errorf("KID contains non-base64url characters: %s", pk.KID)
 	}
 	// Two calls must produce different keys but always produce valid base64url KIDs.
-	pk2, _ := jwk.NewPrivateKey()
+	pk2, _ := jwt.NewPrivateKey()
 	if pk.KID == pk2.KID {
 		t.Error("NewPrivateKey() produced identical KIDs for two different keys")
 	}
 
 	// Full sign+verify round-trip with the generated key.
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{*pk})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{*pk})
 	if err != nil {
 		t.Fatalf("NewSigner() error: %v", err)
 	}
@@ -858,11 +856,11 @@ func TestNewPrivateKey(t *testing.T) {
 
 func TestDecodeRaw(t *testing.T) {
 	// Sign a real token to get a valid compact string.
-	pk, err := jwk.NewPrivateKey()
+	pk, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatalf("NewPrivateKey() error: %v", err)
 	}
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{*pk})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{*pk})
 	if err != nil {
 		t.Fatalf("NewSigner() error: %v", err)
 	}
@@ -895,11 +893,11 @@ func TestDecodeRawErrors(t *testing.T) {
 		input    string
 		sentinel error
 	}{
-		{"empty string", "", jose.ErrMalformedToken},
-		{"one segment", "abc", jose.ErrMalformedToken},
-		{"two segments", "abc.def", jose.ErrMalformedToken},
-		{"four segments", "a.b.c.d", jose.ErrMalformedToken},
-		{"bad signature base64", "eyJhbGciOiJFZERTQSJ9.eyJpc3MiOiJ4In0.!!!bad!!!", jose.ErrSignatureInvalid},
+		{"empty string", "", jwt.ErrMalformedToken},
+		{"one segment", "abc", jwt.ErrMalformedToken},
+		{"two segments", "abc.def", jwt.ErrMalformedToken},
+		{"four segments", "a.b.c.d", jwt.ErrMalformedToken},
+		{"bad signature base64", "eyJhbGciOiJFZERTQSJ9.eyJpc3MiOiJ4In0.!!!bad!!!", jwt.ErrSignatureInvalid},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -935,11 +933,11 @@ func TestDecodeRawSegmentCount(t *testing.T) {
 
 func TestUnmarshalHeader(t *testing.T) {
 	// Sign a token and use DecodeRaw + UnmarshalHeader to recover the header.
-	pk, err := jwk.NewPrivateKey()
+	pk, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatalf("NewPrivateKey() error: %v", err)
 	}
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{*pk})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{*pk})
 	if err != nil {
 		t.Fatalf("NewSigner() error: %v", err)
 	}
@@ -1013,11 +1011,11 @@ func TestUnmarshalHeaderCustomFields(t *testing.T) {
 
 func TestUnmarshalHeaderViaJWS(t *testing.T) {
 	// Verify that UnmarshalHeader is promoted from RawJWT to *JWS.
-	pk, err := jwk.NewPrivateKey()
+	pk, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatalf("NewPrivateKey() error: %v", err)
 	}
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{*pk})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{*pk})
 	if err != nil {
 		t.Fatalf("NewSigner() error: %v", err)
 	}
@@ -1159,7 +1157,7 @@ func TestSetTypSurvivesSigning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{{Signer: priv}})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{{Signer: priv}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1248,7 +1246,7 @@ func TestAccessTokenValidatorRequiresJTI(t *testing.T) {
 	claims := goodAccessTokenClaims()
 	claims.JTI = ""
 	_, err := v.Validate(claims, time.Now())
-	if !errors.Is(err, jose.ErrMissingClaim) {
+	if !errors.Is(err, jwt.ErrMissingClaim) {
 		t.Fatalf("expected ErrMissingClaim for missing jti, got: %v", err)
 	}
 }
@@ -1261,7 +1259,7 @@ func TestAccessTokenValidatorRequiresClientID(t *testing.T) {
 	claims := goodAccessTokenClaims()
 	claims.ClientID = ""
 	_, err := v.Validate(claims, time.Now())
-	if !errors.Is(err, jose.ErrMissingClaim) {
+	if !errors.Is(err, jwt.ErrMissingClaim) {
 		t.Fatalf("expected ErrMissingClaim for missing client_id, got: %v", err)
 	}
 }
@@ -1287,7 +1285,7 @@ func TestAccessTokenValidatorExpiredToken(t *testing.T) {
 	claims := goodAccessTokenClaims()
 	claims.Exp = time.Now().Add(-time.Hour).Unix()
 	_, err := v.Validate(claims, time.Now())
-	if !errors.Is(err, jose.ErrAfterExp) {
+	if !errors.Is(err, jwt.ErrAfterExp) {
 		t.Fatalf("expected ErrAfterExp, got: %v", err)
 	}
 }
@@ -1301,7 +1299,7 @@ func TestAccessTokenValidatorRequiredScopes(t *testing.T) {
 	claims := goodAccessTokenClaims()
 	// claims has ["openid", "profile"] — missing "admin"
 	_, err := v.Validate(claims, time.Now())
-	if !errors.Is(err, jose.ErrInvalidClaim) {
+	if !errors.Is(err, jwt.ErrInvalidClaim) {
 		t.Fatalf("expected ErrInvalidClaim for missing scope, got: %v", err)
 	}
 }
@@ -1315,7 +1313,7 @@ func TestAccessTokenValidatorExpectScope(t *testing.T) {
 	claims := goodAccessTokenClaims()
 	claims.Scope = nil
 	_, err := v.Validate(claims, time.Now())
-	if !errors.Is(err, jose.ErrMissingClaim) {
+	if !errors.Is(err, jwt.ErrMissingClaim) {
 		t.Fatalf("expected ErrMissingClaim for empty scope, got: %v", err)
 	}
 }

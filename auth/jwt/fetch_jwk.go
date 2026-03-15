@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-package jwk
+package jwt
 
 import (
 	"context"
@@ -17,8 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/therootcompany/golib/auth/jwt/jose"
 )
 
 // maxResponseBody is the maximum JWKS response body size (1 MiB).
@@ -66,7 +64,7 @@ func fetchRaw(ctx context.Context, url string, client *http.Client) (*Cacheable,
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
-		return nil, fmt.Errorf("fetch %q: read body: %w: %w", url, jose.ErrFetchFailed, err)
+		return nil, fmt.Errorf("fetch %q: read body: %w: %w", url, ErrFetchFailed, err)
 	}
 
 	maxAge := parseCacheControlMaxAge(resp.Header.Get("Cache-Control"))
@@ -100,7 +98,7 @@ func FetchURL(ctx context.Context, jwksURL string, client *http.Client) ([]Publi
 	}
 	var jwks JWKs
 	if err := json.Unmarshal(c.Data, &jwks); err != nil {
-		return nil, 0, fmt.Errorf("parse JWKS: %w: %w", jose.ErrFetchFailed, err)
+		return nil, 0, fmt.Errorf("parse JWKS: %w: %w", ErrFetchFailed, err)
 	}
 	return jwks.Keys, c.MaxAge, nil
 }
@@ -182,13 +180,13 @@ func fetchDiscoveryURI(ctx context.Context, discoveryURL string, client *http.Cl
 		JWKsURI string `json:"jwks_uri"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBody)).Decode(&doc); err != nil {
-		return "", fmt.Errorf("parse discovery doc: %w: %w", jose.ErrFetchFailed, err)
+		return "", fmt.Errorf("parse discovery doc: %w: %w", ErrFetchFailed, err)
 	}
 	if doc.JWKsURI == "" {
-		return "", fmt.Errorf("discovery doc missing jwks_uri: %w", jose.ErrFetchFailed)
+		return "", fmt.Errorf("discovery doc missing jwks_uri: %w", ErrFetchFailed)
 	}
 	if !strings.HasPrefix(doc.JWKsURI, "https://") {
-		return "", fmt.Errorf("jwks_uri must be https, got %q: %w", doc.JWKsURI, jose.ErrFetchFailed)
+		return "", fmt.Errorf("jwks_uri must be https, got %q: %w", doc.JWKsURI, ErrFetchFailed)
 	}
 	return doc.JWKsURI, nil
 }
@@ -201,15 +199,15 @@ func doGET(ctx context.Context, url string, client *http.Client) (*http.Response
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", jose.ErrFetchFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrFetchFailed, err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", jose.ErrFetchFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrFetchFailed, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("status %d: %w", resp.StatusCode, jose.ErrUnexpectedStatus)
+		return nil, fmt.Errorf("status %d: %w", resp.StatusCode, ErrUnexpectedStatus)
 	}
 	return resp, nil
 }

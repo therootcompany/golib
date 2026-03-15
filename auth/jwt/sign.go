@@ -14,10 +14,6 @@ import (
 	"fmt"
 	"io"
 	"sync/atomic"
-
-	"github.com/therootcompany/golib/auth/jwt/internal/jwa"
-	"github.com/therootcompany/golib/auth/jwt/jose"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 // Signer manages one or more private signing keys and issues JWTs by
@@ -25,7 +21,7 @@ import (
 // the party that signs tokens with a private key and publishes the
 // corresponding public keys.
 //
-// Signer embeds [jwk.JWKs], so the JWKS endpoint response is just:
+// Signer embeds [JWKs], so the JWKS endpoint response is just:
 //
 //	json.Marshal(&signer)
 //
@@ -40,11 +36,11 @@ import (
 //
 // Do not copy a Signer after first use - it contains an atomic counter.
 type Signer struct {
-	jwk.JWKs // Keys []jwk.PublicKey - promoted; marshals as {"keys":[...]}.
+	JWKs // Keys []PublicKey — promoted; marshals as {"keys":[...]}.
 	// Note: Keys is exported because json.Marshal needs it for the JWKS
 	// endpoint. Callers should not mutate the slice after construction.
 	Rand      io.Reader // entropy source for signing; nil means crypto/rand.Reader
-	keys      []jwk.PrivateKey
+	keys      []PrivateKey
 	signerIdx atomic.Uint64
 }
 
@@ -65,25 +61,25 @@ type Signer struct {
 // the key type is unsupported, or a thumbprint cannot be computed.
 //
 // https://www.rfc-editor.org/rfc/rfc7638.html
-func NewSigner(keys []jwk.PrivateKey, retiredKeys ...jwk.PublicKey) (*Signer, error) {
+func NewSigner(keys []PrivateKey, retiredKeys ...PublicKey) (*Signer, error) {
 	if len(keys) == 0 {
-		return nil, fmt.Errorf("NewSigner: %w", jose.ErrNoSigningKey)
+		return nil, fmt.Errorf("NewSigner: %w", ErrNoSigningKey)
 	}
 	// Copy so the caller can't mutate after construction.
-	ss := make([]jwk.PrivateKey, len(keys))
+	ss := make([]PrivateKey, len(keys))
 	copy(ss, keys)
 	for i := range ss {
 		if ss[i].Signer == nil {
-			return nil, fmt.Errorf("NewSigner: key[%d] kid %q: %w", i, ss[i].KID, jose.ErrNoSigningKey)
+			return nil, fmt.Errorf("NewSigner: key[%d] kid %q: %w", i, ss[i].KID, ErrNoSigningKey)
 		}
 
 		// Derive algorithm from key type; validate caller's Alg if already set.
-		alg, _, _, err := jwa.SigningParams(ss[i].Signer)
+		alg, _, _, err := signingParams(ss[i].Signer)
 		if err != nil {
 			return nil, fmt.Errorf("NewSigner: key[%d]: %w", i, err)
 		}
 		if ss[i].Alg != "" && ss[i].Alg != alg {
-			return nil, fmt.Errorf("NewSigner: key[%d] alg %q expected %s: %w", i, ss[i].Alg, alg, jose.ErrAlgConflict)
+			return nil, fmt.Errorf("NewSigner: key[%d] alg %q expected %s: %w", i, ss[i].Alg, alg, ErrAlgConflict)
 		}
 		ss[i].Alg = alg
 
@@ -104,7 +100,7 @@ func NewSigner(keys []jwk.PrivateKey, retiredKeys ...jwk.PublicKey) (*Signer, er
 		}
 	}
 
-	pubs := make([]jwk.PublicKey, len(ss), len(ss)+len(retiredKeys))
+	pubs := make([]PublicKey, len(ss), len(ss)+len(retiredKeys))
 	for i := range ss {
 		pub, err := ss[i].PublicKey()
 		if err != nil {
@@ -125,7 +121,7 @@ func NewSigner(keys []jwk.PrivateKey, retiredKeys ...jwk.PublicKey) (*Signer, er
 	// never selected for signing.
 	pubs = append(pubs, retiredKeys...)
 	return &Signer{
-		JWKs: jwk.JWKs{Keys: pubs},
+		JWKs: JWKs{Keys: pubs},
 		keys: ss,
 	}, nil
 }
@@ -152,24 +148,24 @@ func (s *Signer) SignJWS(jws SignableJWS) error {
 	pk := &s.keys[idx]
 
 	if pk.Signer == nil {
-		return fmt.Errorf("kid %q: %w", pk.KID, jose.ErrNoSigningKey)
+		return fmt.Errorf("kid %q: %w", pk.KID, ErrNoSigningKey)
 	}
 	hdr := jws.GetHeader()
 	switch {
 	case hdr.KID == "":
 		hdr.KID = pk.KID
 	case hdr.KID != pk.KID:
-		return fmt.Errorf("header kid %q vs key kid %q: %w", hdr.KID, pk.KID, jose.ErrKIDConflict)
+		return fmt.Errorf("header kid %q vs key kid %q: %w", hdr.KID, pk.KID, ErrKIDConflict)
 	}
 
-	alg, hash, ecKeySize, err := jwa.SigningParams(pk.Signer)
+	alg, hash, ecKeySize, err := signingParams(pk.Signer)
 	if err != nil {
 		return err
 	}
 
 	// Validate and set header algorithm.
 	if hdr.Alg != "" && hdr.Alg != alg {
-		return fmt.Errorf("key %s vs header %q: %w", alg, hdr.Alg, jose.ErrAlgConflict)
+		return fmt.Errorf("key %s vs header %q: %w", alg, hdr.Alg, ErrAlgConflict)
 	}
 	hdr.Alg = alg
 
@@ -255,8 +251,8 @@ func (s *Signer) Verifier() *Verifier {
 
 // validateSigningKey performs a test sign+verify round-trip to catch bad
 // keys at construction time rather than on first use.
-func validateSigningKey(pk *jwk.PrivateKey, pub *jwk.PublicKey) error {
-	alg, hash, ecKeySize, err := jwa.SigningParams(pk.Signer)
+func validateSigningKey(pk *PrivateKey, pub *PublicKey) error {
+	alg, hash, ecKeySize, err := signingParams(pk.Signer)
 	if err != nil {
 		return err
 	}

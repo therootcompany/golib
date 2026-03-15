@@ -25,14 +25,13 @@ import (
 	jwxjwt "github.com/lestrrat-go/jwx/v3/jwt"
 
 	"github.com/therootcompany/golib/auth/jwt"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
 	"github.com/therootcompany/golib/auth/jwt/tests/testkeys"
 )
 
 // signOurs creates a JWT signed with our library using the given claims.
 func signOurs(t *testing.T, ks testkeys.KeySet, claims jwt.Claims) string {
 	t.Helper()
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{ks.PrivKey})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{ks.PrivKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +70,7 @@ func TestNuance_ClockSkew_GoJose(t *testing.T) {
 	tokenStr := signOurs(t, ks, claims)
 
 	// Our VerifyJWT: signature-only, does NOT check exp.
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 	jws, ourSigErr := verifier.VerifyJWT(tokenStr)
 	t.Logf("  our VerifyJWT (sig only): accepts=%v", ourSigErr == nil)
 
@@ -152,7 +151,7 @@ func TestNuance_ClockSkew_JWX(t *testing.T) {
 	t.Logf("  jwx Parse (no validate): accepts=%v", jwxErrNoval == nil)
 
 	// Our VerifyJWT: always accepts (sig-only).
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 	_, ourErr := verifier.VerifyJWT(tokenStr)
 	t.Logf("  our VerifyJWT (sig only): accepts=%v", ourErr == nil)
 
@@ -211,7 +210,7 @@ func TestNuance_KIDHeader_GoJose(t *testing.T) {
 	t.Logf("  raw key signing: kid in header = %v (header: %s)", hasKID, headerJSON)
 
 	// Our verifier rejects because kid is missing.
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 	_, ourErr := verifier.VerifyJWT(rawToken)
 	t.Logf("  our VerifyJWT:   err = %v", ourErr)
 
@@ -273,7 +272,7 @@ func TestNuance_KIDHeader_JWX(t *testing.T) {
 	_, hasKID := header["kid"]
 	t.Logf("  no KeyIDKey set: kid in header = %v (header: %s)", hasKID, headerJSON)
 
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 	_, ourErr := verifier.VerifyJWT(string(noKIDToken))
 	t.Logf("  our VerifyJWT:   err = %v", ourErr)
 
@@ -328,7 +327,7 @@ func TestNuance_AudienceMarshal(t *testing.T) {
 
 	// Our library: single aud => string, multi aud => array.
 	singleClaims := testkeys.AudienceClaims("aud-test", jwt.Audience{"single"})
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{ks.PrivKey})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{ks.PrivKey})
 	ourSingleTok, _ := signer.SignToString(singleClaims)
 	ourSinglePayload := decodePayload(ourSingleTok)
 	t.Logf("  our lib (single aud): %s", ourSinglePayload)
@@ -364,7 +363,7 @@ func TestNuance_AudienceMarshal(t *testing.T) {
 
 	// All parsers should handle both string and array forms.
 	// Verify our parser handles go-jose's format.
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 	verifiedJWS, err := verifier.VerifyJWT(joseSingleTok)
 	if err != nil {
 		t.Fatalf("our verify of go-jose single aud: %v", err)
@@ -463,7 +462,7 @@ func TestNuance_IssuedAtValidation(t *testing.T) {
 	t.Logf("  go-jose ValidateWithLeeway(0):  rejects=%v", joseErr != nil)
 
 	// Our VerifyJWT: accepts (signature-only, no iat check).
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 	jws, ourSigErr := verifier.VerifyJWT(tokenStr)
 	t.Logf("  our VerifyJWT (sig only):       accepts=%v", ourSigErr == nil)
 

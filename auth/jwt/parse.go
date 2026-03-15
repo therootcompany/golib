@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-package jwk
+package jwt
 
 import (
 	"encoding/json"

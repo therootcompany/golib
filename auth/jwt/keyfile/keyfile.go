@@ -16,87 +16,82 @@
 //
 // The Parse* functions accept raw bytes in the specified format.
 //
-// For JWK JSON format, the Parse functions in the [jwk] package
-// ([jwk.ParsePublicJWK], [jwk.ParsePrivateJWK], [jwk.ParsePublicJWKs])
+// For JWK JSON format, the Parse functions in the [jwt] package
+// ([jwt.ParsePublicJWK], [jwt.ParsePrivateJWK], [jwt.ParsePublicJWKs])
 // can also be used directly.
 //
-// For fetching keys from remote URLs, use [jwk.FetchURL] (JWKS endpoints)
+// For fetching keys from remote URLs, use [jwt.FetchURL] (JWKS endpoints)
 // or fetch the bytes yourself and pass them to Parse*.
 package keyfile
 
 import (
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/therootcompany/golib/auth/jwt/internal/jwa"
-	"github.com/therootcompany/golib/auth/jwt/jose"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
+	"github.com/therootcompany/golib/auth/jwt"
 )
 
 // --- Parse functions (bytes → key) ---
 
 // ParsePublicPEM parses a PEM-encoded public key (SPKI "PUBLIC KEY" or
-// PKCS#1 "RSA PUBLIC KEY") into a [jwk.PublicKey] with auto-computed KID.
-func ParsePublicPEM(data []byte) (*jwk.PublicKey, error) {
+// PKCS#1 "RSA PUBLIC KEY") into a [jwt.PublicKey] with auto-computed KID.
+func ParsePublicPEM(data []byte) (*jwt.PublicKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {
-		return nil, fmt.Errorf("no PEM block found: %w", jose.ErrInvalidKey)
+		return nil, fmt.Errorf("no PEM block found: %w", jwt.ErrInvalidKey)
 	}
 	return parsePublicPEMBlock(block)
 }
 
 // ParsePrivatePEM parses a PEM-encoded private key (PKCS#8 "PRIVATE KEY",
 // PKCS#1 "RSA PRIVATE KEY", or SEC 1 "EC PRIVATE KEY") into a
-// [jwk.PrivateKey] with auto-computed KID.
-func ParsePrivatePEM(data []byte) (*jwk.PrivateKey, error) {
+// [jwt.PrivateKey] with auto-computed KID.
+func ParsePrivatePEM(data []byte) (*jwt.PrivateKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {
-		return nil, fmt.Errorf("no PEM block found: %w", jose.ErrInvalidKey)
+		return nil, fmt.Errorf("no PEM block found: %w", jwt.ErrInvalidKey)
 	}
 	return parsePrivatePEMBlock(block)
 }
 
-// ParsePublicDER parses a DER-encoded public key into a [jwk.PublicKey] with
+// ParsePublicDER parses a DER-encoded public key into a [jwt.PublicKey] with
 // auto-computed KID. It tries SPKI (PKIX) first, then PKCS#1 RSA.
-func ParsePublicDER(data []byte) (*jwk.PublicKey, error) {
+func ParsePublicDER(data []byte) (*jwt.PublicKey, error) {
 	// Try SPKI / PKIX (most common modern format).
 	if pub, err := x509.ParsePKIXPublicKey(data); err == nil {
-		return wrapPublicKey(pub)
+		return jwt.FromPublicKey(pub)
 	}
 	// Try PKCS#1 RSA.
 	if pub, err := x509.ParsePKCS1PublicKey(data); err == nil {
-		return wrapPublicKey(pub)
+		return jwt.FromPublicKey(pub)
 	}
-	return nil, fmt.Errorf("unrecognized DER public key encoding: %w", jose.ErrInvalidKey)
+	return nil, fmt.Errorf("unrecognized DER public key encoding: %w", jwt.ErrInvalidKey)
 }
 
-// ParsePrivateDER parses a DER-encoded private key into a [jwk.PrivateKey]
+// ParsePrivateDER parses a DER-encoded private key into a [jwt.PrivateKey]
 // with auto-computed KID. It tries PKCS#8 first, then SEC 1 EC, then PKCS#1 RSA.
-func ParsePrivateDER(data []byte) (*jwk.PrivateKey, error) {
+func ParsePrivateDER(data []byte) (*jwt.PrivateKey, error) {
 	// Try PKCS#8 (most common modern format, any algorithm).
 	if key, err := x509.ParsePKCS8PrivateKey(data); err == nil {
 		signer, ok := key.(crypto.Signer)
 		if !ok {
-			return nil, fmt.Errorf("PKCS#8 key does not implement crypto.Signer: %w", jose.ErrUnsupportedKeyType)
+			return nil, fmt.Errorf("PKCS#8 key does not implement crypto.Signer: %w", jwt.ErrUnsupportedKeyType)
 		}
-		return wrapPrivateKey(signer)
+		return jwt.FromPrivateKey(signer)
 	}
 	// Try SEC 1 EC.
 	if key, err := x509.ParseECPrivateKey(data); err == nil {
-		return wrapPrivateKey(key)
+		return jwt.FromPrivateKey(key)
 	}
 	// Try PKCS#1 RSA.
 	if key, err := x509.ParsePKCS1PrivateKey(data); err == nil {
-		return wrapPrivateKey(key)
+		return jwt.FromPrivateKey(key)
 	}
-	return nil, fmt.Errorf("unrecognized DER private key encoding: %w", jose.ErrInvalidKey)
+	return nil, fmt.Errorf("unrecognized DER private key encoding: %w", jwt.ErrInvalidKey)
 }
 
 // --- Load functions (source → key) ---
@@ -105,25 +100,25 @@ func ParsePrivateDER(data []byte) (*jwk.PrivateKey, error) {
 // for convenience so that all key-loading functions are available in one place.
 
 // LoadPublicJWK loads a single JWK from a local file.
-// This is a re-export of [jwk.LoadPublicJWK].
-func LoadPublicJWK(source string) (*jwk.PublicKey, error) {
-	return jwk.LoadPublicJWK(source)
+// This is a re-export of [jwt.LoadPublicJWK].
+func LoadPublicJWK(source string) (*jwt.PublicKey, error) {
+	return jwt.LoadPublicJWK(source)
 }
 
 // LoadPublicJWKs loads a JWKS document from a local file.
-// This is a re-export of [jwk.LoadPublicJWKs].
-func LoadPublicJWKs(source string) (jwk.JWKs, error) {
-	return jwk.LoadPublicJWKs(source)
+// This is a re-export of [jwt.LoadPublicJWKs].
+func LoadPublicJWKs(source string) (jwt.JWKs, error) {
+	return jwt.LoadPublicJWKs(source)
 }
 
 // LoadPrivateJWK loads a single private JWK from a local file.
-// This is a re-export of [jwk.LoadPrivateJWK].
-func LoadPrivateJWK(source string) (*jwk.PrivateKey, error) {
-	return jwk.LoadPrivateJWK(source)
+// This is a re-export of [jwt.LoadPrivateJWK].
+func LoadPrivateJWK(source string) (*jwt.PrivateKey, error) {
+	return jwt.LoadPrivateJWK(source)
 }
 
 // LoadPublicPEM loads a PEM-encoded public key from a local file.
-func LoadPublicPEM(source string) (*jwk.PublicKey, error) {
+func LoadPublicPEM(source string) (*jwt.PublicKey, error) {
 	data, err := ReadFile(source)
 	if err != nil {
 		return nil, err
@@ -132,7 +127,7 @@ func LoadPublicPEM(source string) (*jwk.PublicKey, error) {
 }
 
 // LoadPrivatePEM loads a PEM-encoded private key from a local file.
-func LoadPrivatePEM(source string) (*jwk.PrivateKey, error) {
+func LoadPrivatePEM(source string) (*jwt.PrivateKey, error) {
 	data, err := ReadFile(source)
 	if err != nil {
 		return nil, err
@@ -141,7 +136,7 @@ func LoadPrivatePEM(source string) (*jwk.PrivateKey, error) {
 }
 
 // LoadPublicDER loads a DER-encoded public key from a local file.
-func LoadPublicDER(source string) (*jwk.PublicKey, error) {
+func LoadPublicDER(source string) (*jwt.PublicKey, error) {
 	data, err := ReadFile(source)
 	if err != nil {
 		return nil, err
@@ -150,7 +145,7 @@ func LoadPublicDER(source string) (*jwk.PublicKey, error) {
 }
 
 // LoadPrivateDER loads a DER-encoded private key from a local file.
-func LoadPrivateDER(source string) (*jwk.PrivateKey, error) {
+func LoadPrivateDER(source string) (*jwt.PrivateKey, error) {
 	data, err := ReadFile(source)
 	if err != nil {
 		return nil, err
@@ -190,108 +185,53 @@ func fileURIToPath(uri string) string {
 
 // --- Internal helpers ---
 
-// parsePublicPEMBlock parses a decoded PEM block into a [jwk.PublicKey].
-func parsePublicPEMBlock(block *pem.Block) (*jwk.PublicKey, error) {
+// parsePublicPEMBlock parses a decoded PEM block into a [jwt.PublicKey].
+func parsePublicPEMBlock(block *pem.Block) (*jwt.PublicKey, error) {
 	switch block.Type {
 	case "PUBLIC KEY":
 		pub, err := x509.ParsePKIXPublicKey(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parse SPKI public key: %w: %w", jose.ErrInvalidKey, err)
+			return nil, fmt.Errorf("parse SPKI public key: %w: %w", jwt.ErrInvalidKey, err)
 		}
-		return wrapPublicKey(pub)
+		return jwt.FromPublicKey(pub)
 	case "RSA PUBLIC KEY":
 		pub, err := x509.ParsePKCS1PublicKey(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parse PKCS#1 public key: %w: %w", jose.ErrInvalidKey, err)
+			return nil, fmt.Errorf("parse PKCS#1 public key: %w: %w", jwt.ErrInvalidKey, err)
 		}
-		return wrapPublicKey(pub)
+		return jwt.FromPublicKey(pub)
 	default:
-		return nil, fmt.Errorf("PEM block type %q: %w", block.Type, jose.ErrUnsupportedFormat)
+		return nil, fmt.Errorf("PEM block type %q: %w", block.Type, jwt.ErrUnsupportedFormat)
 	}
 }
 
-// parsePrivatePEMBlock parses a decoded PEM block into a [jwk.PrivateKey].
-func parsePrivatePEMBlock(block *pem.Block) (*jwk.PrivateKey, error) {
+// parsePrivatePEMBlock parses a decoded PEM block into a [jwt.PrivateKey].
+func parsePrivatePEMBlock(block *pem.Block) (*jwt.PrivateKey, error) {
 	switch block.Type {
 	case "PRIVATE KEY":
 		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parse PKCS#8 private key: %w: %w", jose.ErrInvalidKey, err)
+			return nil, fmt.Errorf("parse PKCS#8 private key: %w: %w", jwt.ErrInvalidKey, err)
 		}
 		signer, ok := key.(crypto.Signer)
 		if !ok {
-			return nil, fmt.Errorf("PKCS#8 key does not implement crypto.Signer: %w", jose.ErrUnsupportedKeyType)
+			return nil, fmt.Errorf("PKCS#8 key does not implement crypto.Signer: %w", jwt.ErrUnsupportedKeyType)
 		}
-		return wrapPrivateKey(signer)
+		return jwt.FromPrivateKey(signer)
 	case "RSA PRIVATE KEY":
 		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parse PKCS#1 private key: %w: %w", jose.ErrInvalidKey, err)
+			return nil, fmt.Errorf("parse PKCS#1 private key: %w: %w", jwt.ErrInvalidKey, err)
 		}
-		return wrapPrivateKey(key)
+		return jwt.FromPrivateKey(key)
 	case "EC PRIVATE KEY":
 		key, err := x509.ParseECPrivateKey(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parse SEC 1 EC private key: %w: %w", jose.ErrInvalidKey, err)
+			return nil, fmt.Errorf("parse SEC 1 EC private key: %w: %w", jwt.ErrInvalidKey, err)
 		}
-		return wrapPrivateKey(key)
+		return jwt.FromPrivateKey(key)
 	default:
-		return nil, fmt.Errorf("PEM block type %q: %w", block.Type, jose.ErrUnsupportedFormat)
+		return nil, fmt.Errorf("PEM block type %q: %w", block.Type, jwt.ErrUnsupportedFormat)
 	}
 }
 
-// wrapPublicKey wraps a Go crypto public key in a [jwk.PublicKey] with
-// auto-computed KID (RFC 7638 thumbprint) and Alg.
-func wrapPublicKey(pub crypto.PublicKey) (*jwk.PublicKey, error) {
-	cpk, ok := pub.(jwk.CryptoPublicKey)
-	if !ok {
-		return nil, fmt.Errorf("%T: %w", pub, jose.ErrUnsupportedKeyType)
-	}
-
-	pk := &jwk.PublicKey{CryptoPublicKey: cpk}
-
-	// Derive Alg from key type.
-	switch key := pub.(type) {
-	case *ecdsa.PublicKey:
-		ci, err := jwa.ECInfo(key.Curve)
-		if err != nil {
-			return nil, err
-		}
-		pk.Alg = ci.Alg
-	case *rsa.PublicKey:
-		pk.Alg = "RS256"
-	case ed25519.PublicKey:
-		pk.Alg = "EdDSA"
-	default:
-		return nil, fmt.Errorf("%T: %w", pub, jose.ErrUnsupportedKeyType)
-	}
-
-	kid, err := pk.Thumbprint()
-	if err != nil {
-		return nil, fmt.Errorf("compute thumbprint: %w", err)
-	}
-	pk.KID = kid
-
-	return pk, nil
-}
-
-// wrapPrivateKey wraps a [crypto.Signer] in a [jwk.PrivateKey] with
-// auto-computed KID (RFC 7638 thumbprint) and Alg.
-func wrapPrivateKey(signer crypto.Signer) (*jwk.PrivateKey, error) {
-	pk := &jwk.PrivateKey{Signer: signer}
-
-	// Derive Alg from key type.
-	alg, _, _, err := jwa.SigningParams(signer)
-	if err != nil {
-		return nil, err
-	}
-	pk.Alg = alg
-
-	kid, err := pk.Thumbprint()
-	if err != nil {
-		return nil, fmt.Errorf("compute thumbprint: %w", err)
-	}
-	pk.KID = kid
-
-	return pk, nil
-}

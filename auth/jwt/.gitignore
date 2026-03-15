@@ -1,2 +1,4 @@
 # Built binaries
 cmd/jwt/jwt
+/jwt
+/custom-header

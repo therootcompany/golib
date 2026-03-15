@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/auth/jwt"
-	"github.com/therootcompany/golib/auth/jwt/jose"
 
 	rfc "github.com/therootcompany/golib/auth/jwt/examples/rfc-claims"
 )
@@ -37,14 +36,14 @@ func TestRFCValidator(t *testing.T) {
 	// Expired token must still be rejected.
 	expired := minimal
 	expired.Exp = now.Add(-time.Hour).Unix()
-	if _, err := v.Validate(&expired, now); !errors.Is(err, jose.ErrAfterExp) {
+	if _, err := v.Validate(&expired, now); !errors.Is(err, jwt.ErrAfterExp) {
 		t.Fatalf("expected ErrAfterExp, got: %v", err)
 	}
 
 	// Future iat must be rejected.
 	futureIat := minimal
 	futureIat.Iat = now.Add(time.Hour).Unix()
-	if _, err := v.Validate(&futureIat, now); !errors.Is(err, jose.ErrBeforeIat) {
+	if _, err := v.Validate(&futureIat, now); !errors.Is(err, jwt.ErrBeforeIat) {
 		t.Fatalf("expected ErrBeforeIat, got: %v", err)
 	}
 }

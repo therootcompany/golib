@@ -1,10 +1,12 @@
-// Package jwa is the single source of truth for the mapping between
-// key types, JWK/JWS identifiers, signing hashes, and coordinate byte
-// lengths.
+// Copyright 2025 AJ ONeal <aj@therootcompany.com> (https://therootcompany.com)
 //
-// It is internal so that the types and lookup functions do not become
-// part of the public API of jwk or jwt.
-package jwa
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// SPDX-License-Identifier: MPL-2.0
+
+package jwt
 
 import (
 	"crypto"
@@ -13,12 +15,10 @@ import (
 	"crypto/elliptic"
 	"crypto/rsa"
 	"fmt"
-
-	"github.com/therootcompany/golib/auth/jwt/jose"
 )
 
-// CurveInfo holds the JWK/JWS identifiers and parameters for an EC curve.
-type CurveInfo struct {
+// curveInfo holds the JWK/JWS identifiers and parameters for an EC curve.
+type curveInfo struct {
 	Curve   elliptic.Curve // Go curve object
 	Crv     string         // JWK "crv" value: "P-256", "P-384", "P-521"
 	Alg     string         // JWS algorithm: "ES256", "ES384", "ES512"
@@ -26,29 +26,29 @@ type CurveInfo struct {
 	KeySize int            // coordinate byte length: (BitSize+7)/8
 }
 
-// Canonical CurveInfo values — one var per supported curve.
+// Canonical curveInfo values — one var per supported curve.
 var (
-	p256 = CurveInfo{elliptic.P256(), "P-256", "ES256", crypto.SHA256, 32}
-	p384 = CurveInfo{elliptic.P384(), "P-384", "ES384", crypto.SHA384, 48}
-	p521 = CurveInfo{elliptic.P521(), "P-521", "ES512", crypto.SHA512, 66}
+	p256 = curveInfo{elliptic.P256(), "P-256", "ES256", crypto.SHA256, 32}
+	p384 = curveInfo{elliptic.P384(), "P-384", "ES384", crypto.SHA384, 48}
+	p521 = curveInfo{elliptic.P521(), "P-521", "ES512", crypto.SHA512, 66}
 )
 
-// ECInfoForAlg returns the CurveInfo for the given elliptic curve and validates
+// ecInfoForAlg returns the curveInfo for the given elliptic curve and validates
 // that the curve's algorithm matches expectedAlg. This is the verification-side
 // check: the key's curve must produce the algorithm the token claims.
-func ECInfoForAlg(curve elliptic.Curve, expectedAlg string) (CurveInfo, error) {
-	ci, err := ECInfo(curve)
+func ecInfoForAlg(curve elliptic.Curve, expectedAlg string) (curveInfo, error) {
+	ci, err := ecInfo(curve)
 	if err != nil {
 		return ci, err
 	}
 	if ci.Alg != expectedAlg {
-		return CurveInfo{}, fmt.Errorf("key curve %s vs token alg %s: %w", ci.Alg, expectedAlg, jose.ErrAlgConflict)
+		return curveInfo{}, fmt.Errorf("key curve %s vs token alg %s: %w", ci.Alg, expectedAlg, ErrAlgConflict)
 	}
 	return ci, nil
 }
 
-// ECInfo returns the CurveInfo for the given elliptic curve.
-func ECInfo(curve elliptic.Curve) (CurveInfo, error) {
+// ecInfo returns the curveInfo for the given elliptic curve.
+func ecInfo(curve elliptic.Curve) (curveInfo, error) {
 	switch curve {
 	case elliptic.P256():
 		return p256, nil
@@ -57,12 +57,12 @@ func ECInfo(curve elliptic.Curve) (CurveInfo, error) {
 	case elliptic.P521():
 		return p521, nil
 	default:
-		return CurveInfo{}, fmt.Errorf("EC curve %s: %w", curve.Params().Name, jose.ErrUnsupportedCurve)
+		return curveInfo{}, fmt.Errorf("EC curve %s: %w", curve.Params().Name, ErrUnsupportedCurve)
 	}
 }
 
-// ECInfoByCrv returns the CurveInfo for a JWK "crv" string.
-func ECInfoByCrv(crv string) (CurveInfo, error) {
+// ecInfoByCrv returns the curveInfo for a JWK "crv" string.
+func ecInfoByCrv(crv string) (curveInfo, error) {
 	switch crv {
 	case "P-256":
 		return p256, nil
@@ -71,11 +71,11 @@ func ECInfoByCrv(crv string) (CurveInfo, error) {
 	case "P-521":
 		return p521, nil
 	default:
-		return CurveInfo{}, fmt.Errorf("EC crv %q: %w", crv, jose.ErrUnsupportedCurve)
+		return curveInfo{}, fmt.Errorf("EC crv %q: %w", crv, ErrUnsupportedCurve)
 	}
 }
 
-// SigningParams determines the JWS signing parameters for a crypto.Signer.
+// signingParams determines the JWS signing parameters for a crypto.Signer.
 //
 // It type-switches on s.Public() (not on s directly) so that non-standard
 // crypto.Signer implementations (KMS, HSM) work as long as they expose a
@@ -86,10 +86,10 @@ func ECInfoByCrv(crv string) (CurveInfo, error) {
 //   - hash: crypto.Hash for pre-hashing; 0 for Ed25519 (sign raw message)
 //   - ecKeySize: ECDSA coordinate byte length; >0 signals that the
 //     signature needs ASN.1 DER to IEEE P1363 conversion
-func SigningParams(s crypto.Signer) (alg string, hash crypto.Hash, ecKeySize int, err error) {
+func signingParams(s crypto.Signer) (alg string, hash crypto.Hash, ecKeySize int, err error) {
 	switch pub := s.Public().(type) {
 	case *ecdsa.PublicKey:
-		ci, err := ECInfo(pub.Curve)
+		ci, err := ecInfo(pub.Curve)
 		if err != nil {
 			return "", 0, 0, err
 		}
@@ -99,6 +99,6 @@ func SigningParams(s crypto.Signer) (alg string, hash crypto.Hash, ecKeySize int
 	case ed25519.PublicKey:
 		return "EdDSA", 0, 0, nil
 	default:
-		return "", 0, 0, fmt.Errorf("%T: %w", pub, jose.ErrUnsupportedKeyType)
+		return "", 0, 0, fmt.Errorf("%T: %w", pub, ErrUnsupportedKeyType)
 	}
 }

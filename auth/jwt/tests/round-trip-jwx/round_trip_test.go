@@ -19,7 +19,6 @@ import (
 	jwxjwt "github.com/lestrrat-go/jwx/v3/jwt"
 
 	"github.com/therootcompany/golib/auth/jwt"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
 	"github.com/therootcompany/golib/auth/jwt/tests/testkeys"
 )
 
@@ -47,7 +46,7 @@ func jwxAlg(name string) jwa.SignatureAlgorithm {
 func assertOurSignJWXVerify(t *testing.T, ks testkeys.KeySet, sub string) {
 	t.Helper()
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{ks.PrivKey})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{ks.PrivKey})
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -100,7 +99,7 @@ func assertJWXSignOurVerify(t *testing.T, ks testkeys.KeySet, sub string) {
 		t.Fatalf("jwx jwt.Sign: %v", err)
 	}
 
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 	verifiedJWS, err := verifier.VerifyJWT(string(signed))
 	if err != nil {
 		t.Fatalf("our verify: %v", err)
@@ -179,7 +178,7 @@ func TestJWKInterop_OurJSONToJWX(t *testing.T) {
 			}
 
 			// Verify a token signed by us, using the jwx-parsed key.
-			signer, err := jwt.NewSigner([]jwk.PrivateKey{ks.PrivKey})
+			signer, err := jwt.NewSigner([]jwt.PrivateKey{ks.PrivKey})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -226,7 +225,7 @@ func TestJWKInterop_OurJSONToJWX(t *testing.T) {
 				t.Fatalf("jwx sign with our-JSON-parsed key: %v", err)
 			}
 
-			verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+			verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 			if _, err := verifier.VerifyJWT(string(signed)); err != nil {
 				t.Fatalf("our verify: %v", err)
 			}
@@ -251,13 +250,13 @@ func TestJWKInterop_JWXJSONToOur(t *testing.T) {
 			}
 
 			// Parse with our library.
-			var recovered jwk.PublicKey
+			var recovered jwt.PublicKey
 			if err := json.Unmarshal(jwxJSON, &recovered); err != nil {
 				t.Fatalf("our unmarshal of jwx JSON: %v", err)
 			}
 
 			// Sign with our signer, verify with the recovered key.
-			signer, err := jwt.NewSigner([]jwk.PrivateKey{ks.PrivKey})
+			signer, err := jwt.NewSigner([]jwt.PrivateKey{ks.PrivKey})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -265,7 +264,7 @@ func TestJWKInterop_JWXJSONToOur(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			verifier, _ := jwt.NewVerifier([]jwk.PublicKey{recovered})
+			verifier, _ := jwt.NewVerifier([]jwt.PublicKey{recovered})
 			if _, err := verifier.VerifyJWT(tokenStr); err != nil {
 				t.Fatalf("verify with jwx-JSON-parsed key: %v", err)
 			}
@@ -308,7 +307,7 @@ func TestThumbprintConsistency_JWX(t *testing.T) {
 
 func TestJWKSInterop_OurToJWX(t *testing.T) {
 	// Build a signer with all 5 key types.
-	var keys []jwk.PrivateKey
+	var keys []jwt.PrivateKey
 	var sets []testkeys.KeySet
 	for _, ag := range testkeys.AllAlgorithms() {
 		ks := ag.Generate("jwks-" + ag.Name)
@@ -373,7 +372,7 @@ func TestJWKSInterop_JWXToOur(t *testing.T) {
 	}
 
 	// Parse with our library.
-	var ourJWKS jwk.JWKs
+	var ourJWKS jwt.JWKs
 	if err := json.Unmarshal(jwksData, &ourJWKS); err != nil {
 		t.Fatalf("our unmarshal of jwx JWKS: %v", err)
 	}
@@ -406,7 +405,7 @@ func TestAudienceStringInterop_JWX(t *testing.T) {
 	ks := testkeys.GenerateEdDSA("aud-test")
 
 	// Our library: single aud marshals as plain string "single-aud".
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{ks.PrivKey})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{ks.PrivKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +435,7 @@ func TestAudienceStringInterop_JWX(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 	verifiedJWS, err := verifier.VerifyJWT(string(signed))
 	if err != nil {
 		t.Fatal(err)
@@ -451,7 +450,7 @@ func TestAudienceStringInterop_JWX(t *testing.T) {
 func TestAudienceArrayInterop_JWX(t *testing.T) {
 	ks := testkeys.GenerateEdDSA("aud-arr")
 
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{ks.PrivKey})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{ks.PrivKey})
 	claims := testkeys.AudienceClaims("aud-arr", jwt.Audience{"aud1", "aud2"})
 	tokenStr, _ := signer.SignToString(claims)
 
@@ -469,7 +468,7 @@ func TestAudienceArrayInterop_JWX(t *testing.T) {
 
 func TestCustomClaimsInterop_JWX(t *testing.T) {
 	ks := testkeys.GenerateEdDSA("custom")
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{ks.PrivKey})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{ks.PrivKey})
 	claims := &testkeys.CustomClaims{
 		IDTokenClaims: *testkeys.TestClaims("custom-user"),
 		Email:         "user@example.com",
@@ -526,7 +525,7 @@ func TestNumericDatePrecision_JWX(t *testing.T) {
 		Exp: wantExp,
 		Iat: wantIat,
 	}
-	signer, _ := jwt.NewSigner([]jwk.PrivateKey{ks.PrivKey})
+	signer, _ := jwt.NewSigner([]jwt.PrivateKey{ks.PrivKey})
 	tokenStr, _ := signer.SignToString(claims)
 
 	// Disable validation - this test is about timestamp precision, not
@@ -558,7 +557,7 @@ func TestNumericDatePrecision_JWX(t *testing.T) {
 	jwxTok.Set(jwxjwt.IssuedAtKey, time.Unix(wantIat2, 0))
 	signed, _ := jwxjwt.Sign(jwxTok, jwxjwt.WithKey(jwa.EdDSA(), jwxKey))
 
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 	verifiedJWS, _ := verifier.VerifyJWT(string(signed))
 	var decoded jwt.IDTokenClaims
 	jwt.UnmarshalClaims(verifiedJWS, &decoded)
@@ -589,7 +588,7 @@ func TestStress_JWX(t *testing.T) {
 				sub := fmt.Sprintf("stress-%d", i)
 
 				// Our sign, jwx verify.
-				signer, err := jwt.NewSigner([]jwk.PrivateKey{ks.PrivKey})
+				signer, err := jwt.NewSigner([]jwt.PrivateKey{ks.PrivKey})
 				if err != nil {
 					t.Fatalf("iter %d: NewSigner: %v", i, err)
 				}
@@ -612,7 +611,7 @@ func TestStress_JWX(t *testing.T) {
 				if err != nil {
 					t.Fatalf("iter %d: jwx sign: %v", i, err)
 				}
-				verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+				verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ks.PubKey})
 				if _, err := verifier.VerifyJWT(string(signed)); err != nil {
 					t.Fatalf("iter %d: our verify: %v", i, err)
 				}

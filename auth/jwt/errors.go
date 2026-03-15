@@ -1,13 +1,4 @@
-// Package jose holds sentinel errors shared across the jwt, jwk, and
-// internal jwa packages. It is the leaf of the dependency graph (no
-// imports of its siblings), so every package in the module can import
-// it without creating cycles.
-//
-// All sentinel errors for the module live here. Use [errors.Is] to
-// check for specific sentinels:
-//
-//	if errors.Is(err, jose.ErrAfterExp) { /* token expired */ }
-package jose
+package jwt
 
 import (
 	"errors"
@@ -15,7 +6,7 @@ import (
 )
 
 // --- Decode errors ---
-// Returned by jwt.Decode and jwt.UnmarshalClaims when the compact token
+// Returned by [Decode] and [UnmarshalClaims] when the compact token
 // or its components are malformed.
 var (
 	ErrMalformedToken = errors.New("malformed token")
@@ -32,7 +23,7 @@ var (
 )
 
 // --- Verification errors ---
-// Returned by jwt.Verifier.Verify and jwt.Verifier.VerifyJWT.
+// Returned by [Verifier.Verify] and [Verifier.VerifyJWT].
 var (
 	ErrMissingKID   = errors.New("missing kid")
 	ErrUnknownKID   = errors.New("unknown kid")
@@ -50,14 +41,14 @@ var (
 )
 
 // --- Signing errors ---
-// Returned by jwt.NewSigner, jwt.Signer.SignJWS, and jwt.Signer.Sign.
+// Returned by [NewSigner], [Signer.SignJWS], and [Signer.Sign].
 var (
 	ErrNoSigningKey = errors.New("no signing key")
 )
 
 // --- Key parsing errors ---
-// Returned by jwk.PublicKey.UnmarshalJSON, jwk.PrivateKey.UnmarshalJSON,
-// jwk.ReadFile, jwk.Parse*, and the keyfile.Parse*/keyfile.Load* functions.
+// Returned by [PublicKey.UnmarshalJSON], [PrivateKey.UnmarshalJSON],
+// Parse*, Load*, and the keyfile.Parse*/keyfile.Load* functions.
 var (
 	ErrInvalidKey        = errors.New("invalid key")
 	ErrKeyTooSmall       = fmt.Errorf("%w: key too small", ErrInvalidKey)
@@ -74,21 +65,21 @@ var (
 )
 
 // --- Fetch errors ---
-// Returned by jwk.Fetch, jwk.FetchURL, jwk.FetchOIDC, and jwk.FetchOAuth2.
+// Returned by [Fetch], [FetchURL], [FetchOIDC], and [FetchOAuth2].
 var (
 	ErrFetchFailed      = errors.New("fetch failed")
 	ErrUnexpectedStatus = fmt.Errorf("%w: unexpected status", ErrFetchFailed)
 )
 
 // --- Validation errors ---
-// Returned by jwt.IDTokenValidator.Validate and jwt.AccessTokenValidator.Validate.
+// Returned by [IDTokenValidator.Validate] and [AccessTokenValidator.Validate].
 //
 // Validate returns all failures at once via errors.Join, so callers can
 // check for specific issues with errors.Is:
 //
 //	err := v.Validate(&claims, time.Now())
-//	if errors.Is(err, jose.ErrAfterExp) { /* token expired */ }
-//	if errors.Is(err, jose.ErrInvalidClaim) { /* any value error */ }
+//	if errors.Is(err, jwt.ErrAfterExp) { /* token expired */ }
+//	if errors.Is(err, jwt.ErrInvalidClaim) { /* any value error */ }
 //
 // The time-based sentinels (ErrAfterExp, ErrBeforeNbf, etc.) wrap
 // ErrInvalidClaim, so a single errors.Is(err, ErrInvalidClaim) check

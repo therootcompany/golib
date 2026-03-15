@@ -13,32 +13,30 @@ import (
 	"testing"
 
 	"github.com/therootcompany/golib/auth/jwt"
-	"github.com/therootcompany/golib/auth/jwt/jose"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 // --- JWK parsing edge cases ---
 
 func TestJWKMissingKty(t *testing.T) {
 	data := []byte(`{"kid":"test"}`)
-	var pk jwk.PublicKey
+	var pk jwt.PublicKey
 	err := pk.UnmarshalJSON(data)
 	if err == nil {
 		t.Fatal("expected error for missing kty")
 	}
-	if !errors.Is(err, jose.ErrUnsupportedKeyType) {
+	if !errors.Is(err, jwt.ErrUnsupportedKeyType) {
 		t.Fatalf("expected ErrUnsupportedKeyType, got: %v", err)
 	}
 }
 
 func TestJWKUnknownKty(t *testing.T) {
 	data := []byte(`{"kty":"MAGIC","kid":"test"}`)
-	var pk jwk.PublicKey
+	var pk jwt.PublicKey
 	err := pk.UnmarshalJSON(data)
 	if err == nil {
 		t.Fatal("expected error for unknown kty")
 	}
-	if !errors.Is(err, jose.ErrUnsupportedKeyType) {
+	if !errors.Is(err, jwt.ErrUnsupportedKeyType) {
 		t.Fatalf("expected ErrUnsupportedKeyType, got: %v", err)
 	}
 }
@@ -49,18 +47,18 @@ func TestPrivateKeyMissingD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pub := jwk.PublicKey{CryptoPublicKey: &ecKey.PublicKey, KID: "test"}
+	pub := jwt.PublicKey{CryptoPublicKey: &ecKey.PublicKey, KID: "test"}
 	pubJSON, err := json.Marshal(pub)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var pk jwk.PrivateKey
+	var pk jwt.PrivateKey
 	err = pk.UnmarshalJSON(pubJSON)
 	if err == nil {
 		t.Fatal("expected error for missing d field")
 	}
-	if !errors.Is(err, jose.ErrMissingKeyData) {
+	if !errors.Is(err, jwt.ErrMissingKeyData) {
 		t.Fatalf("expected ErrMissingKeyData, got: %v", err)
 	}
 }
@@ -84,12 +82,12 @@ func TestRSAKeyTooSmall(t *testing.T) {
 				"e":   "AQAB",
 			})
 
-			var decoded jwk.PublicKey
+			var decoded jwt.PublicKey
 			err := decoded.UnmarshalJSON(data)
 			if err == nil {
 				t.Fatal("expected error for all-zeros RSA modulus")
 			}
-			if !errors.Is(err, jose.ErrKeyTooSmall) {
+			if !errors.Is(err, jwt.ErrKeyTooSmall) {
 				t.Fatalf("expected ErrKeyTooSmall, got: %v", err)
 			}
 		})
@@ -118,12 +116,12 @@ func TestRSADegenerateExponent(t *testing.T) {
 				"e":   base64.RawURLEncoding.EncodeToString(eBytes),
 			})
 
-			var pk jwk.PublicKey
+			var pk jwt.PublicKey
 			err := pk.UnmarshalJSON(data)
 			if err == nil {
 				t.Fatal("expected error for degenerate RSA exponent")
 			}
-			if !errors.Is(err, jose.ErrInvalidKey) {
+			if !errors.Is(err, jwt.ErrInvalidKey) {
 				t.Fatalf("expected ErrInvalidKey, got: %v", err)
 			}
 		})
@@ -141,12 +139,12 @@ func TestRSAEmptyFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, _ := json.Marshal(tt.jwk)
-			var pk jwk.PublicKey
+			var pk jwt.PublicKey
 			err := pk.UnmarshalJSON(data)
 			if err == nil {
 				t.Fatal("expected error for empty RSA field")
 			}
-			if !errors.Is(err, jose.ErrInvalidKey) {
+			if !errors.Is(err, jwt.ErrInvalidKey) {
 				t.Fatalf("expected ErrInvalidKey, got: %v", err)
 			}
 		})
@@ -171,12 +169,12 @@ func TestEd25519WrongKeySize(t *testing.T) {
 				"x":   base64.RawURLEncoding.EncodeToString(x),
 			})
 
-			var pk jwk.PublicKey
+			var pk jwt.PublicKey
 			err := pk.UnmarshalJSON(data)
 			if err == nil {
 				t.Fatalf("expected error for Ed25519 key size %d", tt.size)
 			}
-			if !errors.Is(err, jose.ErrInvalidKey) {
+			if !errors.Is(err, jwt.ErrInvalidKey) {
 				t.Fatalf("expected ErrInvalidKey, got: %v", err)
 			}
 		})
@@ -195,18 +193,18 @@ func TestEd25519AllZerosKey(t *testing.T) {
 		"x":   base64.RawURLEncoding.EncodeToString(x),
 	})
 
-	var pk jwk.PublicKey
+	var pk jwt.PublicKey
 	err := pk.UnmarshalJSON(data)
 	if err != nil {
 		t.Fatalf("all-zeros Ed25519 key should parse: %v", err)
 	}
 
 	// Verify with this key should reject any real signature
-	realKey, err := jwk.NewPrivateKey()
+	realKey, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{*realKey})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{*realKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +222,7 @@ func TestEd25519AllZerosKey(t *testing.T) {
 	}
 
 	// Change the kid in the header to match our zero key
-	zeroVerifier, _ := jwt.NewVerifier([]jwk.PublicKey{pk})
+	zeroVerifier, _ := jwt.NewVerifier([]jwt.PublicKey{pk})
 	// The KID won't match, but let's verify that the system handles it
 	err = zeroVerifier.Verify(jws)
 	if err == nil {
@@ -239,12 +237,12 @@ func TestOKPWrongCrv(t *testing.T) {
 		"x":   base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
 	})
 
-	var pk jwk.PublicKey
+	var pk jwt.PublicKey
 	err := pk.UnmarshalJSON(data)
 	if err == nil {
 		t.Fatal("expected error for X25519 crv")
 	}
-	if !errors.Is(err, jose.ErrUnsupportedCurve) {
+	if !errors.Is(err, jwt.ErrUnsupportedCurve) {
 		t.Fatalf("expected ErrUnsupportedCurve, got: %v", err)
 	}
 }
@@ -257,12 +255,12 @@ func TestOKPPrivateWrongCrv(t *testing.T) {
 		"d":   base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
 	})
 
-	var pk jwk.PrivateKey
+	var pk jwt.PrivateKey
 	err := pk.UnmarshalJSON(data)
 	if err == nil {
 		t.Fatal("expected error for X25519 crv on private key")
 	}
-	if !errors.Is(err, jose.ErrUnsupportedCurve) {
+	if !errors.Is(err, jwt.ErrUnsupportedCurve) {
 		t.Fatalf("expected ErrUnsupportedCurve, got: %v", err)
 	}
 }
@@ -291,12 +289,12 @@ func TestECCoordinatesTooLong(t *testing.T) {
 				"y":   base64.RawURLEncoding.EncodeToString(make([]byte, tt.ySize)),
 			})
 
-			var pk jwk.PublicKey
+			var pk jwt.PublicKey
 			err := pk.UnmarshalJSON(data)
 			if err == nil {
 				t.Fatal("expected error for oversized EC coordinates")
 			}
-			if !errors.Is(err, jose.ErrInvalidKey) {
+			if !errors.Is(err, jwt.ErrInvalidKey) {
 				t.Fatalf("expected ErrInvalidKey, got: %v", err)
 			}
 		})
@@ -311,12 +309,12 @@ func TestECUnsupportedCurve(t *testing.T) {
 		"y":   base64.RawURLEncoding.EncodeToString(make([]byte, 24)),
 	})
 
-	var pk jwk.PublicKey
+	var pk jwt.PublicKey
 	err := pk.UnmarshalJSON(data)
 	if err == nil {
 		t.Fatal("expected error for P-192 curve")
 	}
-	if !errors.Is(err, jose.ErrUnsupportedCurve) {
+	if !errors.Is(err, jwt.ErrUnsupportedCurve) {
 		t.Fatalf("expected ErrUnsupportedCurve, got: %v", err)
 	}
 }
@@ -338,12 +336,12 @@ func TestEd25519PrivateWrongSeedSize(t *testing.T) {
 				"d":   base64.RawURLEncoding.EncodeToString(make([]byte, tt.size)),
 			})
 
-			var pk jwk.PrivateKey
+			var pk jwt.PrivateKey
 			err := pk.UnmarshalJSON(data)
 			if err == nil {
 				t.Fatalf("expected error for seed size %d", tt.size)
 			}
-			if !errors.Is(err, jose.ErrInvalidKey) {
+			if !errors.Is(err, jwt.ErrInvalidKey) {
 				t.Fatalf("expected ErrInvalidKey, got: %v", err)
 			}
 		})
@@ -364,12 +362,12 @@ func TestInvalidBase64Fields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, _ := json.Marshal(tt.jwk)
-			var pk jwk.PublicKey
+			var pk jwt.PublicKey
 			err := pk.UnmarshalJSON(data)
 			if err == nil {
 				t.Fatal("expected error for invalid base64")
 			}
-			if !errors.Is(err, jose.ErrInvalidKey) {
+			if !errors.Is(err, jwt.ErrInvalidKey) {
 				t.Fatalf("expected ErrInvalidKey, got: %v", err)
 			}
 		})
@@ -402,12 +400,12 @@ func TestInvalidBase64PrivateFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, _ := json.Marshal(tt.jwk)
-			var pk jwk.PrivateKey
+			var pk jwt.PrivateKey
 			err := pk.UnmarshalJSON(data)
 			if err == nil {
 				t.Fatal("expected error for invalid base64 in private field")
 			}
-			if !errors.Is(err, jose.ErrInvalidKey) {
+			if !errors.Is(err, jwt.ErrInvalidKey) {
 				t.Fatalf("expected ErrInvalidKey, got: %v", err)
 			}
 		})
@@ -419,12 +417,12 @@ func TestInvalidBase64PrivateFields(t *testing.T) {
 func TestVerifyWrongKeyTypeForAlg(t *testing.T) {
 	// Sign with Ed25519, then try to verify with an RSA key
 	// that has the same KID
-	edKey, err := jwk.NewPrivateKey()
+	edKey, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{*edKey})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{*edKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,12 +438,12 @@ func TestVerifyWrongKeyTypeForAlg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rsaPub := jwk.PublicKey{
+	rsaPub := jwt.PublicKey{
 		CryptoPublicKey: &rsaKey.PublicKey,
 		KID:             edKey.KID, // same KID
 	}
 
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{rsaPub})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{rsaPub})
 	jws, err := jwt.Decode(tokenStr)
 	if err != nil {
 		t.Fatal(err)
@@ -454,19 +452,19 @@ func TestVerifyWrongKeyTypeForAlg(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error: wrong key type for EdDSA alg")
 	}
-	if !errors.Is(err, jose.ErrAlgConflict) {
+	if !errors.Is(err, jwt.ErrAlgConflict) {
 		t.Fatalf("expected ErrAlgConflict, got: %v", err)
 	}
 }
 
 func TestVerifyZeroLengthSignature(t *testing.T) {
 	// Create a valid token then replace the signature with empty
-	key, err := jwk.NewPrivateKey()
+	key, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{*key})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{*key})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +488,7 @@ func TestVerifyZeroLengthSignature(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for zero-length signature")
 	}
-	if !errors.Is(err, jose.ErrSignatureInvalid) {
+	if !errors.Is(err, jwt.ErrSignatureInvalid) {
 		t.Fatalf("expected ErrSignatureInvalid, got: %v", err)
 	}
 }
@@ -501,8 +499,8 @@ func TestVerifyECDSAWrongSigLength(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pk := jwk.PrivateKey{Signer: ecKey}
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{pk})
+	pk := jwt.PrivateKey{Signer: ecKey}
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{pk})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,18 +526,18 @@ func TestVerifyECDSAWrongSigLength(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for wrong ECDSA signature length")
 	}
-	if !errors.Is(err, jose.ErrSignatureInvalid) {
+	if !errors.Is(err, jwt.ErrSignatureInvalid) {
 		t.Fatalf("expected ErrSignatureInvalid, got: %v", err)
 	}
 }
 
 func TestVerifyUnsupportedAlg(t *testing.T) {
 	// Build a token with an unsupported alg header
-	key, err := jwk.NewPrivateKey()
+	key, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{*key})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{*key})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +566,7 @@ func TestVerifyUnsupportedAlg(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported alg")
 	}
-	if !errors.Is(err, jose.ErrUnsupportedAlg) {
+	if !errors.Is(err, jwt.ErrUnsupportedAlg) {
 		t.Fatalf("expected ErrUnsupportedAlg, got: %v", err)
 	}
 }
@@ -577,11 +575,11 @@ func TestVerifyUnsupportedAlg(t *testing.T) {
 // via fallthrough. A tampered header (different signing input) still fails
 // with ErrSignatureInvalid, but the lookup itself does not reject the token.
 func TestVerifyMissingKID(t *testing.T) {
-	key, err := jwk.NewPrivateKey()
+	key, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{*key})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{*key})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +609,7 @@ func TestVerifyMissingKID(t *testing.T) {
 		t.Fatal("expected error for tampered header")
 	}
 	// With no KID, all keys are tried — fails with signature invalid, not missing KID.
-	if !errors.Is(err, jose.ErrSignatureInvalid) {
+	if !errors.Is(err, jwt.ErrSignatureInvalid) {
 		t.Fatalf("expected ErrSignatureInvalid, got: %v", err)
 	}
 }
@@ -621,7 +619,7 @@ func TestDecodeEmptyToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty token")
 	}
-	if !errors.Is(err, jose.ErrMalformedToken) {
+	if !errors.Is(err, jwt.ErrMalformedToken) {
 		t.Fatalf("expected ErrMalformedToken, got: %v", err)
 	}
 }
@@ -631,7 +629,7 @@ func TestDecodeOnePart(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for single-part token")
 	}
-	if !errors.Is(err, jose.ErrMalformedToken) {
+	if !errors.Is(err, jwt.ErrMalformedToken) {
 		t.Fatalf("expected ErrMalformedToken, got: %v", err)
 	}
 }
@@ -641,7 +639,7 @@ func TestDecodeFourParts(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for four-part token")
 	}
-	if !errors.Is(err, jose.ErrMalformedToken) {
+	if !errors.Is(err, jwt.ErrMalformedToken) {
 		t.Fatalf("expected ErrMalformedToken, got: %v", err)
 	}
 }
@@ -668,12 +666,12 @@ func TestRSAPrivateKeyTooSmall(t *testing.T) {
 				"d":   base64.RawURLEncoding.EncodeToString(d),
 			})
 
-			var decoded jwk.PrivateKey
+			var decoded jwt.PrivateKey
 			err := decoded.UnmarshalJSON(data)
 			if err == nil {
 				t.Fatal("expected error for all-zeros RSA private key")
 			}
-			if !errors.Is(err, jose.ErrKeyTooSmall) {
+			if !errors.Is(err, jwt.ErrKeyTooSmall) {
 				t.Fatalf("expected ErrKeyTooSmall, got: %v", err)
 			}
 		})
@@ -683,12 +681,12 @@ func TestRSAPrivateKeyTooSmall(t *testing.T) {
 // --- Thumbprint edge cases ---
 
 func TestThumbprintNilKey(t *testing.T) {
-	pk := jwk.PublicKey{} // nil CryptoPublicKey
+	pk := jwt.PublicKey{} // nil CryptoPublicKey
 	_, err := pk.Thumbprint()
 	if err == nil {
 		t.Fatal("expected error for nil key thumbprint")
 	}
-	if !errors.Is(err, jose.ErrUnsupportedKeyType) {
+	if !errors.Is(err, jwt.ErrUnsupportedKeyType) {
 		t.Fatalf("expected ErrUnsupportedKeyType, got: %v", err)
 	}
 }

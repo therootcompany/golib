@@ -34,7 +34,6 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/auth/jwt"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 func main() {
@@ -413,19 +412,19 @@ func looksLikeURL(s string) bool {
 
 // tryDiscovery attempts OIDC then OAuth2 discovery from an issuer URL.
 // Returns any keys found, the JWKS URL (if discovered), and any error.
-func tryDiscovery(issuer string) (keys []jwk.PublicKey, jwksURL string, err error) {
+func tryDiscovery(issuer string) (keys []jwt.PublicKey, jwksURL string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Try OIDC first.
-	keys, err = jwk.FetchOIDC(ctx, issuer, nil)
+	keys, err = jwt.FetchOIDC(ctx, issuer, nil)
 	if err == nil && len(keys) > 0 {
 		jwksURL = strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration"
 		return keys, jwksURL, nil
 	}
 
 	// Try OAuth2.
-	keys, err = jwk.FetchOAuth2(ctx, issuer, nil)
+	keys, err = jwt.FetchOAuth2(ctx, issuer, nil)
 	if err == nil && len(keys) > 0 {
 		jwksURL = strings.TrimRight(issuer, "/") + "/.well-known/oauth-authorization-server"
 		return keys, jwksURL, nil
@@ -433,7 +432,7 @@ func tryDiscovery(issuer string) (keys []jwk.PublicKey, jwksURL string, err erro
 
 	// Try direct JWKS at issuer/.well-known/jwks.json.
 	directURL := strings.TrimRight(issuer, "/") + "/.well-known/jwks.json"
-	keys, _, fetchErr := jwk.FetchURL(ctx, directURL, nil)
+	keys, _, fetchErr := jwt.FetchURL(ctx, directURL, nil)
 	if fetchErr == nil && len(keys) > 0 {
 		return keys, directURL, nil
 	}
@@ -592,12 +591,12 @@ func cmdKeygen(args []string) error {
 		return err
 	}
 
-	var pk *jwk.PrivateKey
+	var pk *jwt.PrivateKey
 	var err error
 
 	switch *alg {
 	case "EdDSA":
-		pk, err = jwk.NewPrivateKey()
+		pk, err = jwt.NewPrivateKey()
 	case "ES256":
 		pk, err = keygenEC(elliptic.P256())
 	case "ES384":
@@ -637,12 +636,12 @@ func cmdKeygen(args []string) error {
 	return nil
 }
 
-func keygenEC(curve elliptic.Curve) (*jwk.PrivateKey, error) {
+func keygenEC(curve elliptic.Curve) (*jwt.PrivateKey, error) {
 	priv, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	pk := &jwk.PrivateKey{Signer: priv}
+	pk := &jwt.PrivateKey{Signer: priv}
 	kid, err := pk.Thumbprint()
 	if err != nil {
 		return nil, fmt.Errorf("compute thumbprint: %w", err)
@@ -651,12 +650,12 @@ func keygenEC(curve elliptic.Curve) (*jwk.PrivateKey, error) {
 	return pk, nil
 }
 
-func keygenRSA() (*jwk.PrivateKey, error) {
+func keygenRSA() (*jwt.PrivateKey, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
 	}
-	pk := &jwk.PrivateKey{Signer: priv}
+	pk := &jwt.PrivateKey{Signer: priv}
 	kid, err := pk.Thumbprint()
 	if err != nil {
 		return nil, fmt.Errorf("compute thumbprint: %w", err)
@@ -714,16 +713,16 @@ func readSource(source string) ([]byte, error) {
 // The source can be a file path or inline JWK/JWKS JSON.
 //
 // Accepts both a single JWK {"kty":..., "d":...} and a JWKS {"keys":[...]}.
-func loadPrivateKeys(source string) ([]jwk.PrivateKey, error) {
+func loadPrivateKeys(source string) ([]jwt.PrivateKey, error) {
 	data, err := readSource(source)
 	if err != nil {
 		return nil, err
 	}
 
 	// Try as single private key JWK.
-	var pk jwk.PrivateKey
+	var pk jwt.PrivateKey
 	if err := json.Unmarshal(data, &pk); err == nil {
-		return []jwk.PrivateKey{pk}, nil
+		return []jwt.PrivateKey{pk}, nil
 	}
 
 	// Try as JWKS with private keys.
@@ -731,9 +730,9 @@ func loadPrivateKeys(source string) ([]jwk.PrivateKey, error) {
 		Keys []json.RawMessage `json:"keys"`
 	}
 	if err := json.Unmarshal(data, &rawKeys); err == nil && len(rawKeys.Keys) > 0 {
-		var keys []jwk.PrivateKey
+		var keys []jwt.PrivateKey
 		for i, raw := range rawKeys.Keys {
-			var k jwk.PrivateKey
+			var k jwt.PrivateKey
 			if err := json.Unmarshal(raw, &k); err != nil {
 				return nil, fmt.Errorf("key[%d]: %w", i, err)
 			}
@@ -749,12 +748,12 @@ func loadPrivateKeys(source string) ([]jwk.PrivateKey, error) {
 // The source can be a URL (https://), a file path, or inline JWK/JWKS JSON.
 //
 // Accepts both a single JWK {"kty":...} and a JWKS {"keys":[...]}.
-func loadPublicKeys(source string) ([]jwk.PublicKey, error) {
+func loadPublicKeys(source string) ([]jwt.PublicKey, error) {
 	// URL: fetch remotely.
 	if strings.HasPrefix(source, "https://") || strings.HasPrefix(source, "http://") {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		keys, _, err := jwk.FetchURL(ctx, source, nil)
+		keys, _, err := jwt.FetchURL(ctx, source, nil)
 		if err != nil {
 			return nil, fmt.Errorf("fetch keys from %s: %w", source, err)
 		}
@@ -767,13 +766,13 @@ func loadPublicKeys(source string) ([]jwk.PublicKey, error) {
 	}
 
 	// Try as single public key JWK.
-	var pk jwk.PublicKey
+	var pk jwt.PublicKey
 	if err := json.Unmarshal(data, &pk); err == nil && pk.CryptoPublicKey != nil {
-		return []jwk.PublicKey{pk}, nil
+		return []jwt.PublicKey{pk}, nil
 	}
 
 	// Try as JWKS.
-	var jwks jwk.JWKs
+	var jwks jwt.JWKs
 	if err := json.Unmarshal(data, &jwks); err == nil && len(jwks.Keys) > 0 {
 		return jwks.Keys, nil
 	}
@@ -782,12 +781,12 @@ func loadPublicKeys(source string) ([]jwk.PublicKey, error) {
 }
 
 // loadPublicKeysFromPrivate loads private keys and derives public keys from them.
-func loadPublicKeysFromPrivate(source string) ([]jwk.PublicKey, error) {
+func loadPublicKeysFromPrivate(source string) ([]jwt.PublicKey, error) {
 	privKeys, err := loadPrivateKeys(source)
 	if err != nil {
 		return nil, err
 	}
-	pubs := make([]jwk.PublicKey, len(privKeys))
+	pubs := make([]jwt.PublicKey, len(privKeys))
 	for i := range privKeys {
 		pub, err := privKeys[i].PublicKey()
 		if err != nil {

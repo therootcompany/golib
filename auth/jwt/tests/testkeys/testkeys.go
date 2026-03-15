@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/auth/jwt"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 // TestClaims returns a fresh IDTokenClaims with iss, sub, exp, and iat set.
@@ -73,8 +72,8 @@ func (r *hashReader) Read(p []byte) (int, error) {
 // KeySet bundles a generated key in all the forms interop tests need:
 // our library's wrappers, the raw Go crypto types, and metadata.
 type KeySet struct {
-	PrivKey jwk.PrivateKey // our library's key wrapper
-	PubKey  jwk.PublicKey  // our library's public key wrapper
+	PrivKey jwt.PrivateKey // our library's key wrapper
+	PubKey  jwt.PublicKey  // our library's public key wrapper
 	RawPriv any            // *ecdsa.PrivateKey | *rsa.PrivateKey | ed25519.PrivateKey
 	RawPub  any            // *ecdsa.PublicKey | *rsa.PublicKey | ed25519.PublicKey
 	KID     string
@@ -89,8 +88,8 @@ func GenerateEdDSA(kid string) KeySet {
 	}
 	pub := priv.Public().(ed25519.PublicKey)
 	return KeySet{
-		PrivKey: jwk.PrivateKey{KID: kid, Signer: priv},
-		PubKey:  jwk.PublicKey{CryptoPublicKey: pub, KID: kid},
+		PrivKey: jwt.PrivateKey{KID: kid, Signer: priv},
+		PubKey:  jwt.PublicKey{CryptoPublicKey: pub, KID: kid},
 		RawPriv: priv, RawPub: pub,
 		KID: kid, AlgName: "EdDSA",
 	}
@@ -111,8 +110,8 @@ func generateEC(kid string, curve elliptic.Curve, alg string) KeySet {
 		panic("generateEC " + alg + ": " + err.Error())
 	}
 	return KeySet{
-		PrivKey: jwk.PrivateKey{KID: kid, Signer: priv},
-		PubKey:  jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
+		PrivKey: jwt.PrivateKey{KID: kid, Signer: priv},
+		PubKey:  jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
 		RawPriv: priv, RawPub: &priv.PublicKey,
 		KID: kid, AlgName: alg,
 	}
@@ -125,8 +124,8 @@ func GenerateRS256(kid string) KeySet {
 		panic("GenerateRS256: " + err.Error())
 	}
 	return KeySet{
-		PrivKey: jwk.PrivateKey{KID: kid, Signer: priv},
-		PubKey:  jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
+		PrivKey: jwt.PrivateKey{KID: kid, Signer: priv},
+		PubKey:  jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
 		RawPriv: priv, RawPub: &priv.PublicKey,
 		KID: kid, AlgName: "RS256",
 	}

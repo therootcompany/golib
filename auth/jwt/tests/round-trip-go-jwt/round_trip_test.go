@@ -36,7 +36,6 @@ import (
 	gjwt "github.com/golang-jwt/jwt/v5"
 
 	"github.com/therootcompany/golib/auth/jwt"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 var longTests = flag.Bool("long", false, "run extended stress tests (100 RSA iterations instead of 10)")
@@ -81,10 +80,10 @@ func (r *hashReader) Read(p []byte) (int, error) {
 }
 
 // assertOurSignTheirVerify signs with our library and verifies with golang-jwt.
-func assertOurSignTheirVerify(t *testing.T, pk jwk.PrivateKey, gjwtMethod gjwt.SigningMethod, gjwtPub any, sub string) {
+func assertOurSignTheirVerify(t *testing.T, pk jwt.PrivateKey, gjwtMethod gjwt.SigningMethod, gjwtPub any, sub string) {
 	t.Helper()
 
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{pk})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{pk})
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -116,7 +115,7 @@ func assertOurSignTheirVerify(t *testing.T, pk jwk.PrivateKey, gjwtMethod gjwt.S
 }
 
 // assertTheirSignOurVerify signs with golang-jwt and verifies with our library.
-func assertTheirSignOurVerify(t *testing.T, gjwtMethod gjwt.SigningMethod, gjwtPriv any, kid string, ourPub jwk.PublicKey, sub string) {
+func assertTheirSignOurVerify(t *testing.T, gjwtMethod gjwt.SigningMethod, gjwtPriv any, kid string, ourPub jwt.PublicKey, sub string) {
 	t.Helper()
 
 	now := time.Now()
@@ -134,7 +133,7 @@ func assertTheirSignOurVerify(t *testing.T, gjwtMethod gjwt.SigningMethod, gjwtP
 		t.Fatalf("golang-jwt sign: %v", err)
 	}
 
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ourPub})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{ourPub})
 	jws, err := verifier.VerifyJWT(tokenStr)
 	if err != nil {
 		t.Fatalf("our verify failed: %v", err)
@@ -154,12 +153,12 @@ func assertTheirSignOurVerify(t *testing.T, gjwtMethod gjwt.SigningMethod, gjwtP
 
 // stressIteration tests one key in both directions: our sign + their verify,
 // then their sign + our verify.
-func stressIteration(t *testing.T, i int, pk jwk.PrivateKey, pub jwk.PublicKey, gjwtMethod gjwt.SigningMethod, gjwtPriv any, gjwtPub any) {
+func stressIteration(t *testing.T, i int, pk jwt.PrivateKey, pub jwt.PublicKey, gjwtMethod gjwt.SigningMethod, gjwtPriv any, gjwtPub any) {
 	t.Helper()
 	sub := fmt.Sprintf("stress-%d", i)
 
 	// Our sign, their verify.
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{pk})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{pk})
 	if err != nil {
 		t.Fatalf("iter %d: NewSigner: %v", i, err)
 	}
@@ -185,7 +184,7 @@ func stressIteration(t *testing.T, i int, pk jwk.PrivateKey, pub jwk.PublicKey, 
 	if err != nil {
 		t.Fatalf("iter %d: golang-jwt sign: %v", i, err)
 	}
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{pub})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{pub})
 	if _, err := verifier.VerifyJWT(tokenStr); err != nil {
 		t.Fatalf("iter %d: our verify: %v", i, err)
 	}
@@ -200,7 +199,7 @@ func TestOurSignTheirVerify_EdDSA(t *testing.T) {
 	}
 	pub := priv.Public().(ed25519.PublicKey)
 	assertOurSignTheirVerify(t,
-		jwk.PrivateKey{KID: "k1", Signer: priv},
+		jwt.PrivateKey{KID: "k1", Signer: priv},
 		gjwt.SigningMethodEdDSA, pub, "user-eddsa")
 }
 
@@ -210,7 +209,7 @@ func TestOurSignTheirVerify_ES256(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertOurSignTheirVerify(t,
-		jwk.PrivateKey{KID: "k1", Signer: priv},
+		jwt.PrivateKey{KID: "k1", Signer: priv},
 		gjwt.SigningMethodES256, &priv.PublicKey, "user-es256")
 }
 
@@ -220,7 +219,7 @@ func TestOurSignTheirVerify_ES384(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertOurSignTheirVerify(t,
-		jwk.PrivateKey{KID: "k1", Signer: priv},
+		jwt.PrivateKey{KID: "k1", Signer: priv},
 		gjwt.SigningMethodES384, &priv.PublicKey, "user-es384")
 }
 
@@ -230,7 +229,7 @@ func TestOurSignTheirVerify_ES512(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertOurSignTheirVerify(t,
-		jwk.PrivateKey{KID: "k1", Signer: priv},
+		jwt.PrivateKey{KID: "k1", Signer: priv},
 		gjwt.SigningMethodES512, &priv.PublicKey, "user-es512")
 }
 
@@ -240,7 +239,7 @@ func TestOurSignTheirVerify_RS256(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertOurSignTheirVerify(t,
-		jwk.PrivateKey{KID: "k1", Signer: priv},
+		jwt.PrivateKey{KID: "k1", Signer: priv},
 		gjwt.SigningMethodRS256, &priv.PublicKey, "user-rs256")
 }
 
@@ -254,7 +253,7 @@ func TestTheirSignOurVerify_EdDSA(t *testing.T) {
 	pub := priv.Public().(ed25519.PublicKey)
 	assertTheirSignOurVerify(t,
 		gjwt.SigningMethodEdDSA, priv, "k1",
-		jwk.PublicKey{CryptoPublicKey: pub, KID: "k1"}, "user-eddsa")
+		jwt.PublicKey{CryptoPublicKey: pub, KID: "k1"}, "user-eddsa")
 }
 
 func TestTheirSignOurVerify_ES256(t *testing.T) {
@@ -264,7 +263,7 @@ func TestTheirSignOurVerify_ES256(t *testing.T) {
 	}
 	assertTheirSignOurVerify(t,
 		gjwt.SigningMethodES256, priv, "k1",
-		jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "k1"}, "user-es256")
+		jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "k1"}, "user-es256")
 }
 
 func TestTheirSignOurVerify_ES384(t *testing.T) {
@@ -274,7 +273,7 @@ func TestTheirSignOurVerify_ES384(t *testing.T) {
 	}
 	assertTheirSignOurVerify(t,
 		gjwt.SigningMethodES384, priv, "k1",
-		jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "k1"}, "user-es384")
+		jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "k1"}, "user-es384")
 }
 
 func TestTheirSignOurVerify_ES512(t *testing.T) {
@@ -284,7 +283,7 @@ func TestTheirSignOurVerify_ES512(t *testing.T) {
 	}
 	assertTheirSignOurVerify(t,
 		gjwt.SigningMethodES512, priv, "k1",
-		jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "k1"}, "user-es512")
+		jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "k1"}, "user-es512")
 }
 
 func TestTheirSignOurVerify_RS256(t *testing.T) {
@@ -294,7 +293,7 @@ func TestTheirSignOurVerify_RS256(t *testing.T) {
 	}
 	assertTheirSignOurVerify(t,
 		gjwt.SigningMethodRS256, priv, "k1",
-		jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "k1"}, "user-rs256")
+		jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "k1"}, "user-rs256")
 }
 
 // --- Known key tests ---
@@ -312,8 +311,8 @@ func TestKnownKeys(t *testing.T) {
 		priv := ed25519.NewKeyFromSeed(seed)
 		pub := priv.Public().(ed25519.PublicKey)
 		kid := "known-ed"
-		pk := jwk.PrivateKey{KID: kid, Signer: priv}
-		pubKey := jwk.PublicKey{CryptoPublicKey: pub, KID: kid}
+		pk := jwt.PrivateKey{KID: kid, Signer: priv}
+		pubKey := jwt.PublicKey{CryptoPublicKey: pub, KID: kid}
 		assertOurSignTheirVerify(t, pk, gjwt.SigningMethodEdDSA, pub, "known-ed-ours")
 		assertTheirSignOurVerify(t, gjwt.SigningMethodEdDSA, priv, kid, pubKey, "known-ed-theirs")
 	})
@@ -324,8 +323,8 @@ func TestKnownKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 		kid := "known-es256"
-		pk := jwk.PrivateKey{KID: kid, Signer: priv}
-		pubKey := jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid}
+		pk := jwt.PrivateKey{KID: kid, Signer: priv}
+		pubKey := jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid}
 		assertOurSignTheirVerify(t, pk, gjwt.SigningMethodES256, &priv.PublicKey, "known-es256-ours")
 		assertTheirSignOurVerify(t, gjwt.SigningMethodES256, priv, kid, pubKey, "known-es256-theirs")
 	})
@@ -336,8 +335,8 @@ func TestKnownKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 		kid := "known-es384"
-		pk := jwk.PrivateKey{KID: kid, Signer: priv}
-		pubKey := jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid}
+		pk := jwt.PrivateKey{KID: kid, Signer: priv}
+		pubKey := jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid}
 		assertOurSignTheirVerify(t, pk, gjwt.SigningMethodES384, &priv.PublicKey, "known-es384-ours")
 		assertTheirSignOurVerify(t, gjwt.SigningMethodES384, priv, kid, pubKey, "known-es384-theirs")
 	})
@@ -348,8 +347,8 @@ func TestKnownKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 		kid := "known-es512"
-		pk := jwk.PrivateKey{KID: kid, Signer: priv}
-		pubKey := jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid}
+		pk := jwt.PrivateKey{KID: kid, Signer: priv}
+		pubKey := jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid}
 		assertOurSignTheirVerify(t, pk, gjwt.SigningMethodES512, &priv.PublicKey, "known-es512-ours")
 		assertTheirSignOurVerify(t, gjwt.SigningMethodES512, priv, kid, pubKey, "known-es512-theirs")
 	})
@@ -360,8 +359,8 @@ func TestKnownKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 		kid := "known-rs256"
-		pk := jwk.PrivateKey{KID: kid, Signer: priv}
-		pubKey := jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid}
+		pk := jwt.PrivateKey{KID: kid, Signer: priv}
+		pubKey := jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid}
 		assertOurSignTheirVerify(t, pk, gjwt.SigningMethodRS256, &priv.PublicKey, "known-rs256-ours")
 		assertTheirSignOurVerify(t, gjwt.SigningMethodRS256, priv, kid, pubKey, "known-rs256-theirs")
 	})
@@ -388,8 +387,8 @@ func TestStress(t *testing.T) {
 			pub := priv.Public().(ed25519.PublicKey)
 			kid := fmt.Sprintf("s%d", i)
 			stressIteration(t, i,
-				jwk.PrivateKey{KID: kid, Signer: priv},
-				jwk.PublicKey{CryptoPublicKey: pub, KID: kid},
+				jwt.PrivateKey{KID: kid, Signer: priv},
+				jwt.PublicKey{CryptoPublicKey: pub, KID: kid},
 				gjwt.SigningMethodEdDSA, priv, pub)
 		}
 	})
@@ -403,8 +402,8 @@ func TestStress(t *testing.T) {
 			}
 			kid := fmt.Sprintf("s%d", i)
 			stressIteration(t, i,
-				jwk.PrivateKey{KID: kid, Signer: priv},
-				jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
+				jwt.PrivateKey{KID: kid, Signer: priv},
+				jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
 				gjwt.SigningMethodES256, priv, &priv.PublicKey)
 		}
 	})
@@ -418,8 +417,8 @@ func TestStress(t *testing.T) {
 			}
 			kid := fmt.Sprintf("s%d", i)
 			stressIteration(t, i,
-				jwk.PrivateKey{KID: kid, Signer: priv},
-				jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
+				jwt.PrivateKey{KID: kid, Signer: priv},
+				jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
 				gjwt.SigningMethodES384, priv, &priv.PublicKey)
 		}
 	})
@@ -433,8 +432,8 @@ func TestStress(t *testing.T) {
 			}
 			kid := fmt.Sprintf("s%d", i)
 			stressIteration(t, i,
-				jwk.PrivateKey{KID: kid, Signer: priv},
-				jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
+				jwt.PrivateKey{KID: kid, Signer: priv},
+				jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
 				gjwt.SigningMethodES512, priv, &priv.PublicKey)
 		}
 	})
@@ -452,8 +451,8 @@ func TestStress(t *testing.T) {
 			}
 			kid := fmt.Sprintf("s%d", i)
 			stressIteration(t, i,
-				jwk.PrivateKey{KID: kid, Signer: priv},
-				jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
+				jwt.PrivateKey{KID: kid, Signer: priv},
+				jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: kid},
 				gjwt.SigningMethodRS256, priv, &priv.PublicKey)
 		}
 	})
@@ -467,7 +466,7 @@ func TestStress(t *testing.T) {
 
 func TestJWKPrivateKeyRoundTrip(t *testing.T) {
 	t.Run("Ed25519", func(t *testing.T) {
-		original, err := jwk.NewPrivateKey()
+		original, err := jwt.NewPrivateKey()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -480,7 +479,7 @@ func TestJWKPrivateKeyRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		original := &jwk.PrivateKey{KID: "ec256-rt", Signer: priv}
+		original := &jwt.PrivateKey{KID: "ec256-rt", Signer: priv}
 		assertPrivateKeyRoundTrip(t, original,
 			gjwt.SigningMethodES256, &priv.PublicKey)
 	})
@@ -490,7 +489,7 @@ func TestJWKPrivateKeyRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		original := &jwk.PrivateKey{KID: "ec384-rt", Signer: priv}
+		original := &jwt.PrivateKey{KID: "ec384-rt", Signer: priv}
 		assertPrivateKeyRoundTrip(t, original,
 			gjwt.SigningMethodES384, &priv.PublicKey)
 	})
@@ -500,7 +499,7 @@ func TestJWKPrivateKeyRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		original := &jwk.PrivateKey{KID: "ec521-rt", Signer: priv}
+		original := &jwt.PrivateKey{KID: "ec521-rt", Signer: priv}
 		assertPrivateKeyRoundTrip(t, original,
 			gjwt.SigningMethodES512, &priv.PublicKey)
 	})
@@ -510,13 +509,13 @@ func TestJWKPrivateKeyRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		original := &jwk.PrivateKey{KID: "rsa-rt", Signer: priv}
+		original := &jwt.PrivateKey{KID: "rsa-rt", Signer: priv}
 		assertPrivateKeyRoundTrip(t, original,
 			gjwt.SigningMethodRS256, &priv.PublicKey)
 	})
 }
 
-func assertPrivateKeyRoundTrip(t *testing.T, original *jwk.PrivateKey, gjwtMethod gjwt.SigningMethod, gjwtPub any) {
+func assertPrivateKeyRoundTrip(t *testing.T, original *jwt.PrivateKey, gjwtMethod gjwt.SigningMethod, gjwtPub any) {
 	t.Helper()
 
 	// Marshal to JSON.
@@ -526,7 +525,7 @@ func assertPrivateKeyRoundTrip(t *testing.T, original *jwk.PrivateKey, gjwtMetho
 	}
 
 	// Unmarshal back.
-	var recovered jwk.PrivateKey
+	var recovered jwt.PrivateKey
 	if err := json.Unmarshal(data, &recovered); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -537,7 +536,7 @@ func assertPrivateKeyRoundTrip(t *testing.T, original *jwk.PrivateKey, gjwtMetho
 	claims := testClaims("pk-roundtrip")
 
 	// Sign with recovered key, verify with original pubkey.
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{recovered})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{recovered})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,13 +545,13 @@ func assertPrivateKeyRoundTrip(t *testing.T, original *jwk.PrivateKey, gjwtMetho
 		t.Fatal(err)
 	}
 	origPub, _ := original.PublicKey()
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{*origPub})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{*origPub})
 	if _, err := verifier.VerifyJWT(tokenStr); err != nil {
 		t.Errorf("verify with original pubkey: %v", err)
 	}
 
 	// Sign with original key, verify with recovered pubkey.
-	origSigner, err := jwt.NewSigner([]jwk.PrivateKey{*original})
+	origSigner, err := jwt.NewSigner([]jwt.PrivateKey{*original})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,7 +560,7 @@ func assertPrivateKeyRoundTrip(t *testing.T, original *jwk.PrivateKey, gjwtMetho
 		t.Fatal(err)
 	}
 	recPub, _ := recovered.PublicKey()
-	verifier2, _ := jwt.NewVerifier([]jwk.PublicKey{*recPub})
+	verifier2, _ := jwt.NewVerifier([]jwt.PublicKey{*recPub})
 	if _, err := verifier2.VerifyJWT(tokenStr2); err != nil {
 		t.Errorf("verify with recovered pubkey: %v", err)
 	}
@@ -587,12 +586,12 @@ func TestJWKPublicKeyRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 		pub := priv.Public().(ed25519.PublicKey)
-		signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "ed-pub-rt", Signer: priv}})
+		signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "ed-pub-rt", Signer: priv}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertPublicKeyRoundTrip(t,
-			jwk.PublicKey{CryptoPublicKey: pub, KID: "ed-pub-rt"},
+			jwt.PublicKey{CryptoPublicKey: pub, KID: "ed-pub-rt"},
 			signer, pub)
 	})
 
@@ -601,12 +600,12 @@ func TestJWKPublicKeyRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "ec256-pub-rt", Signer: priv}})
+		signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "ec256-pub-rt", Signer: priv}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertPublicKeyRoundTrip(t,
-			jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "ec256-pub-rt"},
+			jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "ec256-pub-rt"},
 			signer, &priv.PublicKey)
 	})
 
@@ -615,12 +614,12 @@ func TestJWKPublicKeyRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "ec384-pub-rt", Signer: priv}})
+		signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "ec384-pub-rt", Signer: priv}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertPublicKeyRoundTrip(t,
-			jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "ec384-pub-rt"},
+			jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "ec384-pub-rt"},
 			signer, &priv.PublicKey)
 	})
 
@@ -629,12 +628,12 @@ func TestJWKPublicKeyRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "ec521-pub-rt", Signer: priv}})
+		signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "ec521-pub-rt", Signer: priv}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertPublicKeyRoundTrip(t,
-			jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "ec521-pub-rt"},
+			jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "ec521-pub-rt"},
 			signer, &priv.PublicKey)
 	})
 
@@ -643,17 +642,17 @@ func TestJWKPublicKeyRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		signer, err := jwt.NewSigner([]jwk.PrivateKey{{KID: "rsa-pub-rt", Signer: priv}})
+		signer, err := jwt.NewSigner([]jwt.PrivateKey{{KID: "rsa-pub-rt", Signer: priv}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertPublicKeyRoundTrip(t,
-			jwk.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "rsa-pub-rt"},
+			jwt.PublicKey{CryptoPublicKey: &priv.PublicKey, KID: "rsa-pub-rt"},
 			signer, &priv.PublicKey)
 	})
 }
 
-func assertPublicKeyRoundTrip(t *testing.T, origPub jwk.PublicKey, signer *jwt.Signer, gjwtPub any) {
+func assertPublicKeyRoundTrip(t *testing.T, origPub jwt.PublicKey, signer *jwt.Signer, gjwtPub any) {
 	t.Helper()
 
 	// Marshal to JSON.
@@ -663,7 +662,7 @@ func assertPublicKeyRoundTrip(t *testing.T, origPub jwk.PublicKey, signer *jwt.S
 	}
 
 	// Unmarshal back.
-	var recovered jwk.PublicKey
+	var recovered jwt.PublicKey
 	if err := json.Unmarshal(data, &recovered); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -676,7 +675,7 @@ func assertPublicKeyRoundTrip(t *testing.T, origPub jwk.PublicKey, signer *jwt.S
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{recovered})
+	verifier, _ := jwt.NewVerifier([]jwt.PublicKey{recovered})
 	if _, err := verifier.VerifyJWT(tokenStr); err != nil {
 		t.Errorf("verify with round-tripped pubkey: %v", err)
 	}
@@ -696,7 +695,7 @@ func assertPublicKeyRoundTrip(t *testing.T, origPub jwk.PublicKey, signer *jwt.S
 // key types and verifies that tokens signed with each key are verifiable
 // after unmarshal.
 func TestJWKSRoundTrip(t *testing.T) {
-	edKey, err := jwk.NewPrivateKey()
+	edKey, err := jwt.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -718,7 +717,7 @@ func TestJWKSRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keys := []jwk.PrivateKey{
+	keys := []jwt.PrivateKey{
 		*edKey,
 		{KID: "ec256", Signer: ec256},
 		{KID: "ec384", Signer: ec384},
@@ -737,7 +736,7 @@ func TestJWKSRoundTrip(t *testing.T) {
 	}
 
 	// Parse it back.
-	var jwks jwk.JWKs
+	var jwks jwt.JWKs
 	if err := json.Unmarshal(jwksData, &jwks); err != nil {
 		t.Fatalf("unmarshal JWKS: %v", err)
 	}

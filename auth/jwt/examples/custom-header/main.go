@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/auth/jwt"
-	"github.com/therootcompany/golib/auth/jwt/jwk"
 )
 
 // DPoPHeader extends the standard JOSE header with a DPoP nonce and
@@ -35,11 +34,11 @@ type DPoPHeader struct {
 
 func main() {
 	// --- Issuer side: sign a token ---
-	pk, err := jwk.NewPrivateKey()
+	pk, err := jwt.NewPrivateKey()
 	if err != nil {
 		log.Fatal(err)
 	}
-	signer, err := jwt.NewSigner([]jwk.PrivateKey{*pk})
+	signer, err := jwt.NewSigner([]jwt.PrivateKey{*pk})
 	if err != nil {
 		log.Fatal(err)
 	}
