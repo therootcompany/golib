@@ -74,12 +74,10 @@ func goodClaims() AppClaims {
 // Iss checking is now the Validator's responsibility, not the Verifier's.
 func goodValidator() *jwt.IDTokenValidator {
 	return &jwt.IDTokenValidator{
-		ValidatorCore: jwt.ValidatorCore{
-			Iss:          []string{"https://example.com"},
-			Aud:          []string{"myapp"},
-			Azp:          []string{"myapp"},
-			RequiredAMRs: []string{"pwd"},
-		},
+		Iss:          []string{"https://example.com"},
+		Aud:          []string{"myapp"},
+		Azp:          []string{"myapp"},
+		RequiredAMRs: []string{"pwd"},
 	}
 }
 
@@ -322,10 +320,8 @@ func TestNBFValidation(t *testing.T) {
 	}
 
 	rfc := &jwt.RFCValidator{
-		ValidatorCore: jwt.ValidatorCore{
-			Iss: []string{"https://example.com"},
-			Aud: []string{"myapp"},
-		},
+		Iss: []string{"https://example.com"},
+		Aud: []string{"myapp"},
 	}
 
 	// No nbf: should pass.
@@ -370,10 +366,8 @@ func TestRFCValidator(t *testing.T) {
 	}
 
 	rfc := &jwt.RFCValidator{
-		ValidatorCore: jwt.ValidatorCore{
-			Iss: []string{"https://example.com"},
-			Aud: []string{"myapp"},
-		},
+		Iss: []string{"https://example.com"},
+		Aud: []string{"myapp"},
 	}
 
 	if _, err := rfc.Validate(&minimal, now); err != nil {

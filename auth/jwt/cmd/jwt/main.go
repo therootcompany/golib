@@ -524,11 +524,9 @@ func cmdVerify(args []string) error {
 		result.Errors = append(result.Errors, fmt.Sprintf("unmarshal claims: %v", err))
 	} else {
 		validator := &jwt.RFCValidator{
-			ValidatorCore: jwt.ValidatorCore{
-				GracePeriod: *gracePeriod,
-				IgnoreExp:   *ignoreExp,
-				IgnoreNBF:   *ignoreNBF,
-			},
+			GracePeriod: *gracePeriod,
+			IgnoreExp:   *ignoreExp,
+			IgnoreNBF:   *ignoreNBF,
 		}
 		details, valErr := validator.Validate(&claims, time.Now())
 		if valErr == nil {
