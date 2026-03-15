@@ -1142,7 +1142,7 @@ func (iss *Verifier) Verify(jws VerifiableJWS) error {
 	if lastErr != nil {
 		return lastErr
 	}
-	return fmt.Errorf("alg %q: %w", h.Alg, ErrMissingKID)
+	return fmt.Errorf("no keys to verify against: %w", ErrSignatureInvalid)
 }
 
 // verifyOneKey checks the signature against a single key.

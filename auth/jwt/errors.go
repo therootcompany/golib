@@ -25,8 +25,7 @@ var (
 // --- Verification errors ---
 // Returned by [Verifier.Verify] and [Verifier.VerifyJWT].
 var (
-	ErrMissingKID   = errors.New("missing kid")
-	ErrUnknownKID   = errors.New("unknown kid")
+	ErrUnknownKID = errors.New("unknown kid")
 	ErrUnsupportedAlg = errors.New("unsupported algorithm")
 )
 
