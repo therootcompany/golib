@@ -28,27 +28,60 @@ const maxResponseBody = 1 << 20
 // defaultClient is used when no client is provided.
 var defaultClient = &http.Client{Timeout: 30 * time.Second}
 
-// Fetch retrieves raw bytes from a URL and returns them along with the
-// Cache-Control max-age from the response headers (0 if absent or unparseable).
+// Cacheable holds the response body and HTTP cache metadata from a [Fetch] call.
+//
+// MaxAge is the effective remaining TTL: the server's Cache-Control max-age
+// minus the Age header (which reflects how long the response sat in
+// intermediary caches). It is zero when no usable max-age is present.
+//
+// ETag and LastModified can be sent back on subsequent requests
+// (via If-None-Match / If-Modified-Since) to avoid re-downloading
+// unchanged content.
+type Cacheable struct {
+	Data         []byte
+	MaxAge       time.Duration // effective TTL (max-age minus Age)
+	ETag         string        // opaque validator for conditional re-fetch
+	LastModified string        // date-based validator for conditional re-fetch
+}
+
+// Fetch retrieves raw bytes from a URL using a default HTTP client (30s timeout).
 //
 // Use this to fetch key material in any format (JWKS, PEM, DER) from a remote
 // endpoint. For the common case of fetching and parsing a JWKS document,
 // prefer [FetchURL].
 //
-// The response body is limited to [maxResponseBody] bytes. client is the HTTP
-// client to use; if nil, a default client with a 30s timeout is used.
-func Fetch(ctx context.Context, url string, client *http.Client) ([]byte, time.Duration, error) {
+// The response body is limited to 1 MiB.
+func Fetch(ctx context.Context, url string) (*Cacheable, error) {
+	return fetchRaw(ctx, url, nil)
+}
+
+// fetchRaw retrieves raw bytes from a URL using the given HTTP client.
+// If client is nil, a default client with a 30s timeout is used.
+func fetchRaw(ctx context.Context, url string, client *http.Client) (*Cacheable, error) {
 	resp, err := doGET(ctx, url, client)
 	if err != nil {
-		return nil, 0, fmt.Errorf("fetch %q: %w", url, err)
+		return nil, fmt.Errorf("fetch %q: %w", url, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
-		return nil, 0, fmt.Errorf("fetch %q: read body: %w: %w", url, jose.ErrFetchFailed, err)
+		return nil, fmt.Errorf("fetch %q: read body: %w: %w", url, jose.ErrFetchFailed, err)
 	}
-	return body, parseCacheControlMaxAge(resp.Header.Get("Cache-Control")), nil
+
+	maxAge := parseCacheControlMaxAge(resp.Header.Get("Cache-Control"))
+	if age := parseAge(resp.Header.Get("Age")); age > 0 && maxAge > age {
+		maxAge -= age
+	} else if age > 0 {
+		maxAge = 0
+	}
+
+	return &Cacheable{
+		Data:         body,
+		MaxAge:       maxAge,
+		ETag:         resp.Header.Get("ETag"),
+		LastModified: resp.Header.Get("Last-Modified"),
+	}, nil
 }
 
 // FetchURL retrieves and parses a JWKS document from the given JWKS endpoint URL.
@@ -58,18 +91,18 @@ func Fetch(ctx context.Context, url string, client *http.Client) ([]byte, time.D
 // their own caching (e.g. [jwt.KeyFetcher]) can use the returned duration to
 // respect the server's preferred TTL.
 //
-// The response body is limited to [maxResponseBody] bytes. client is the HTTP
-// client to use; if nil, a default client with a 30s timeout is used.
+// The response body is limited to 1 MiB. client is the HTTP client to use;
+// if nil, a default client with a 30s timeout is used.
 func FetchURL(ctx context.Context, jwksURL string, client *http.Client) ([]PublicKey, time.Duration, error) {
-	body, maxAge, err := Fetch(ctx, jwksURL, client)
+	c, err := fetchRaw(ctx, jwksURL, client)
 	if err != nil {
 		return nil, 0, err
 	}
 	var jwks JWKs
-	if err := json.Unmarshal(body, &jwks); err != nil {
+	if err := json.Unmarshal(c.Data, &jwks); err != nil {
 		return nil, 0, fmt.Errorf("parse JWKS: %w: %w", jose.ErrFetchFailed, err)
 	}
-	return jwks.Keys, maxAge, nil
+	return jwks.Keys, c.MaxAge, nil
 }
 
 // parseCacheControlMaxAge extracts the max-age value from a Cache-Control header.
@@ -85,6 +118,19 @@ func parseCacheControlMaxAge(header string) time.Duration {
 		}
 	}
 	return 0
+}
+
+// parseAge extracts the Age header value as a Duration.
+// Returns 0 if the header is absent or unparseable.
+func parseAge(header string) time.Duration {
+	if header == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second
 }
 
 // FetchOIDC fetches JWKS via OIDC discovery from the given base URL.
