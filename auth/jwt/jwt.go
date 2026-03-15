@@ -39,7 +39,7 @@
 //   - you may already know the public keys (and redeploy when they change)
 //   - or you fetch them at runtime from a /jwks.json endpoint (and cache and update periodically)
 //   - Relying party, known keys: use [NewVerifier] with a []PublicKey slice.
-//   - Relying party, remote keys: use [KeyFetcher]; it fetches lazily and caches.
+//   - Relying party, remote keys: use [keyfetch.KeyFetcher]; it fetches lazily and caches.
 //   - use [Verifier.Verify] to verify the JWT (bearer token)
 //   - use [UnmarshalClaims] to get your user info
 //   - use [IDTokenValidator.Validate] to validate the claims (user info payload)
@@ -55,7 +55,7 @@
 // In either case the same building blocks apply: the Host verifies and
 // validates tokens from the Server, and the Server either signs its own
 // tokens ([NewSigner]) or verifies tokens from your auth provider
-// ([NewVerifier] or [KeyFetcher]).
+// ([NewVerifier] or [keyfetch.KeyFetcher]).
 //
 // # OAuth 2.0 Access Tokens
 //
@@ -76,8 +76,8 @@
 //   - keyfile.LoadPrivateDER / keyfile.LoadPublicDER for DER files
 //   - [LoadPublicJWK] / [LoadPrivateJWK] / [LoadPublicJWKs] for JWK/JWKS files
 //
-// For fetching keys from remote URLs, use [FetchURL] (JWKS endpoints),
-// [FetchOIDC] (OIDC discovery), or [Fetch] for raw bytes.
+// For fetching keys from remote URLs, use [keyfetch.FetchURL] (JWKS endpoints),
+// [keyfetch.FetchOIDC] (OIDC discovery), or [keyfetch.Fetch] for raw bytes.
 //
 // # Context accessors
 //

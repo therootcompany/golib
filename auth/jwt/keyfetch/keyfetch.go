@@ -6,7 +6,12 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-package jwt
+// Package keyfetch lazily fetches and caches JWKS keys from remote URLs.
+//
+// [KeyFetcher] returns a [jwt.Verifier] on demand, refreshing keys in the
+// background when they expire. For one-shot fetches without caching, use
+// [FetchURL], [FetchOIDC], [FetchOAuth2], or [Fetch].
+package keyfetch
 
 import (
 	"context"
@@ -15,18 +20,20 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/therootcompany/golib/auth/jwt"
 )
 
-// cachedVerifier bundles a [*Verifier] with its freshness window.
+// cachedVerifier bundles a [*jwt.Verifier] with its freshness window.
 // Stored atomically in [KeyFetcher]; immutable after creation.
 type cachedVerifier struct {
-	iss       *Verifier
+	iss       *jwt.Verifier
 	fetchedAt time.Time
 	expiresAt time.Time // fetchedAt + MaxAge
 }
 
 // KeyFetcher lazily fetches and caches JWKS keys from a remote URL,
-// returning a [*Verifier] on demand.
+// returning a [*jwt.Verifier] on demand.
 //
 // When cached keys are still fresh (within MaxAge), [KeyFetcher.Verifier]
 // returns immediately with no network call. When they have expired but are
@@ -50,7 +57,7 @@ type cachedVerifier struct {
 //
 // Typical usage:
 //
-//	fetcher := &jwt.KeyFetcher{
+//	fetcher := &keyfetch.KeyFetcher{
 //	    URL:         "https://accounts.example.com/.well-known/jwks.json",
 //	    MaxAge:      time.Hour,
 //	    StaleAge:    30 * time.Minute,
@@ -88,7 +95,7 @@ type KeyFetcher struct {
 	// InitialKeys pre-populate the cache as immediately stale on the first call
 	// to Verifier. Combined with KeepOnError=true and a positive StaleAge, they
 	// are served immediately while a background refresh fetches fresh keys.
-	InitialKeys []PublicKey
+	InitialKeys []jwt.PublicKey
 
 	fetchMu    sync.Mutex // held during HTTP fetch
 	ctrlMu     sync.Mutex // held briefly for refreshing/lastErr
@@ -98,7 +105,7 @@ type KeyFetcher struct {
 	lastErr    error // last background refresh error; cleared on success
 }
 
-// Verifier returns a [*Verifier] for verifying tokens.
+// Verifier returns a [*jwt.Verifier] for verifying tokens.
 //
 // Verifier intentionally does not take a [context.Context]: the background
 // JWKS refresh must not be canceled when a single client request finishes
@@ -113,11 +120,11 @@ type KeyFetcher struct {
 // already running. The stale path never blocks on an in-progress HTTP fetch.
 //
 // No cache: blocks until the first fetch completes.
-func (f *KeyFetcher) Verifier() (*Verifier, error) {
+func (f *KeyFetcher) Verifier() (*jwt.Verifier, error) {
 	if len(f.InitialKeys) > 0 {
 		var initErr error
 		f.initOnce.Do(func() {
-			v, err := NewVerifier(f.InitialKeys)
+			v, err := jwt.NewVerifier(f.InitialKeys)
 			if err != nil {
 				initErr = err
 				return
@@ -204,7 +211,7 @@ func (f *KeyFetcher) backgroundRefresh() {
 //
 // The cache TTL is the server's Cache-Control max-age, clamped to MaxAge.
 // If the server sends no Cache-Control header, MaxAge is used directly.
-func (f *KeyFetcher) fetch() (*Verifier, error) {
+func (f *KeyFetcher) fetch() (*jwt.Verifier, error) {
 	// Apply a context timeout only when no HTTPClient timeout is set,
 	// avoiding a redundant double-timeout.
 	ctx := context.Background()
@@ -228,7 +235,7 @@ func (f *KeyFetcher) fetch() (*Verifier, error) {
 		maxAge = serverMaxAge
 	}
 
-	v, err := NewVerifier(keys)
+	v, err := jwt.NewVerifier(keys)
 	if err != nil {
 		return nil, fmt.Errorf("fetch JWKS from %s: %w", f.URL, err)
 	}

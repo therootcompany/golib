@@ -6,17 +6,29 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-package jwt
+package keyfetch
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/therootcompany/golib/auth/jwt"
+)
+
+// Error sentinels for fetch operations.
+var (
+	// ErrFetchFailed indicates a network or parsing failure during a JWKS fetch.
+	ErrFetchFailed = errors.New("fetch failed")
+
+	// ErrUnexpectedStatus indicates the server returned a non-200 status code.
+	ErrUnexpectedStatus = fmt.Errorf("%w: unexpected status", ErrFetchFailed)
 )
 
 // maxResponseBody is the maximum JWKS response body size (1 MiB).
@@ -86,17 +98,17 @@ func fetchRaw(ctx context.Context, url string, client *http.Client) (*Cacheable,
 //
 // It returns the parsed keys and the Cache-Control max-age from the response
 // headers (0 if the header is absent or unparseable). Callers that implement
-// their own caching (e.g. [jwt.KeyFetcher]) can use the returned duration to
+// their own caching (e.g. [KeyFetcher]) can use the returned duration to
 // respect the server's preferred TTL.
 //
 // The response body is limited to 1 MiB. client is the HTTP client to use;
 // if nil, a default client with a 30s timeout is used.
-func FetchURL(ctx context.Context, jwksURL string, client *http.Client) ([]PublicKey, time.Duration, error) {
+func FetchURL(ctx context.Context, jwksURL string, client *http.Client) ([]jwt.PublicKey, time.Duration, error) {
 	c, err := fetchRaw(ctx, jwksURL, client)
 	if err != nil {
 		return nil, 0, err
 	}
-	var jwks JWKs
+	var jwks jwt.JWKs
 	if err := json.Unmarshal(c.Data, &jwks); err != nil {
 		return nil, 0, fmt.Errorf("parse JWKS: %w: %w", ErrFetchFailed, err)
 	}
@@ -137,7 +149,7 @@ func parseAge(header string) time.Duration {
 // field, then fetches and parses the JWKS from that URI.
 //
 // client is used for all HTTP requests; if nil, a default 30s-timeout client is used.
-func FetchOIDC(ctx context.Context, baseURL string, client *http.Client) ([]PublicKey, error) {
+func FetchOIDC(ctx context.Context, baseURL string, client *http.Client) ([]jwt.PublicKey, error) {
 	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/openid-configuration"
 	jwksURI, err := fetchDiscoveryURI(ctx, discoveryURL, client)
 	if err != nil {
@@ -156,7 +168,7 @@ func FetchOIDC(ctx context.Context, baseURL string, client *http.Client) ([]Publ
 // jwks_uri field, then fetches and parses the JWKS from that URI.
 //
 // client is used for all HTTP requests; if nil, a default 30s-timeout client is used.
-func FetchOAuth2(ctx context.Context, baseURL string, client *http.Client) ([]PublicKey, error) {
+func FetchOAuth2(ctx context.Context, baseURL string, client *http.Client) ([]jwt.PublicKey, error) {
 	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/oauth-authorization-server"
 	jwksURI, err := fetchDiscoveryURI(ctx, discoveryURL, client)
 	if err != nil {

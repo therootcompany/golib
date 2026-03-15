@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/auth/jwt"
+	"github.com/therootcompany/golib/auth/jwt/keyfetch"
 )
 
 func main() {
@@ -417,14 +418,14 @@ func tryDiscovery(issuer string) (keys []jwt.PublicKey, jwksURL string, err erro
 	defer cancel()
 
 	// Try OIDC first.
-	keys, err = jwt.FetchOIDC(ctx, issuer, nil)
+	keys, err = keyfetch.FetchOIDC(ctx, issuer, nil)
 	if err == nil && len(keys) > 0 {
 		jwksURL = strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration"
 		return keys, jwksURL, nil
 	}
 
 	// Try OAuth2.
-	keys, err = jwt.FetchOAuth2(ctx, issuer, nil)
+	keys, err = keyfetch.FetchOAuth2(ctx, issuer, nil)
 	if err == nil && len(keys) > 0 {
 		jwksURL = strings.TrimRight(issuer, "/") + "/.well-known/oauth-authorization-server"
 		return keys, jwksURL, nil
@@ -432,7 +433,7 @@ func tryDiscovery(issuer string) (keys []jwt.PublicKey, jwksURL string, err erro
 
 	// Try direct JWKS at issuer/.well-known/jwks.json.
 	directURL := strings.TrimRight(issuer, "/") + "/.well-known/jwks.json"
-	keys, _, fetchErr := jwt.FetchURL(ctx, directURL, nil)
+	keys, _, fetchErr := keyfetch.FetchURL(ctx, directURL, nil)
 	if fetchErr == nil && len(keys) > 0 {
 		return keys, directURL, nil
 	}
@@ -753,7 +754,7 @@ func loadPublicKeys(source string) ([]jwt.PublicKey, error) {
 	if strings.HasPrefix(source, "https://") || strings.HasPrefix(source, "http://") {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		keys, _, err := jwt.FetchURL(ctx, source, nil)
+		keys, _, err := keyfetch.FetchURL(ctx, source, nil)
 		if err != nil {
 			return nil, fmt.Errorf("fetch keys from %s: %w", source, err)
 		}

@@ -20,7 +20,7 @@
 // ([jwt.ParsePublicJWK], [jwt.ParsePrivateJWK], [jwt.ParsePublicJWKs])
 // can also be used directly.
 //
-// For fetching keys from remote URLs, use [jwt.FetchURL] (JWKS endpoints)
+// For fetching keys from remote URLs, use [keyfetch.FetchURL] (JWKS endpoints)
 // or fetch the bytes yourself and pass them to Parse*.
 package keyfile
 

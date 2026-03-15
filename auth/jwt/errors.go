@@ -64,13 +64,6 @@ var (
 	ErrSanityFail = errors.New("something impossible happened")
 )
 
-// --- Fetch errors ---
-// Returned by [Fetch], [FetchURL], [FetchOIDC], and [FetchOAuth2].
-var (
-	ErrFetchFailed      = errors.New("fetch failed")
-	ErrUnexpectedStatus = fmt.Errorf("%w: unexpected status", ErrFetchFailed)
-)
-
 // --- Validation errors ---
 // Returned by [IDTokenValidator.Validate] and [AccessTokenValidator.Validate].
 //
