@@ -100,32 +100,26 @@ func ParsePrivateDER(data []byte) (*jwk.PrivateKey, error) {
 }
 
 // --- Load functions (source → key) ---
+//
+// JWK Load functions are canonical in the [jwk] package and re-exported here
+// for convenience so that all key-loading functions are available in one place.
 
 // LoadPublicJWK loads a single JWK from a local file.
+// This is a re-export of [jwk.LoadPublicJWK].
 func LoadPublicJWK(source string) (*jwk.PublicKey, error) {
-	data, err := ReadFile(source)
-	if err != nil {
-		return nil, err
-	}
-	return jwk.ParsePublicJWK(data)
+	return jwk.LoadPublicJWK(source)
 }
 
 // LoadPublicJWKs loads a JWKS document from a local file.
+// This is a re-export of [jwk.LoadPublicJWKs].
 func LoadPublicJWKs(source string) (jwk.JWKs, error) {
-	data, err := ReadFile(source)
-	if err != nil {
-		return jwk.JWKs{}, err
-	}
-	return jwk.ParsePublicJWKs(data)
+	return jwk.LoadPublicJWKs(source)
 }
 
 // LoadPrivateJWK loads a single private JWK from a local file.
+// This is a re-export of [jwk.LoadPrivateJWK].
 func LoadPrivateJWK(source string) (*jwk.PrivateKey, error) {
-	data, err := ReadFile(source)
-	if err != nil {
-		return nil, err
-	}
-	return jwk.ParsePrivateJWK(data)
+	return jwk.LoadPrivateJWK(source)
 }
 
 // LoadPublicPEM loads a PEM-encoded public key from a local file.

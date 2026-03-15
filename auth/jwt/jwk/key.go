@@ -35,7 +35,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"os"
 
 	"github.com/therootcompany/golib/auth/jwt/internal/jwa"
 	"github.com/therootcompany/golib/auth/jwt/jose"
@@ -406,15 +405,12 @@ func encodePrivate(k PrivateKey) (rawKey, error) {
 }
 
 // ReadFile reads and parses a JWKS document from a file path.
-// It is equivalent to os.ReadFile followed by json.Unmarshal into a [JWKs].
+//
+// Deprecated: Use [LoadPublicJWKs] instead, which also accepts file: URIs.
 func ReadFile(filePath string) ([]PublicKey, error) {
-	data, err := os.ReadFile(filePath)
+	jwks, err := LoadPublicJWKs(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("read JWKS file %q: %w", filePath, err)
-	}
-	var jwks JWKs
-	if err := json.Unmarshal(data, &jwks); err != nil {
-		return nil, fmt.Errorf("parse JWKS file %q: %w", filePath, err)
+		return nil, err
 	}
 	return jwks.Keys, nil
 }

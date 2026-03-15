@@ -89,11 +89,17 @@ func parseCacheControlMaxAge(header string) time.Duration {
 
 // FetchOIDC fetches JWKS via OIDC discovery from the given base URL.
 //
-// It fetches {baseURL}/.well-known/openid-configuration and reads the jwks_uri field.
+// It fetches {baseURL}/.well-known/openid-configuration, reads the jwks_uri
+// field, then fetches and parses the JWKS from that URI.
+//
 // client is used for all HTTP requests; if nil, a default 30s-timeout client is used.
 func FetchOIDC(ctx context.Context, baseURL string, client *http.Client) ([]PublicKey, error) {
 	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/openid-configuration"
-	keys, _, err := fetchFromDiscovery(ctx, discoveryURL, client)
+	jwksURI, err := fetchDiscoveryURI(ctx, discoveryURL, client)
+	if err != nil {
+		return nil, err
+	}
+	keys, _, err := FetchURL(ctx, jwksURI, client)
 	return keys, err
 }
 
@@ -102,47 +108,43 @@ func FetchOIDC(ctx context.Context, baseURL string, client *http.Client) ([]Publ
 //
 // https://www.rfc-editor.org/rfc/rfc8414.html
 //
-// It fetches {baseURL}/.well-known/oauth-authorization-server and reads the jwks_uri field.
+// It fetches {baseURL}/.well-known/oauth-authorization-server, reads the
+// jwks_uri field, then fetches and parses the JWKS from that URI.
+//
 // client is used for all HTTP requests; if nil, a default 30s-timeout client is used.
 func FetchOAuth2(ctx context.Context, baseURL string, client *http.Client) ([]PublicKey, error) {
 	discoveryURL := strings.TrimRight(baseURL, "/") + "/.well-known/oauth-authorization-server"
-	keys, _, err := fetchFromDiscovery(ctx, discoveryURL, client)
+	jwksURI, err := fetchDiscoveryURI(ctx, discoveryURL, client)
+	if err != nil {
+		return nil, err
+	}
+	keys, _, err := FetchURL(ctx, jwksURI, client)
 	return keys, err
 }
 
-// fetchFromDiscovery fetches a discovery document from discoveryURL, then
-// fetches the JWKS from the jwks_uri field. Returns the keys and the issuer
-// URL from the discovery document's "issuer" field.
-// TODO this should return the URL, not the keys
-func fetchFromDiscovery(ctx context.Context, discoveryURL string, client *http.Client) ([]PublicKey, string, error) {
+// fetchDiscoveryURI fetches a discovery document and returns the validated
+// jwks_uri from it. The URI is required to use HTTPS to prevent SSRF via a
+// malicious discovery document pointing at an internal endpoint.
+func fetchDiscoveryURI(ctx context.Context, discoveryURL string, client *http.Client) (string, error) {
 	resp, err := doGET(ctx, discoveryURL, client)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch discovery: %w", err)
+		return "", fmt.Errorf("fetch discovery: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	var doc struct {
-		Issuer  string `json:"issuer"`
 		JWKsURI string `json:"jwks_uri"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBody)).Decode(&doc); err != nil {
-		return nil, "", fmt.Errorf("parse discovery doc: %w: %w", jose.ErrFetchFailed, err)
+		return "", fmt.Errorf("parse discovery doc: %w: %w", jose.ErrFetchFailed, err)
 	}
 	if doc.JWKsURI == "" {
-		return nil, "", fmt.Errorf("discovery doc missing jwks_uri: %w", jose.ErrFetchFailed)
+		return "", fmt.Errorf("discovery doc missing jwks_uri: %w", jose.ErrFetchFailed)
 	}
-	// Validate scheme to prevent SSRF via a malicious discovery document
-	// pointing jwks_uri at an internal/non-HTTPS endpoint.
 	if !strings.HasPrefix(doc.JWKsURI, "https://") {
-		return nil, "", fmt.Errorf("jwks_uri must be https, got %q: %w", doc.JWKsURI, jose.ErrFetchFailed)
+		return "", fmt.Errorf("jwks_uri must be https, got %q: %w", doc.JWKsURI, jose.ErrFetchFailed)
 	}
-
-	// TODO lift this up
-	keys, _, err := FetchURL(ctx, doc.JWKsURI, client)
-	if err != nil {
-		return nil, "", err
-	}
-	return keys, doc.Issuer, nil
+	return doc.JWKsURI, nil
 }
 
 // doGET performs an HTTP GET request and returns the response. It handles
