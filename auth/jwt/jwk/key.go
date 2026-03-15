@@ -226,8 +226,7 @@ func toPublicKeyOps(ops []string) []string {
 		case "unwrapKey":
 			out = append(out, "wrapKey")
 		case "verify", "encrypt", "wrapKey":
-			// TODO if the private key had the wrong details, it probably should have been caught earlier
-			// Already a public-key op - pass through.
+			// Already a public-key op - pass through unchanged.
 			out = append(out, op)
 		}
 	}

@@ -18,7 +18,7 @@
 // - You may also be implementing MCP support for Ai / Agents
 // - You probably do a little of all sides
 //
-// This package implements So rather than implementing to the spec article by article, this implements by flow.
+// Rather than implementing to the spec article by article, this library implements by flow.
 //
 // This was created with Ai assistance to be able to iterate quickly over different design choices, but every line of the code has been manually reviewed for correctness, as well as many of the tests.
 //
@@ -30,20 +30,20 @@
 //   - use [Signer.Sign] + [IDTokenClaims] or [StandardClaims] to create a JWT
 //   - use [Signer.Verifier] to verify the JWT (bearer token)
 //   - use [UnmarshalClaims] to get your user info
-//   - use [Validator.Validate] to validate the claims (user info payload)
-//   - use custom Validation for your own Claims type with a [Validator], or by hand - dealer's choice
+//   - use [IDTokenValidator.Validate] to validate the claims (user info payload)
+//   - use custom validation for your own Claims type, or by hand - dealer's choice
 //
 // # Use case: Relying Party
 //
-// 2. Relying Party: you're building a thing that uses Public Keys to verify and validates tokens
+// You're building a thing that uses Public Keys to verify and validate tokens.
 //   - you may already know the public keys (and redeploy when they change)
 //   - or you fetch them at runtime from a /jwks.json endpoint (and cache and update periodically)
 //   - Relying party, known keys: use [NewVerifier] with a []jwk.PublicKey slice.
 //   - Relying party, remote keys: use [KeyFetcher]; it fetches lazily and caches.
 //   - use [Verifier.Verify] to verify the JWT (bearer token)
 //   - use [UnmarshalClaims] to get your user info
-//   - use [Validator.Validate] to validate the claims (user info payload)
-//   - use custom Validation for your own Claims type with a [Validator], or by hand - dealer's choice
+//   - use [IDTokenValidator.Validate] to validate the claims (user info payload)
+//   - use custom validation for your own Claims type, or by hand - dealer's choice
 //
 // # Use case: MCP / Agents
 //
@@ -66,7 +66,7 @@
 //   - Sane defaults for everything, without hiding anything you may need to inspect.
 //   - There should be one obvious right way to do it.
 //   - Claims are the most important builder-facing detail.
-//   - Use simple type embedded for maximum convenience without sacrificing optionality.
+//   - Use simple embedding for maximum convenience without sacrificing optionality.
 //   - [StandardClaims] for typical user info, [IDTokenClaims] for minimal auth info.
 //     (both satisfy [Claims] for free via Go method promotion)
 //   - [UnmarshalClaims] to get your type-safe claims effortlessly.
@@ -93,9 +93,9 @@
 //
 // 2. Verify AND Validate
 //
-// As an Issuer (owner) you [Signer.Sign] and then [jwt.Encode].
+// As an Issuer (owner) you [Signer.Sign] and then [Encode].
 //
-// As a Relying Party (client) you [jwt.Decode], [Verifier.Verify] and [Validator.Validate].
+// As a Relying Party (client) you [Decode], [Verifier.Verify] and [IDTokenValidator.Validate].
 //
 // Why not a single step? Because Claims (sometimes called "User" in other libs) is the thing
 // you actually care about, and actually want type safety for. After trying various approaches
@@ -1070,7 +1070,7 @@ func (iss *Verifier) PublicKeys() []jwk.PublicKey {
 // Verify checks the signature of an already-decoded [VerifiableJWS].
 //
 // Returns nil on success, a descriptive error on failure. Claim values
-// (iss, aud, exp, etc.) are NOT checked - call [Validator.Validate] on the
+// (iss, aud, exp, etc.) are NOT checked - call [IDTokenValidator.Validate] on the
 // unmarshalled claims after verifying.
 //
 // Use [Decode] followed by Verify when you need to inspect the header

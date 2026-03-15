@@ -28,6 +28,11 @@ import (
 //
 //	json.Marshal(&signer)
 //
+// The embedded JWKs includes both the active signing keys' public keys
+// and any RetiredKeys passed to [NewSigner]. Retired keys appear in the
+// JWKS endpoint so that relying parties can still verify tokens signed
+// before rotation, but they are never used for signing.
+//
 // Do not copy a Signer after first use - it contains an atomic counter.
 type Signer struct {
 	jwk.JWKs // Keys []jwk.PublicKey - promoted; marshals as {"keys":[...]}.
@@ -42,15 +47,19 @@ type Signer struct {
 // NewSigner normalises each key:
 //   - Alg: derived from the key type (ES256/ES384/ES512/RS256/EdDSA).
 //     Returns an error if the caller set an incompatible Alg.
-//   - Use: defaults to "sig" if empty.
+//   - Use: defaults to "sig" if empty; returns an error if set to anything else.
 //   - KID: auto-computed from the RFC 7638 thumbprint if empty.
+//
+// retiredKeys are public keys that appear in the JWKS endpoint for
+// verification by relying parties but are no longer used for signing.
+// This supports graceful key rotation: retire old keys so tokens signed
+// before the rotation remain verifiable.
 //
 // Returns an error if the slice is empty, any key has no Signer,
 // the key type is unsupported, or a thumbprint cannot be computed.
 //
 // https://www.rfc-editor.org/rfc/rfc7638.html
-// TODO allow for non-signing keys (for key rotation)
-func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
+func NewSigner(keys []jwk.PrivateKey, retiredKeys ...jwk.PublicKey) (*Signer, error) {
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("NewSigner: %w", jose.ErrNoSigningKey)
 	}
@@ -72,11 +81,12 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 		}
 		ss[i].Alg = alg
 
-		// Default Use to "sig" for signing keys.
+		// Default Use to "sig" for signing keys; reject anything else.
 		if ss[i].Use == "" {
 			ss[i].Use = "sig"
+		} else if ss[i].Use != "sig" {
+			return nil, fmt.Errorf("NewSigner: key[%d] kid %q: use %q, want \"sig\"", i, ss[i].KID, ss[i].Use)
 		}
-		// TODO fail if not sig
 
 		// Auto-compute KID from thumbprint if empty.
 		if ss[i].KID == "" {
@@ -88,7 +98,7 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 		}
 	}
 
-	pubs := make([]jwk.PublicKey, len(ss))
+	pubs := make([]jwk.PublicKey, len(ss), len(ss)+len(retiredKeys))
 	for i := range ss {
 		pub, err := ss[i].PublicKey()
 		if err != nil {
@@ -96,6 +106,9 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 		}
 		pubs[i] = *pub
 	}
+	// Append retired keys so they appear in the JWKS endpoint but are
+	// never selected for signing.
+	pubs = append(pubs, retiredKeys...)
 	return &Signer{
 		JWKs: jwk.JWKs{Keys: pubs},
 		keys: ss,
@@ -212,12 +225,8 @@ func (s *Signer) SignToString(claims Claims) (string, error) {
 	return Encode(jws), nil
 }
 
-// Verifier returns a new [*Verifier] containing the public keys of all signing keys.
-//
-// Use this to construct a Verifier for verifying tokens signed by this Signer.
-// For key rotation, combine with old public keys:
-//
-//	iss := jwt.New(append(signer.Keys, oldKeys...))
+// Verifier returns a new [*Verifier] containing the public keys of all
+// signing keys plus any retired keys passed to [NewSigner].
 func (s *Signer) Verifier() *Verifier {
 	// NewSigner already validated keys — duplicates cannot occur here.
 	v, _ := NewVerifier(s.Keys)

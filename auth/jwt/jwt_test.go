@@ -9,6 +9,7 @@
 package jwt_test
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -1329,5 +1330,102 @@ func TestAccessTokenValidatorIgnoreJTI(t *testing.T) {
 	claims.JTI = ""
 	if _, err := v.Validate(claims, time.Now()); err != nil {
 		t.Fatalf("IgnoreJTI=true should accept empty jti: %v", err)
+	}
+}
+
+// --- Context accessor tests ---
+
+func TestIDTokenClaimsContext(t *testing.T) {
+	claims := &jwt.IDTokenClaims{
+		Iss: "https://auth.example.com",
+		Sub: "user-123",
+	}
+	ctx := jwt.WithIDTokenClaims(context.Background(), claims)
+
+	got, ok := jwt.IDTokenClaimsFromContext(ctx)
+	if !ok {
+		t.Fatal("expected ok=true from IDTokenClaimsFromContext")
+	}
+	if got.Sub != "user-123" {
+		t.Fatalf("Sub = %q, want %q", got.Sub, "user-123")
+	}
+
+	// Empty context returns nil, false.
+	got, ok = jwt.IDTokenClaimsFromContext(context.Background())
+	if ok || got != nil {
+		t.Fatal("expected nil, false from empty context")
+	}
+}
+
+func TestAccessTokenClaimsContext(t *testing.T) {
+	claims := &jwt.AccessTokenClaims{
+		Iss:      "https://auth.example.com",
+		Sub:      "user-456",
+		ClientID: "my-client",
+	}
+	ctx := jwt.WithAccessTokenClaims(context.Background(), claims)
+
+	got, ok := jwt.AccessTokenClaimsFromContext(ctx)
+	if !ok {
+		t.Fatal("expected ok=true from AccessTokenClaimsFromContext")
+	}
+	if got.ClientID != "my-client" {
+		t.Fatalf("ClientID = %q, want %q", got.ClientID, "my-client")
+	}
+
+	// Empty context returns nil, false.
+	got, ok = jwt.AccessTokenClaimsFromContext(context.Background())
+	if ok || got != nil {
+		t.Fatal("expected nil, false from empty context")
+	}
+}
+
+func TestStandardClaimsContext(t *testing.T) {
+	claims := &jwt.StandardClaims{
+		Name:  "Test User",
+		Email: "test@example.com",
+	}
+	claims.Iss = "https://auth.example.com"
+	claims.Sub = "user-789"
+	ctx := jwt.WithStandardClaims(context.Background(), claims)
+
+	got, ok := jwt.StandardClaimsFromContext(ctx)
+	if !ok {
+		t.Fatal("expected ok=true from StandardClaimsFromContext")
+	}
+	if got.Email != "test@example.com" {
+		t.Fatalf("Email = %q, want %q", got.Email, "test@example.com")
+	}
+
+	// Empty context returns nil, false.
+	got, ok = jwt.StandardClaimsFromContext(context.Background())
+	if ok || got != nil {
+		t.Fatal("expected nil, false from empty context")
+	}
+}
+
+func TestContextKeysAreDistinct(t *testing.T) {
+	idClaims := &jwt.IDTokenClaims{Sub: "id-user"}
+	atClaims := &jwt.AccessTokenClaims{Sub: "at-user"}
+	stdClaims := &jwt.StandardClaims{}
+	stdClaims.Sub = "std-user"
+
+	ctx := context.Background()
+	ctx = jwt.WithIDTokenClaims(ctx, idClaims)
+	ctx = jwt.WithAccessTokenClaims(ctx, atClaims)
+	ctx = jwt.WithStandardClaims(ctx, stdClaims)
+
+	id, _ := jwt.IDTokenClaimsFromContext(ctx)
+	at, _ := jwt.AccessTokenClaimsFromContext(ctx)
+	std, _ := jwt.StandardClaimsFromContext(ctx)
+
+	if id.Sub != "id-user" {
+		t.Fatalf("IDToken Sub = %q, want %q", id.Sub, "id-user")
+	}
+	if at.Sub != "at-user" {
+		t.Fatalf("AccessToken Sub = %q, want %q", at.Sub, "at-user")
+	}
+	if std.Sub != "std-user" {
+		t.Fatalf("Standard Sub = %q, want %q", std.Sub, "std-user")
 	}
 }

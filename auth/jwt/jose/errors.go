@@ -57,7 +57,7 @@ var (
 
 // --- Key parsing errors ---
 // Returned by jwk.PublicKey.UnmarshalJSON, jwk.PrivateKey.UnmarshalJSON,
-// jwk.ReadFile, and the jwk.Parse*/jwk.Load* functions.
+// jwk.ReadFile, jwk.Parse*, and the keyfile.Parse*/keyfile.Load* functions.
 var (
 	ErrInvalidKey        = errors.New("invalid key")
 	ErrKeyTooSmall       = fmt.Errorf("%w: key too small", ErrInvalidKey)
@@ -74,7 +74,7 @@ var (
 )
 
 // --- Fetch errors ---
-// Returned by jwk.FetchURL, jwk.FetchOIDC, and jwk.FetchOAuth2.
+// Returned by jwk.Fetch, jwk.FetchURL, jwk.FetchOIDC, and jwk.FetchOAuth2.
 var (
 	ErrFetchFailed      = errors.New("fetch failed")
 	ErrUnexpectedStatus = fmt.Errorf("%w: unexpected status", ErrFetchFailed)
