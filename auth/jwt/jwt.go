@@ -57,6 +57,37 @@
 // tokens ([NewSigner]) or verifies tokens from your auth provider
 // ([NewVerifier] or [KeyFetcher]).
 //
+// # OAuth 2.0 Access Tokens
+//
+// For APIs that accept OAuth 2.0 access tokens (typ: "at+jwt", RFC 9068),
+// use [AccessTokenClaims] and [AccessTokenValidator]:
+//
+//   - [AccessTokenClaims] provides the standard access token fields (scope, client_id, etc.)
+//   - [AccessTokenValidator] validates audience, issuer, expiry, and other constraints
+//   - [Scope] is a space-delimited set of permission strings with Has/HasAll/HasAny helpers
+//
+// # Loading keys from files
+//
+// The [keyfile] package loads cryptographic keys from local files in JWK,
+// PEM, or DER format. All functions auto-compute KID from the RFC 7638
+// thumbprint when not already set:
+//
+//   - keyfile.LoadPrivatePEM / keyfile.LoadPublicPEM for PEM files
+//   - keyfile.LoadPrivateDER / keyfile.LoadPublicDER for DER files
+//   - [jwk.LoadPublicJWK] / [jwk.LoadPrivateJWK] / [jwk.LoadPublicJWKs] for JWK/JWKS files
+//
+// For fetching keys from remote URLs, use [jwk.FetchURL] (JWKS endpoints),
+// [jwk.FetchOIDC] (OIDC discovery), or [jwk.Fetch] for raw bytes.
+//
+// # Context accessors
+//
+// For HTTP middleware that verifies a token and stashes the claims in the
+// request context, use the With*/FromContext accessor pairs:
+//
+//   - [WithIDTokenClaims] / [IDTokenClaimsFromContext]
+//   - [WithAccessTokenClaims] / [AccessTokenClaimsFromContext]
+//   - [WithStandardClaims] / [StandardClaimsFromContext]
+//
 // # Design choices
 //
 // Convenience is not convenient if it gets in your way. This is a library, not

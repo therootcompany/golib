@@ -12,6 +12,7 @@ import (
 	"crypto"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"sync/atomic"
 
 	"github.com/therootcompany/golib/auth/jwt/internal/jwa"
@@ -33,11 +34,16 @@ import (
 // JWKS endpoint so that relying parties can still verify tokens signed
 // before rotation, but they are never used for signing.
 //
+// Rand is the entropy source for signing operations. If nil (the default),
+// [crypto/rand.Reader] is used. Set this for deterministic testing or
+// to use a custom entropy source (e.g., an HSM-backed reader).
+//
 // Do not copy a Signer after first use - it contains an atomic counter.
 type Signer struct {
 	jwk.JWKs // Keys []jwk.PublicKey - promoted; marshals as {"keys":[...]}.
 	// Note: Keys is exported because json.Marshal needs it for the JWKS
 	// endpoint. Callers should not mutate the slice after construction.
+	Rand      io.Reader // entropy source for signing; nil means crypto/rand.Reader
 	keys      []jwk.PrivateKey
 	signerIdx atomic.Uint64
 }
@@ -106,6 +112,15 @@ func NewSigner(keys []jwk.PrivateKey, retiredKeys ...jwk.PublicKey) (*Signer, er
 		}
 		pubs[i] = *pub
 	}
+
+	// Validate each key by performing a test sign+verify round-trip.
+	// This catches bad keys at construction rather than first use.
+	for i := range ss {
+		if err := validateSigningKey(&ss[i], &pubs[i]); err != nil {
+			return nil, fmt.Errorf("NewSigner: key[%d] kid %q: %w", i, ss[i].KID, err)
+		}
+	}
+
 	// Append retired keys so they appear in the JWKS endpoint but are
 	// never selected for signing.
 	pubs = append(pubs, retiredKeys...)
@@ -165,6 +180,11 @@ func (s *Signer) SignJWS(jws SignableJWS) error {
 
 	input := signingInputBytes(protected, jws.GetPayload())
 
+	rr := s.Rand
+	if rr == nil {
+		rr = rand.Reader
+	}
+
 	// Sign: pre-hash for EC/RSA, or sign raw for Ed25519.
 	var sig []byte
 	if hash != 0 {
@@ -173,9 +193,9 @@ func (s *Signer) SignJWS(jws SignableJWS) error {
 		if err != nil {
 			return err
 		}
-		sig, err = pk.Signer.Sign(rand.Reader, digest, hash)
+		sig, err = pk.Signer.Sign(rr, digest, hash)
 	} else {
-		sig, err = pk.Signer.Sign(rand.Reader, input, crypto.Hash(0))
+		sig, err = pk.Signer.Sign(rr, input, crypto.Hash(0))
 	}
 	if err != nil {
 		return fmt.Errorf("sign %s: %w", alg, err)
@@ -231,4 +251,47 @@ func (s *Signer) Verifier() *Verifier {
 	// NewSigner already validated keys — duplicates cannot occur here.
 	v, _ := NewVerifier(s.Keys)
 	return v
+}
+
+// validateSigningKey performs a test sign+verify round-trip to catch bad
+// keys at construction time rather than on first use.
+func validateSigningKey(pk *jwk.PrivateKey, pub *jwk.PublicKey) error {
+	alg, hash, ecKeySize, err := jwa.SigningParams(pk.Signer)
+	if err != nil {
+		return err
+	}
+
+	testInput := []byte("jwt-key-validation")
+
+	// Sign: pre-hash for EC/RSA, or sign raw for Ed25519.
+	var sig []byte
+	if hash != 0 {
+		var digest []byte
+		digest, err = digestFor(hash, testInput)
+		if err != nil {
+			return err
+		}
+		sig, err = pk.Signer.Sign(rand.Reader, digest, hash)
+	} else {
+		sig, err = pk.Signer.Sign(rand.Reader, testInput, crypto.Hash(0))
+	}
+	if err != nil {
+		return fmt.Errorf("test sign %s: %w", alg, err)
+	}
+
+	// ECDSA: crypto.Signer returns ASN.1 DER, but JWS (RFC 7515 §A.3)
+	// requires IEEE P1363 format (raw r||s concatenation).
+	if ecKeySize > 0 {
+		sig, err = ecdsaDERToP1363(sig, ecKeySize)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Verify against the public key.
+	h := Header{Alg: alg, KID: pk.KID}
+	if err := verifyOneKey(h, pub.CryptoPublicKey, testInput, sig); err != nil {
+		return fmt.Errorf("test verify: %w", err)
+	}
+	return nil
 }
