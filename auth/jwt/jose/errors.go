@@ -106,4 +106,8 @@ var (
 	ErrBeforeIat       = fmt.Errorf("%w: iat: issued in the future", ErrInvalidClaim)
 	ErrBeforeAuthTime  = fmt.Errorf("%w: auth_time: in the future", ErrInvalidClaim)
 	ErrAfterAuthMaxAge = fmt.Errorf("%w: auth_time: exceeds max age", ErrInvalidClaim)
+
+	// Server-side misconfiguration — the validator itself is invalid.
+	// Callers should treat this as a 500 (server error), not 401 (unauthorized).
+	ErrMisconfigured = errors.New("validator misconfigured")
 )

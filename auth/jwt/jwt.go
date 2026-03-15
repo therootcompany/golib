@@ -546,7 +546,14 @@ var DefaultGracePeriod = 2 * time.Second
 // It can also be used directly as a minimal validator.
 //
 // Exp and Iat are checked by default; set IgnoreExp or IgnoreIat to opt out.
-// Iss, Aud, and Azp are allowlists - when non-empty the token's claim value
+//
+// Iss distinguishes nil from empty: nil means unconfigured (no check),
+// a non-nil empty slice is always a misconfiguration error (the empty set
+// allows nothing), and ["*"] accepts any non-empty issuer value.
+// [IDTokenValidator.IgnoreIss] overrides: when true and Iss is nil, the
+// check is skipped entirely. See [ErrMisconfigured].
+//
+// Aud and Azp are allowlists - when non-empty the token's claim value
 // must appear in the list and the claim must be present. RequiredAMRs and
 // MinAMRCount constrain the amr claim when set.
 //
@@ -562,7 +569,7 @@ type ValidatorCore struct {
 	IgnoreExp    bool
 	IgnoreNBF    bool // rarely appropriate; nbf is a security boundary like exp
 	IgnoreIat    bool
-	Iss          []string // if non-empty, token's iss must appear in list; IDTokenValidator.IgnoreIss overrides this
+	Iss          []string // nil=unchecked, []=misconfigured, ["*"]=any, ["x"]=must match
 	Aud          []string // token's aud must intersect list (if set)
 	Azp          []string // token's azp must appear in list (if set)
 	RequiredAMRs []string // all of these must appear in the token's amr list
@@ -606,7 +613,7 @@ func (v *ValidatorCore) Validate(claims Claims, now time.Time) ([]error, error) 
 // https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 type IDTokenValidator struct {
 	ValidatorCore
-	IgnoreIss      bool // if true, iss is not checked even if ValidatorCore.Iss is populated
+	IgnoreIss      bool // if true and Iss is nil, iss is not checked; non-nil empty Iss is always an error
 	IgnoreSub      bool // if false, sub must be present (non-empty)
 	IgnoreAud      bool
 	ExpectJTI      bool // if true, jti must be present (non-empty)
@@ -712,10 +719,20 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 		skew = 0
 	}
 
-	if checks.checkIss {
-		if claims.Iss == "" {
+	// Iss semantics: nil = unconfigured, [] = misconfigured (empty set),
+	// ["*"] = any non-empty value, ["x","y"] = must match one.
+	if core.Iss != nil && len(core.Iss) == 0 {
+		// Non-nil empty slice: the empty set allows nothing. This is
+		// always a server misconfiguration regardless of IgnoreIss.
+		record(true, fmt.Errorf("iss: non-nil empty Iss allows no issuers: %w", jose.ErrMisconfigured))
+	} else if checks.checkIss {
+		if core.Iss == nil {
+			// checkIss is true (e.g. IDTokenValidator with IgnoreIss=false)
+			// but no Iss list was configured — server misconfiguration.
+			record(true, fmt.Errorf("iss: issuer checking enabled but Iss is nil: %w", jose.ErrMisconfigured))
+		} else if claims.Iss == "" {
 			record(true, fmt.Errorf("iss: %w", jose.ErrMissingClaim))
-		} else if len(core.Iss) > 0 && !slices.Contains(core.Iss, claims.Iss) {
+		} else if !slices.Contains(core.Iss, "*") && !slices.Contains(core.Iss, claims.Iss) {
 			record(true, fmt.Errorf("iss %q not in allowed list: %w", claims.Iss, jose.ErrInvalidClaim))
 		}
 	}
