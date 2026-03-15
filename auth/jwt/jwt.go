@@ -133,6 +133,7 @@
 package jwt
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -1265,4 +1266,50 @@ func formatDuration(d time.Duration) string {
 	}
 
 	return strings.Join(parts, " ")
+}
+
+// contextKey is an unexported type for context keys defined in this package.
+// Using a distinct type prevents collisions with keys defined in other packages.
+type contextKey struct{ name string }
+
+var (
+	idTokenClaimsKey     = &contextKey{"IDTokenClaims"}
+	accessTokenClaimsKey = &contextKey{"AccessTokenClaims"}
+	standardClaimsKey    = &contextKey{"StandardClaims"}
+)
+
+// WithIDTokenClaims returns a new context that carries the given [IDTokenClaims].
+func WithIDTokenClaims(ctx context.Context, c *IDTokenClaims) context.Context {
+	return context.WithValue(ctx, idTokenClaimsKey, c)
+}
+
+// IDTokenClaimsFromContext extracts [IDTokenClaims] from the context.
+// Returns nil, false if the context does not carry ID token claims.
+func IDTokenClaimsFromContext(ctx context.Context) (*IDTokenClaims, bool) {
+	c, ok := ctx.Value(idTokenClaimsKey).(*IDTokenClaims)
+	return c, ok
+}
+
+// WithAccessTokenClaims returns a new context that carries the given [AccessTokenClaims].
+func WithAccessTokenClaims(ctx context.Context, c *AccessTokenClaims) context.Context {
+	return context.WithValue(ctx, accessTokenClaimsKey, c)
+}
+
+// AccessTokenClaimsFromContext extracts [AccessTokenClaims] from the context.
+// Returns nil, false if the context does not carry access token claims.
+func AccessTokenClaimsFromContext(ctx context.Context) (*AccessTokenClaims, bool) {
+	c, ok := ctx.Value(accessTokenClaimsKey).(*AccessTokenClaims)
+	return c, ok
+}
+
+// WithStandardClaims returns a new context that carries the given [StandardClaims].
+func WithStandardClaims(ctx context.Context, c *StandardClaims) context.Context {
+	return context.WithValue(ctx, standardClaimsKey, c)
+}
+
+// StandardClaimsFromContext extracts [StandardClaims] from the context.
+// Returns nil, false if the context does not carry standard claims.
+func StandardClaimsFromContext(ctx context.Context) (*StandardClaims, bool) {
+	c, ok := ctx.Value(standardClaimsKey).(*StandardClaims)
+	return c, ok
 }
