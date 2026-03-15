@@ -134,7 +134,7 @@ func assertTheirSignOurVerify(t *testing.T, gjwtMethod gjwt.SigningMethod, gjwtP
 		t.Fatalf("golang-jwt sign: %v", err)
 	}
 
-	verifier := jwt.NewVerifier([]jwk.PublicKey{ourPub})
+	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ourPub})
 	jws, err := verifier.VerifyJWT(tokenStr)
 	if err != nil {
 		t.Fatalf("our verify failed: %v", err)
@@ -185,7 +185,7 @@ func stressIteration(t *testing.T, i int, pk jwk.PrivateKey, pub jwk.PublicKey, 
 	if err != nil {
 		t.Fatalf("iter %d: golang-jwt sign: %v", i, err)
 	}
-	verifier := jwt.NewVerifier([]jwk.PublicKey{pub})
+	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{pub})
 	if _, err := verifier.VerifyJWT(tokenStr); err != nil {
 		t.Fatalf("iter %d: our verify: %v", i, err)
 	}
@@ -545,7 +545,8 @@ func assertPrivateKeyRoundTrip(t *testing.T, original *jwk.PrivateKey, gjwtMetho
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier := jwt.NewVerifier([]jwk.PublicKey{*original.PublicKey()})
+	origPub, _ := original.PublicKey()
+	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{*origPub})
 	if _, err := verifier.VerifyJWT(tokenStr); err != nil {
 		t.Errorf("verify with original pubkey: %v", err)
 	}
@@ -559,7 +560,8 @@ func assertPrivateKeyRoundTrip(t *testing.T, original *jwk.PrivateKey, gjwtMetho
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier2 := jwt.NewVerifier([]jwk.PublicKey{*recovered.PublicKey()})
+	recPub, _ := recovered.PublicKey()
+	verifier2, _ := jwt.NewVerifier([]jwk.PublicKey{*recPub})
 	if _, err := verifier2.VerifyJWT(tokenStr2); err != nil {
 		t.Errorf("verify with recovered pubkey: %v", err)
 	}
@@ -674,7 +676,7 @@ func assertPublicKeyRoundTrip(t *testing.T, origPub jwk.PublicKey, signer *jwt.S
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier := jwt.NewVerifier([]jwk.PublicKey{recovered})
+	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{recovered})
 	if _, err := verifier.VerifyJWT(tokenStr); err != nil {
 		t.Errorf("verify with round-tripped pubkey: %v", err)
 	}
@@ -743,7 +745,7 @@ func TestJWKSRoundTrip(t *testing.T) {
 		t.Fatalf("expected 5 keys, got %d", len(jwks.Keys))
 	}
 
-	verifier := jwt.NewVerifier(jwks.Keys)
+	verifier, _ := jwt.NewVerifier(jwks.Keys)
 	claims := testClaims("jwks-round-trip")
 
 	// Sign with each key (round-robin) and verify all.

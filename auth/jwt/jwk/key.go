@@ -191,15 +191,22 @@ type PrivateKey struct {
 // KID, Use, and Alg are copied directly. KeyOps are translated to their
 // public-key equivalents: "sign"=>"verify", "decrypt"=>"encrypt",
 // "unwrapKey"=>"wrapKey". Any op with no public equivalent is omitted.
-func (k *PrivateKey) PublicKey() *PublicKey {
-	pub, _ := k.Signer.Public().(CryptoPublicKey)
+//
+// Returns an error if the Signer's Public() method does not return a
+// known CryptoPublicKey type — this should never happen for keys created
+// through this library.
+func (k *PrivateKey) PublicKey() (*PublicKey, error) {
+	pub, ok := k.Signer.Public().(CryptoPublicKey)
+	if !ok {
+		return nil, fmt.Errorf("%w: private key type %T did not produce a known public key type", jose.ErrSanityFail, k.Signer)
+	}
 	return &PublicKey{
 		CryptoPublicKey: pub,
 		KID:             k.KID,
 		Use:             k.Use,
 		Alg:             k.Alg,
 		KeyOps:          toPublicKeyOps(k.KeyOps),
-	}
+	}, nil
 }
 
 // toPublicKeyOps translates private-key key_ops values to their public-key
@@ -233,7 +240,11 @@ func toPublicKeyOps(ops []string) []string {
 // Thumbprint computes the RFC 7638 thumbprint for this key's public side.
 // It delegates to [PublicKey.Thumbprint] on the result of [PrivateKey.PublicKey].
 func (k *PrivateKey) Thumbprint() (string, error) {
-	return k.PublicKey().Thumbprint()
+	pub, err := k.PublicKey()
+	if err != nil {
+		return "", err
+	}
+	return pub.Thumbprint()
 }
 
 // NewPrivateKey generates a new Ed25519 private key and returns it as a [PrivateKey].
@@ -355,7 +366,11 @@ func encode(k PublicKey) (rawKey, error) {
 // including private key material (d, and RSA CRT components p/q/dp/dq/qi).
 // Used by [PrivateKey.MarshalJSON].
 func encodePrivate(k PrivateKey) (rawKey, error) {
-	rk, err := encode(*k.PublicKey())
+	pub, err := k.PublicKey()
+	if err != nil {
+		return rawKey{}, err
+	}
+	rk, err := encode(*pub)
 	if err != nil {
 		return rawKey{}, err
 	}
@@ -587,6 +602,9 @@ func decodeRSA(kj rawKey) (*rsa.PublicKey, error) {
 		N: new(big.Int).SetBytes(n),
 		E: int(eVal),
 	}
+	// 1024-bit minimum: lower than the 2048-bit industry recommendation,
+	// but allows real-world compatibility with older keys and is useful
+	// for testing. Production deployments should use 2048+ bits.
 	if key.Size() < 128 { // 1024 bits minimum
 		return nil, fmt.Errorf("%d bits: %w", key.Size()*8, jose.ErrKeyTooSmall)
 	}

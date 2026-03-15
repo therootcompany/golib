@@ -84,7 +84,11 @@ func goodValidator() *jwt.IDTokenValidator {
 }
 
 func goodVerifier(pub jwk.PublicKey) *jwt.Verifier {
-	return jwt.NewVerifier([]jwk.PublicKey{pub})
+	v, err := jwt.NewVerifier([]jwk.PublicKey{pub})
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 // TestRoundTrip is the primary happy path using ES256.
@@ -219,7 +223,7 @@ func TestDecodeVerifyFlow(t *testing.T) {
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	iss := jwt.NewVerifier([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
+	iss, _ := jwt.NewVerifier([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
 
 	jws2, err := jwt.Decode(token)
 	if err != nil {
@@ -251,7 +255,7 @@ func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	token, _ := signer.SignToString(&claims)
 
 	// Verifier has wrong public key - sig verification will fail.
-	iss := jwt.NewVerifier([]jwk.PublicKey{{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"}})
+	iss, _ := jwt.NewVerifier([]jwk.PublicKey{{CryptoPublicKey: &wrongKey.PublicKey, KID: "k"}})
 
 	// Decode always succeeds for well-formed tokens.
 	result, err := jwt.Decode(token)
@@ -399,7 +403,7 @@ func TestVerifyWithoutValidation(t *testing.T) {
 	c := goodClaims()
 	token, _ := signer.SignToString(&c)
 
-	iss := jwt.NewVerifier([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
+	iss, _ := jwt.NewVerifier([]jwk.PublicKey{{CryptoPublicKey: &privKey.PublicKey, KID: "k"}})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -651,7 +655,7 @@ func TestJWKsRoundTrip(t *testing.T) {
 		t.Errorf("expected kid 'k1', got %q", keys[0].KID)
 	}
 
-	iss2 := jwt.NewVerifier(keys)
+	iss2, _ := jwt.NewVerifier(keys)
 	claims := goodClaims()
 	tokenStr, _ := signer.SignToString(&claims)
 
@@ -712,7 +716,10 @@ func TestPublicKeyOps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pk := *base
 			pk.KeyOps = tt.privateOps
-			pub := pk.PublicKey()
+			pub, err := pk.PublicKey()
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(pub.KeyOps) != len(tt.wantOps) {
 				t.Fatalf("KeyOps = %v, want %v", pub.KeyOps, tt.wantOps)
 			}

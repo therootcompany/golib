@@ -64,6 +64,14 @@ var (
 	ErrMissingKeyData = fmt.Errorf("%w: missing key data", ErrInvalidKey)
 )
 
+// --- Sanity errors ---
+// Returned when an internal invariant is violated — conditions that should
+// be impossible given the library's own validation, but are checked
+// defensively against unexpected key types or runtime behavior.
+var (
+	ErrSanityFail = errors.New("something impossible happened")
+)
+
 // --- Fetch errors ---
 // Returned by jwk.FetchURL, jwk.FetchOIDC, and jwk.FetchOAuth2.
 var (

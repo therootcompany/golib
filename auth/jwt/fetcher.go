@@ -102,6 +102,11 @@ type KeyFetcher struct {
 
 // Verifier returns a [*Verifier] for verifying tokens.
 //
+// Verifier intentionally does not take a [context.Context]: the background
+// JWKS refresh must not be canceled when a single client request finishes
+// or times out. The HTTP client's own Timeout (or a 30s default) bounds
+// the fetch duration instead.
+//
 // Fresh (within MaxAge): returned immediately, no network call.
 //
 // Stale (past MaxAge, within MaxAge+StaleAge, KeepOnError=true): the cached
@@ -112,15 +117,24 @@ type KeyFetcher struct {
 // No cache: blocks until the first fetch completes.
 func (f *KeyFetcher) Verifier() (*Verifier, error) {
 	if len(f.InitialKeys) > 0 {
+		var initErr error
 		f.initOnce.Do(func() {
+			v, err := NewVerifier(f.InitialKeys)
+			if err != nil {
+				initErr = err
+				return
+			}
 			now := time.Now()
 			ci := &cachedVerifier{
-				iss:       NewVerifier(f.InitialKeys),
+				iss:       v,
 				fetchedAt: now,
 				expiresAt: now, // immediately expired - served as stale, triggers background refresh
 			}
 			f.cached.Store(ci)
 		})
+		if initErr != nil {
+			return nil, fmt.Errorf("InitialKeys: %w", initErr)
+		}
 	}
 
 	now := time.Now()
@@ -193,12 +207,14 @@ func (f *KeyFetcher) backgroundRefresh() {
 // The cache TTL is the server's Cache-Control max-age, clamped to MaxAge.
 // If the server sends no Cache-Control header, MaxAge is used directly.
 func (f *KeyFetcher) fetch() (*Verifier, error) {
-	timeout := 30 * time.Second
-	if f.HTTPClient != nil && f.HTTPClient.Timeout > 0 {
-		timeout = f.HTTPClient.Timeout
+	// Apply a context timeout only when no HTTPClient timeout is set,
+	// avoiding a redundant double-timeout.
+	ctx := context.Background()
+	if f.HTTPClient == nil || f.HTTPClient.Timeout <= 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 
 	keys, serverMaxAge, err := jwk.FetchURL(ctx, f.URL, f.HTTPClient)
 	if err != nil {
@@ -214,9 +230,14 @@ func (f *KeyFetcher) fetch() (*Verifier, error) {
 		maxAge = serverMaxAge
 	}
 
+	v, err := NewVerifier(keys)
+	if err != nil {
+		return nil, fmt.Errorf("fetch JWKS from %s: %w", f.URL, err)
+	}
+
 	now := time.Now()
 	ci := &cachedVerifier{
-		iss:       NewVerifier(keys),
+		iss:       v,
 		fetchedAt: now,
 		expiresAt: now.Add(maxAge),
 	}

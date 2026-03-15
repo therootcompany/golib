@@ -224,7 +224,7 @@ func TestEd25519AllZerosKey(t *testing.T) {
 	}
 
 	// Change the kid in the header to match our zero key
-	zeroVerifier := jwt.NewVerifier([]jwk.PublicKey{pk})
+	zeroVerifier, _ := jwt.NewVerifier([]jwk.PublicKey{pk})
 	// The KID won't match, but let's verify that the system handles it
 	err = zeroVerifier.Verify(jws)
 	if err == nil {
@@ -445,7 +445,7 @@ func TestVerifyWrongKeyTypeForAlg(t *testing.T) {
 		KID:             edKey.KID, // same KID
 	}
 
-	verifier := jwt.NewVerifier([]jwk.PublicKey{rsaPub})
+	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{rsaPub})
 	jws, err := jwt.Decode(tokenStr)
 	if err != nil {
 		t.Fatal(err)
@@ -573,6 +573,9 @@ func TestVerifyUnsupportedAlg(t *testing.T) {
 	}
 }
 
+// TestVerifyMissingKID verifies that tokens without a KID header try all keys
+// via fallthrough. A tampered header (different signing input) still fails
+// with ErrSignatureInvalid, but the lookup itself does not reject the token.
 func TestVerifyMissingKID(t *testing.T) {
 	key, err := jwk.NewPrivateKey()
 	if err != nil {
@@ -589,7 +592,7 @@ func TestVerifyMissingKID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Tamper header to remove kid
+	// Tamper header to remove kid — signing input changes, so sig will be invalid.
 	header := map[string]string{"alg": "EdDSA", "typ": "JWT"}
 	headerJSON, _ := json.Marshal(header)
 	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
@@ -605,10 +608,11 @@ func TestVerifyMissingKID(t *testing.T) {
 	verifier := signer.Verifier()
 	err = verifier.Verify(jws)
 	if err == nil {
-		t.Fatal("expected error for missing kid")
+		t.Fatal("expected error for tampered header")
 	}
-	if !errors.Is(err, jose.ErrMissingKID) {
-		t.Fatalf("expected ErrMissingKID, got: %v", err)
+	// With no KID, all keys are tried — fails with signature invalid, not missing KID.
+	if !errors.Is(err, jose.ErrSignatureInvalid) {
+		t.Fatalf("expected ErrSignatureInvalid, got: %v", err)
 	}
 }
 

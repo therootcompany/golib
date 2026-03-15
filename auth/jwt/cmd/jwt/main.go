@@ -339,8 +339,10 @@ func cmdInspect(args []string) error {
 			}
 		}
 		if len(keys) > 0 {
-			verifier := jwt.NewVerifier(keys)
-			if err := verifier.Verify(jws); err == nil {
+			verifier, verifierErr := jwt.NewVerifier(keys)
+			if verifierErr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("verifier: %v", verifierErr))
+			} else if err := verifier.Verify(jws); err == nil {
 				result.Verified = true
 				// Find the matching key.
 				hdr := jws.GetHeader()
@@ -486,7 +488,10 @@ func cmdVerify(args []string) error {
 		}
 	}
 
-	verifier := jwt.NewVerifier(pubKeys)
+	verifier, err := jwt.NewVerifier(pubKeys)
+	if err != nil {
+		return fmt.Errorf("create verifier: %w", err)
+	}
 
 	// Decode and verify.
 	jws, err := jwt.Decode(tokenStr)
@@ -614,7 +619,10 @@ func cmdKeygen(args []string) error {
 	fmt.Fprintln(os.Stdout, string(data))
 
 	// Print public key to stderr for convenience.
-	pub := pk.PublicKey()
+	pub, err := pk.PublicKey()
+	if err != nil {
+		return fmt.Errorf("derive public key: %w", err)
+	}
 	pubData, err := json.MarshalIndent(pub, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal public key: %w", err)
@@ -776,7 +784,11 @@ func loadPublicKeysFromPrivate(source string) ([]jwk.PublicKey, error) {
 	}
 	pubs := make([]jwk.PublicKey, len(privKeys))
 	for i := range privKeys {
-		pubs[i] = *privKeys[i].PublicKey()
+		pub, err := privKeys[i].PublicKey()
+		if err != nil {
+			return nil, fmt.Errorf("key[%d]: %w", i, err)
+		}
+		pubs[i] = *pub
 	}
 	return pubs, nil
 }

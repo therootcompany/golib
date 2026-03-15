@@ -100,7 +100,7 @@ func assertJWXSignOurVerify(t *testing.T, ks testkeys.KeySet, sub string) {
 		t.Fatalf("jwx jwt.Sign: %v", err)
 	}
 
-	verifier := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
 	verifiedJWS, err := verifier.VerifyJWT(string(signed))
 	if err != nil {
 		t.Fatalf("our verify: %v", err)
@@ -226,7 +226,7 @@ func TestJWKInterop_OurJSONToJWX(t *testing.T) {
 				t.Fatalf("jwx sign with our-JSON-parsed key: %v", err)
 			}
 
-			verifier := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+			verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
 			if _, err := verifier.VerifyJWT(string(signed)); err != nil {
 				t.Fatalf("our verify: %v", err)
 			}
@@ -265,7 +265,7 @@ func TestJWKInterop_JWXJSONToOur(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			verifier := jwt.NewVerifier([]jwk.PublicKey{recovered})
+			verifier, _ := jwt.NewVerifier([]jwk.PublicKey{recovered})
 			if _, err := verifier.VerifyJWT(tokenStr); err != nil {
 				t.Fatalf("verify with jwx-JSON-parsed key: %v", err)
 			}
@@ -381,7 +381,7 @@ func TestJWKSInterop_JWXToOur(t *testing.T) {
 		t.Fatalf("expected 5 keys, got %d", len(ourJWKS.Keys))
 	}
 
-	verifier := jwt.NewVerifier(ourJWKS.Keys)
+	verifier, _ := jwt.NewVerifier(ourJWKS.Keys)
 
 	// Sign tokens with jwx, verify with our library.
 	for _, ks := range sets {
@@ -436,7 +436,7 @@ func TestAudienceStringInterop_JWX(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
 	verifiedJWS, err := verifier.VerifyJWT(string(signed))
 	if err != nil {
 		t.Fatal(err)
@@ -558,7 +558,7 @@ func TestNumericDatePrecision_JWX(t *testing.T) {
 	jwxTok.Set(jwxjwt.IssuedAtKey, time.Unix(wantIat2, 0))
 	signed, _ := jwxjwt.Sign(jwxTok, jwxjwt.WithKey(jwa.EdDSA(), jwxKey))
 
-	verifier := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+	verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
 	verifiedJWS, _ := verifier.VerifyJWT(string(signed))
 	var decoded jwt.IDTokenClaims
 	jwt.UnmarshalClaims(verifiedJWS, &decoded)
@@ -612,7 +612,7 @@ func TestStress_JWX(t *testing.T) {
 				if err != nil {
 					t.Fatalf("iter %d: jwx sign: %v", i, err)
 				}
-				verifier := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
+				verifier, _ := jwt.NewVerifier([]jwk.PublicKey{ks.PubKey})
 				if _, err := verifier.VerifyJWT(string(signed)); err != nil {
 					t.Fatalf("iter %d: our verify: %v", i, err)
 				}

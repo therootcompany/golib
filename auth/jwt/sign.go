@@ -30,7 +30,9 @@ import (
 //
 // Do not copy a Signer after first use - it contains an atomic counter.
 type Signer struct {
-	jwk.JWKs  // Keys []jwk.PublicKey - promoted; marshals as {"keys":[...]}
+	jwk.JWKs // Keys []jwk.PublicKey - promoted; marshals as {"keys":[...]}.
+	// Note: Keys is exported because json.Marshal needs it for the JWKS
+	// endpoint. Callers should not mutate the slice after construction.
 	keys      []jwk.PrivateKey
 	signerIdx atomic.Uint64
 }
@@ -89,7 +91,11 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 	// TODO use slice rather than map, allow "none" or IgnoreKID
 	pubs := make([]jwk.PublicKey, len(ss))
 	for i := range ss {
-		pubs[i] = *ss[i].PublicKey()
+		pub, err := ss[i].PublicKey()
+		if err != nil {
+			return nil, fmt.Errorf("NewSigner: key[%d] kid %q: %w", i, ss[i].KID, err)
+		}
+		pubs[i] = *pub
 	}
 	return &Signer{
 		JWKs: jwk.JWKs{Keys: pubs},
@@ -104,8 +110,19 @@ func NewSigner(keys []jwk.PrivateKey) (*Signer, error) {
 // (e.g., inspecting headers before encoding). For the common one-step cases,
 // prefer [Signer.Sign] or [Signer.SignToString].
 func (s *Signer) SignJWS(jws SignableJWS) error {
-	idx := s.signerIdx.Add(1) - 1
-	pk := &s.keys[idx%uint64(len(s.keys))]
+	// Round-robin with CAS wrap: keeps the counter bounded to [0, n)
+	// so it never approaches uint64 overflow.
+	n := uint64(len(s.keys))
+	var idx uint64
+	for {
+		cur := s.signerIdx.Load()
+		next := (cur + 1) % n
+		if s.signerIdx.CompareAndSwap(cur, next) {
+			idx = cur
+			break
+		}
+	}
+	pk := &s.keys[idx]
 
 	if pk.Signer == nil {
 		return fmt.Errorf("kid %q: %w", pk.KID, jose.ErrNoSigningKey)
@@ -203,6 +220,7 @@ func (s *Signer) SignToString(claims Claims) (string, error) {
 //
 //	iss := jwt.New(append(signer.Keys, oldKeys...))
 func (s *Signer) Verifier() *Verifier {
-	// TODO can't we just do this once and store it?
-	return NewVerifier(s.Keys)
+	// NewSigner already validated keys — duplicates cannot occur here.
+	v, _ := NewVerifier(s.Keys)
+	return v
 }

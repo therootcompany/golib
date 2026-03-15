@@ -280,9 +280,15 @@ type Header struct {
 type Audience []string
 
 // UnmarshalJSON decodes both the string and []string forms of the "aud" claim.
+// An empty string unmarshals to an empty (non-nil) slice, round-tripping with
+// [Audience.MarshalJSON].
 func (a *Audience) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err == nil {
+		if s == "" {
+			*a = Audience{}
+			return nil
+		}
 		*a = Audience{s}
 		return nil
 	}
@@ -294,13 +300,18 @@ func (a *Audience) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// MarshalJSON encodes the audience as a plain string when there is one value,
-// or as a JSON array for multiple values.
+// MarshalJSON encodes the audience as a plain string when there is zero or one
+// value, or as a JSON array for multiple values. An empty or single-element
+// Audience round-trips through the string form; nil marshals as JSON null.
 func (a Audience) MarshalJSON() ([]byte, error) {
-	if len(a) == 1 {
+	switch len(a) {
+	case 0:
+		return json.Marshal("")
+	case 1:
 		return json.Marshal(a[0])
+	default:
+		return json.Marshal([]string(a))
 	}
-	return json.Marshal([]string(a))
 }
 
 // IDTokenClaims holds the OIDC Core §2 ID Token claims: the RFC 7519
@@ -530,13 +541,13 @@ var DefaultGracePeriod = 2 * time.Second
 // MinAMRCount constrain the amr claim when set.
 //
 // GracePeriod is applied to exp, iat, and auth_time to tolerate minor clock
-// differences between distributed systems. If zero, [DefaultGracePeriod] (5s)
+// differences between distributed systems. If zero, [DefaultGracePeriod] (2s)
 // is used. Set to a negative value to disable skew tolerance entirely.
 //
 // MaxAge applies to auth_time: when set, authentication must have occurred
 // within MaxAge of now.
 type ValidatorCore struct {
-	GracePeriod  time.Duration // 0 = DefaultGracePeriod (5s); negative = no tolerance
+	GracePeriod  time.Duration // 0 = DefaultGracePeriod (2s); negative = no tolerance
 	MaxAge       time.Duration
 	IgnoreExp    bool
 	IgnoreNBF    bool // rarely appropriate; nbf is a security boundary like exp
@@ -812,27 +823,40 @@ func validateClaims(claims IDTokenClaims, core ValidatorCore, checks claimChecks
 // the relying party's perspective - you hold its public keys and use them to
 // verify that tokens were legitimately signed by it.
 //
+// When a token's kid header matches a key, that key is tried. When the kid is
+// empty, every key is tried in order; the first successful verification wins.
+//
 // Verifier is immutable after construction - safe for concurrent use with no locking.
-// Use [New] to construct with a fixed key set, or use [Signer.Verifier] or
+// Use [NewVerifier] to construct with a fixed key set, or use [Signer.Verifier] or
 // [KeyFetcher.Verifier] to obtain one from a signer or remote JWKS endpoint.
 type Verifier struct {
 	pubKeys []jwk.PublicKey
-	keys    map[string]jwk.CryptoPublicKey // kid => key
 }
 
 // NewVerifier creates a Verifier with an explicit set of public keys.
 //
+// Duplicate KIDs are consolidated when both keys have the same thumbprint
+// (same underlying key material); otherwise NewVerifier returns an error.
+//
 // The returned Verifier is immutable - keys cannot be added or removed after
 // construction. For dynamic key rotation, see [KeyFetcher].
-func NewVerifier(keys []jwk.PublicKey) *Verifier {
-	m := make(map[string]jwk.CryptoPublicKey, len(keys))
+func NewVerifier(keys []jwk.PublicKey) (*Verifier, error) {
+	deduped := make([]jwk.PublicKey, 0, len(keys))
+	seen := make(map[string]jwk.CryptoPublicKey, len(keys))
 	for _, k := range keys {
-		m[k.KID] = k.CryptoPublicKey
+		if existing, ok := seen[k.KID]; ok {
+			// Same KID — consolidate if the key material is identical.
+			if existing.Equal(k.CryptoPublicKey) {
+				continue // same key, skip duplicate
+			}
+			return nil, fmt.Errorf("duplicate kid %q with different key material: %w", k.KID, jose.ErrKIDConflict)
+		}
+		seen[k.KID] = k.CryptoPublicKey
+		deduped = append(deduped, k)
 	}
 	return &Verifier{
-		pubKeys: keys,
-		keys:    m,
-	}
+		pubKeys: deduped,
+	}, nil
 }
 
 // PublicKeys returns the public keys held by this Verifier.
@@ -861,67 +885,93 @@ func (iss *Verifier) PublicKeys() []jwk.PublicKey {
 // Use [Verifier.VerifyJWT] to decode and verify in one step.
 func (iss *Verifier) Verify(jws VerifiableJWS) error {
 	h := jws.GetHeader()
-	if h.KID == "" {
-		return fmt.Errorf("%w: alg %q", jose.ErrMissingKID, h.Alg)
-	}
-	key, ok := iss.keys[h.KID]
-	if !ok {
-		return fmt.Errorf("kid %q: %w", h.KID, jose.ErrUnknownKID)
-	}
-
 	signingInput := signingInputBytes(jws.GetProtected(), jws.GetPayload())
 	sig := jws.GetSignature()
 
+	// Build the candidate key list: exact KID match, or all keys when
+	// the token has no KID (try each, first success wins).
+	var candidates []jwk.PublicKey
+	if h.KID != "" {
+		for i := range iss.pubKeys {
+			if iss.pubKeys[i].KID == h.KID {
+				candidates = append(candidates, iss.pubKeys[i])
+				break
+			}
+		}
+		if len(candidates) == 0 {
+			return fmt.Errorf("kid %q: %w", h.KID, jose.ErrUnknownKID)
+		}
+	} else {
+		candidates = iss.pubKeys
+	}
+
+	var lastErr error
+	for _, pk := range candidates {
+		err := verifyOneKey(h, pk.CryptoPublicKey, signingInput, sig)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("alg %q: %w", h.Alg, jose.ErrMissingKID)
+}
+
+// verifyOneKey checks the signature against a single key.
+func verifyOneKey(h Header, key jwk.CryptoPublicKey, signingInput, sig []byte) error {
+	kid := h.KID
 	switch h.Alg {
 	case "ES256", "ES384", "ES512":
 		k, ok := key.(*ecdsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("kid %q alg %q: key type %T: %w", h.KID, h.Alg, key, jose.ErrAlgConflict)
+			return fmt.Errorf("kid %q alg %q: key type %T: %w", kid, h.Alg, key, jose.ErrAlgConflict)
 		}
 		ci, err := jwa.ECInfoForAlg(k.Curve, h.Alg)
 		if err != nil {
-			return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, err)
+			return fmt.Errorf("kid %q alg %q: %w", kid, h.Alg, err)
 		}
 		if len(sig) != 2*ci.KeySize {
-			return fmt.Errorf("kid %q alg %q: sig len %d, want %d: %w", h.KID, h.Alg, len(sig), 2*ci.KeySize, jose.ErrSignatureInvalid)
+			return fmt.Errorf("kid %q alg %q: sig len %d, want %d: %w", kid, h.Alg, len(sig), 2*ci.KeySize, jose.ErrSignatureInvalid)
 		}
 		digest, err := digestFor(ci.Hash, signingInput)
 		if err != nil {
-			return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, err)
+			return fmt.Errorf("kid %q alg %q: %w", kid, h.Alg, err)
 		}
 		r := new(big.Int).SetBytes(sig[:ci.KeySize])
 		s := new(big.Int).SetBytes(sig[ci.KeySize:])
 		if !ecdsa.Verify(k, digest, r, s) {
-			return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, jose.ErrSignatureInvalid)
+			return fmt.Errorf("kid %q alg %q: %w", kid, h.Alg, jose.ErrSignatureInvalid)
 		}
 		return nil
 
 	case "RS256":
 		k, ok := key.(*rsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("kid %q alg %q: key type %T: %w", h.KID, h.Alg, key, jose.ErrAlgConflict)
+			return fmt.Errorf("kid %q alg %q: key type %T: %w", kid, h.Alg, key, jose.ErrAlgConflict)
 		}
 		digest, err := digestFor(crypto.SHA256, signingInput)
 		if err != nil {
-			return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, err)
+			return fmt.Errorf("kid %q alg %q: %w", kid, h.Alg, err)
 		}
 		if err := rsa.VerifyPKCS1v15(k, crypto.SHA256, digest, sig); err != nil {
-			return fmt.Errorf("kid %q alg %q: %w: %w", h.KID, h.Alg, jose.ErrSignatureInvalid, err)
+			return fmt.Errorf("kid %q alg %q: %w: %w", kid, h.Alg, jose.ErrSignatureInvalid, err)
 		}
 		return nil
 
 	case "EdDSA":
 		k, ok := key.(ed25519.PublicKey)
 		if !ok {
-			return fmt.Errorf("kid %q alg %q: key type %T: %w", h.KID, h.Alg, key, jose.ErrAlgConflict)
+			return fmt.Errorf("kid %q alg %q: key type %T: %w", kid, h.Alg, key, jose.ErrAlgConflict)
 		}
 		if !ed25519.Verify(k, signingInput, sig) {
-			return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, jose.ErrSignatureInvalid)
+			return fmt.Errorf("kid %q alg %q: %w", kid, h.Alg, jose.ErrSignatureInvalid)
 		}
 		return nil
 
 	default:
-		return fmt.Errorf("kid %q alg %q: %w", h.KID, h.Alg, jose.ErrUnsupportedAlg)
+		return fmt.Errorf("kid %q alg %q: %w", kid, h.Alg, jose.ErrUnsupportedAlg)
 	}
 }
 
@@ -971,6 +1021,13 @@ func ecdsaDERToP1363(der []byte, keySize int) ([]byte, error) {
 	}
 	if len(rest) > 0 {
 		return nil, fmt.Errorf("%d trailing ASN.1 bytes: %w", len(rest), jose.ErrSignatureInvalid)
+	}
+	// Validate that R and S fit in keySize bytes before FillBytes.
+	rLen := (sig.R.BitLen() + 7) / 8
+	sLen := (sig.S.BitLen() + 7) / 8
+	if rLen > keySize || sLen > keySize {
+		return nil, fmt.Errorf("R (%d bytes) or S (%d bytes) exceeds key size %d: %w",
+			rLen, sLen, keySize, jose.ErrSignatureInvalid)
 	}
 	out := make([]byte, 2*keySize)
 	sig.R.FillBytes(out[:keySize])
