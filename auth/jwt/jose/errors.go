@@ -57,11 +57,12 @@ var (
 
 // --- Key parsing errors ---
 // Returned by jwk.PublicKey.UnmarshalJSON, jwk.PrivateKey.UnmarshalJSON,
-// and jwk.ReadFile.
+// jwk.ReadFile, and the jwk.Parse*/jwk.Load* functions.
 var (
-	ErrInvalidKey     = errors.New("invalid key")
-	ErrKeyTooSmall    = fmt.Errorf("%w: key too small", ErrInvalidKey)
-	ErrMissingKeyData = fmt.Errorf("%w: missing key data", ErrInvalidKey)
+	ErrInvalidKey        = errors.New("invalid key")
+	ErrKeyTooSmall       = fmt.Errorf("%w: key too small", ErrInvalidKey)
+	ErrMissingKeyData    = fmt.Errorf("%w: missing key data", ErrInvalidKey)
+	ErrUnsupportedFormat = errors.New("unsupported format")
 )
 
 // --- Sanity errors ---
