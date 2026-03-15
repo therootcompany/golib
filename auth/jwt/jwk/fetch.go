@@ -114,6 +114,11 @@ func fetchFromDiscovery(ctx context.Context, discoveryURL string, client *http.C
 	if doc.JWKsURI == "" {
 		return nil, "", fmt.Errorf("discovery doc missing jwks_uri: %w", jose.ErrFetchFailed)
 	}
+	// Validate scheme to prevent SSRF via a malicious discovery document
+	// pointing jwks_uri at an internal/non-HTTPS endpoint.
+	if !strings.HasPrefix(doc.JWKsURI, "https://") {
+		return nil, "", fmt.Errorf("jwks_uri must be https, got %q: %w", doc.JWKsURI, jose.ErrFetchFailed)
+	}
 
 	// TODO lift this up
 	keys, _, err := FetchURL(ctx, doc.JWKsURI, client)
