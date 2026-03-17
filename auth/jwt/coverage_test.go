@@ -1924,7 +1924,7 @@ func TestCov_NewIDTokenValidator(t *testing.T) {
 }
 
 func TestCov_NewAccessTokenValidator(t *testing.T) {
-	v := NewAccessTokenValidator([]string{"iss"}, []string{"aud"}, nil)
+	v := NewAccessTokenValidator([]string{"iss"}, []string{"aud"})
 	if v.Checks&ChecksConfigured == 0 {
 		t.Fatal("expected ChecksConfigured")
 	}
@@ -1932,10 +1932,74 @@ func TestCov_NewAccessTokenValidator(t *testing.T) {
 		t.Fatal("expected CheckJTI and CheckClientID for access token")
 	}
 
-	v2 := NewAccessTokenValidator(nil, nil, nil)
+	v2 := NewAccessTokenValidator(nil, nil)
 	if v2.Checks&CheckIss != 0 {
 		t.Fatal("expected no CheckIss for nil iss")
 	}
+}
+
+func TestCov_NewAccessTokenValidator_Scopes(t *testing.T) {
+	iss := []string{"https://example.com"}
+	aud := []string{"https://api.example.com"}
+
+	t.Run("nil_no_scope_check", func(t *testing.T) {
+		// No scope args: CheckScope not set, scope claim not validated.
+		v := NewAccessTokenValidator(iss, aud)
+		if v.Checks&CheckScope != 0 {
+			t.Fatal("expected CheckScope not set for nil scopes")
+		}
+		if v.RequiredScopes != nil {
+			t.Fatal("expected nil RequiredScopes")
+		}
+		// Validate passes even with no scope claim.
+		claims := goodClaims()
+		claims.Scope = nil
+		claims.JTI = "jti-x"
+		if err := v.Validate(nil, claims, testNow); err != nil {
+			t.Fatalf("expected no error without scope check, got %v", err)
+		}
+	})
+
+	t.Run("empty_presence_only", func(t *testing.T) {
+		// Empty spread: CheckScope set, any non-empty scope accepted.
+		v := NewAccessTokenValidator(iss, aud, []string{}...)
+		if v.Checks&CheckScope == 0 {
+			t.Fatal("expected CheckScope set for empty non-nil scopes")
+		}
+		if v.RequiredScopes == nil {
+			t.Fatal("expected non-nil RequiredScopes")
+		}
+		// Validate passes when scope is present.
+		if err := v.Validate(nil, goodClaims(), testNow); err != nil {
+			t.Fatalf("expected no error with scope present, got %v", err)
+		}
+		// Validate fails when scope is absent.
+		claims := goodClaims()
+		claims.Scope = nil
+		err := v.Validate(nil, claims, testNow)
+		if !errors.Is(err, ErrMissingClaim) {
+			t.Fatalf("expected ErrMissingClaim for absent scope, got %v", err)
+		}
+	})
+
+	t.Run("specific_scope", func(t *testing.T) {
+		// Specific scope: CheckScope set, token must contain "openid".
+		v := NewAccessTokenValidator(iss, aud, "openid")
+		if v.Checks&CheckScope == 0 {
+			t.Fatal("expected CheckScope set")
+		}
+		// Validate passes when scope contains "openid".
+		if err := v.Validate(nil, goodClaims(), testNow); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		// Validate fails when "openid" is absent from scope.
+		claims := goodClaims()
+		claims.Scope = SpaceDelimited{"profile"}
+		err := v.Validate(nil, claims, testNow)
+		if !errors.Is(err, ErrInsufficientScope) {
+			t.Fatalf("expected ErrInsufficientScope, got %v", err)
+		}
+	})
 }
 
 func TestCov_Validate_Unconfigured(t *testing.T) {

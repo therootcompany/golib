@@ -335,12 +335,16 @@ func NewIDTokenValidator(iss, aud, azp []string) *Validator {
 // Pass the allowed issuers and audiences, or nil to skip that check.
 // Use []string{"*"} to require the claim be present without restricting its value.
 //
-// Checks enabled by default: iss, exp, aud, sub, client_id, iat, jti. and scope.
-// Not checked: nbf, auth_time, and, azp.
-// Populate RequiredScopes to enforce specific scope values (overrides CheckScope).
+// Checks enabled by default: iss, exp, aud, sub, client_id, iat, jti, and scope.
+// requiredScopes controls scope validation:
+//   - no args: scope not checked
+//   - []string{}...: scope must be present (any value accepted)
+//   - "openid", "profile", ...: scope must contain all listed values
+//
+// Not checked: nbf, auth_time, azp.
 //
 // https://www.rfc-editor.org/rfc/rfc9068.html#section-2.2
-func NewAccessTokenValidator(iss, aud, scopes []string) *Validator {
+func NewAccessTokenValidator(iss, aud []string, requiredScopes ...string) *Validator {
 	checks := ChecksConfigured | CheckSub | CheckExp | CheckIAt | CheckJTI | CheckClientID
 	if iss != nil {
 		checks |= CheckIss
@@ -348,7 +352,7 @@ func NewAccessTokenValidator(iss, aud, scopes []string) *Validator {
 	if aud != nil {
 		checks |= CheckAud
 	}
-	if scopes != nil {
+	if requiredScopes != nil {
 		checks |= CheckScope
 	}
 	return &Validator{
@@ -356,7 +360,7 @@ func NewAccessTokenValidator(iss, aud, scopes []string) *Validator {
 		GracePeriod:    defaultGracePeriod,
 		Iss:            iss,
 		Aud:            aud,
-		RequiredScopes: scopes,
+		RequiredScopes: requiredScopes,
 	}
 }
 

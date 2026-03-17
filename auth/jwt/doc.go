@@ -82,7 +82,7 @@
 // use [NewAccessTokenValidator] with [TokenClaims] (which includes the
 // client_id and scope fields):
 //
-//		v := jwt.NewAccessTokenValidator(issuers, audiences, relyingParties)
+//		v := jwt.NewAccessTokenValidator(issuers, audiences, "openid", "profile")
 //		if err := v.Validate(nil, &claims, time.Now()); err != nil { /* ... */ }
 //
 //	  - [NewAccessToken] creates a JWS with the correct "at+jwt" typ header
