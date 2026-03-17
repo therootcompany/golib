@@ -793,7 +793,7 @@ func loadPublicKeys(source string) ([]jwt.PublicKey, error) {
 
 	// Try as single public key JWK.
 	var pk jwt.PublicKey
-	if err := json.Unmarshal(data, &pk); err == nil && pk.Key != nil {
+	if err := json.Unmarshal(data, &pk); err == nil && pk.Pub != nil {
 		return []jwt.PublicKey{pk}, nil
 	}
 

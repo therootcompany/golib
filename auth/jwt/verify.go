@@ -58,7 +58,7 @@ func NewVerifier(keys []PublicKey) (*Verifier, error) {
 		entries := seen[k.KID]
 		dup := false
 		for _, e := range entries {
-			if e.key.Equal(k.Key) {
+			if e.key.Equal(k.Pub) {
 				dup = true
 				break
 			}
@@ -66,7 +66,7 @@ func NewVerifier(keys []PublicKey) (*Verifier, error) {
 		if dup {
 			continue // identical key material, skip
 		}
-		seen[k.KID] = append(entries, seenEntry{key: k.Key, index: len(deduped)})
+		seen[k.KID] = append(entries, seenEntry{key: k.Pub, index: len(deduped)})
 		deduped = append(deduped, k)
 	}
 	return &Verifier{
@@ -134,7 +134,7 @@ func (v *Verifier) Verify(jws VerifiableJWT) error {
 	// for the token's algorithm) since it's more informative.
 	var bestErr error
 	for _, pk := range candidates {
-		err := verifyOneKey(h, pk.Key, signingInput, sig)
+		err := verifyOneKey(h, pk.Pub, signingInput, sig)
 		if err == nil {
 			return nil
 		}

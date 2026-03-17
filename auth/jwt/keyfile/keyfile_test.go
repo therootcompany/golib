@@ -228,7 +228,7 @@ func TestParsePublicJWK(t *testing.T) {
 	if pk.KID == "" {
 		t.Error("KID should be set")
 	}
-	if pk.Key == nil {
+	if pk.Pub == nil {
 		t.Error("Key should be set")
 	}
 }

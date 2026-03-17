@@ -125,7 +125,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	iss := goodVerifier(jwt.PublicKey{Key: &privKey.PublicKey, KID: "key-1"})
+	iss := goodVerifier(jwt.PublicKey{Pub: &privKey.PublicKey, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -174,7 +174,7 @@ func TestRoundTripRS256(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	iss := goodVerifier(jwt.PublicKey{Key: &privKey.PublicKey, KID: "key-1"})
+	iss := goodVerifier(jwt.PublicKey{Pub: &privKey.PublicKey, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -215,7 +215,7 @@ func TestRoundTripEdDSA(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	iss := goodVerifier(jwt.PublicKey{Key: pubKeyBytes, KID: "key-1"})
+	iss := goodVerifier(jwt.PublicKey{Pub: pubKeyBytes, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -256,7 +256,7 @@ func TestRoundTripES384(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	iss := goodVerifier(jwt.PublicKey{Key: &privKey.PublicKey, KID: "key-1"})
+	iss := goodVerifier(jwt.PublicKey{Pub: &privKey.PublicKey, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -297,7 +297,7 @@ func TestRoundTripES512(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	iss := goodVerifier(jwt.PublicKey{Key: &privKey.PublicKey, KID: "key-1"})
+	iss := goodVerifier(jwt.PublicKey{Pub: &privKey.PublicKey, KID: "key-1"})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -321,7 +321,7 @@ func TestDecodeVerifyFlow(t *testing.T) {
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	iss, _ := jwt.NewVerifier([]jwt.PublicKey{{Key: &privKey.PublicKey, KID: "k"}})
+	iss, _ := jwt.NewVerifier([]jwt.PublicKey{{Pub: &privKey.PublicKey, KID: "k"}})
 
 	jws2, err := jwt.Decode(token)
 	if err != nil {
@@ -353,7 +353,7 @@ func TestDecodeReturnsParsedOnSigFailure(t *testing.T) {
 	token, _ := signer.SignToString(&claims)
 
 	// Verifier has wrong public key - sig verification will fail.
-	iss, _ := jwt.NewVerifier([]jwt.PublicKey{{Key: &wrongKey.PublicKey, KID: "k"}})
+	iss, _ := jwt.NewVerifier([]jwt.PublicKey{{Pub: &wrongKey.PublicKey, KID: "k"}})
 
 	// Decode always succeeds for well-formed tokens.
 	result, err := jwt.Decode(token)
@@ -384,7 +384,7 @@ func TestCustomValidation(t *testing.T) {
 	claims.Email = ""
 	token, _ := signer.SignToString(&claims)
 
-	iss := goodVerifier(jwt.PublicKey{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwt.PublicKey{Pub: &privKey.PublicKey, KID: "k"})
 	jws2, err := jwt.Decode(token)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
@@ -457,7 +457,7 @@ func TestVerifyWithoutValidation(t *testing.T) {
 	c := goodClaims()
 	token, _ := signer.SignToString(&c)
 
-	iss, _ := jwt.NewVerifier([]jwt.PublicKey{{Key: &privKey.PublicKey, KID: "k"}})
+	iss, _ := jwt.NewVerifier([]jwt.PublicKey{{Pub: &privKey.PublicKey, KID: "k"}})
 
 	jws2, err := iss.VerifyJWT(token)
 	if err != nil {
@@ -481,7 +481,7 @@ func TestVerifierWrongKey(t *testing.T) {
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	iss := goodVerifier(jwt.PublicKey{Key: &wrongKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwt.PublicKey{Pub: &wrongKey.PublicKey, KID: "k"})
 
 	parsed, err := jwt.Decode(token)
 	if err != nil {
@@ -500,7 +500,7 @@ func TestVerifierUnknownKid(t *testing.T) {
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	iss := goodVerifier(jwt.PublicKey{Key: &privKey.PublicKey, KID: "known-kid"})
+	iss := goodVerifier(jwt.PublicKey{Pub: &privKey.PublicKey, KID: "known-kid"})
 
 	parsed, err := jwt.Decode(token)
 	if err != nil {
@@ -522,7 +522,7 @@ func TestVerifierIssMismatch(t *testing.T) {
 	claims.Iss = "https://evil.example.com"
 	token, _ := signer.SignToString(&claims)
 
-	iss := goodVerifier(jwt.PublicKey{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwt.PublicKey{Pub: &privKey.PublicKey, KID: "k"})
 
 	// Decode+Verify succeeds - iss is not checked at the Verifier level.
 	parsed, err := jwt.Decode(token)
@@ -561,7 +561,7 @@ func TestVerifyTamperedAlg(t *testing.T) {
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	iss := goodVerifier(jwt.PublicKey{Key: &privKey.PublicKey, KID: "k"})
+	iss := goodVerifier(jwt.PublicKey{Pub: &privKey.PublicKey, KID: "k"})
 
 	// Replace the protected header with one that has alg:"none".
 	// The original ES256 signature stays - the signing input will mismatch.
@@ -818,9 +818,9 @@ func TestKeyType(t *testing.T) {
 		key     jwt.PublicKey
 		wantKty string
 	}{
-		{"EC P-256", jwt.PublicKey{Key: &ecKey.PublicKey}, "EC"},
-		{"RSA 2048", jwt.PublicKey{Key: &rsaKey.PublicKey}, "RSA"},
-		{"Ed25519", jwt.PublicKey{Key: edPub}, "OKP"},
+		{"EC P-256", jwt.PublicKey{Pub: &ecKey.PublicKey}, "EC"},
+		{"RSA 2048", jwt.PublicKey{Pub: &rsaKey.PublicKey}, "RSA"},
+		{"Ed25519", jwt.PublicKey{Pub: edPub}, "OKP"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -927,9 +927,9 @@ func TestThumbprint(t *testing.T) {
 		name string
 		pub  jwt.PublicKey
 	}{
-		{"EC P-256", jwt.PublicKey{Key: &ecKey.PublicKey}},
-		{"RSA 2048", jwt.PublicKey{Key: &rsaKey.PublicKey}},
-		{"Ed25519", jwt.PublicKey{Key: edPub}},
+		{"EC P-256", jwt.PublicKey{Pub: &ecKey.PublicKey}},
+		{"RSA 2048", jwt.PublicKey{Pub: &rsaKey.PublicKey}},
+		{"Ed25519", jwt.PublicKey{Pub: edPub}},
 	}
 
 	for _, tt := range tests {
@@ -2108,8 +2108,8 @@ func TestDuplicateKIDRotation(t *testing.T) {
 
 	// Verifier has both keys under the same KID.
 	verifier, err := jwt.NewVerifier([]jwt.PublicKey{
-		{Key: &oldKey.PublicKey, KID: sharedKID},
-		{Key: &newKey.PublicKey, KID: sharedKID},
+		{Pub: &oldKey.PublicKey, KID: sharedKID},
+		{Pub: &newKey.PublicKey, KID: sharedKID},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2156,8 +2156,8 @@ func TestNoKIDTriesAllKeys(t *testing.T) {
 
 	// Verifier has wrongKey first, then rightKey.
 	verifier, err := jwt.NewVerifier([]jwt.PublicKey{
-		{Key: &wrongKey.PublicKey, KID: "wrong"},
-		{Key: &rightKey.PublicKey, KID: "right"},
+		{Pub: &wrongKey.PublicKey, KID: "wrong"},
+		{Pub: &rightKey.PublicKey, KID: "right"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2191,7 +2191,7 @@ func TestEmptyKIDTokenEmptyKIDKey(t *testing.T) {
 
 	// Verifier key also has empty KID.
 	verifier, err := jwt.NewVerifier([]jwt.PublicKey{
-		{Key: &rightKey.PublicKey, KID: ""},
+		{Pub: &rightKey.PublicKey, KID: ""},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2218,7 +2218,7 @@ func TestKIDTokenEmptyKIDKey(t *testing.T) {
 
 	// Verifier has the same key material but with an empty KID.
 	verifier, err := jwt.NewVerifier([]jwt.PublicKey{
-		{Key: &rightKey.PublicKey, KID: ""},
+		{Pub: &rightKey.PublicKey, KID: ""},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2248,9 +2248,9 @@ func TestMultiKeyVerifier(t *testing.T) {
 
 	// Create a verifier with all three public keys.
 	verifier, err := jwt.NewVerifier([]jwt.PublicKey{
-		{Key: &ecKey.PublicKey, KID: "ec-key"},
-		{Key: &rsaKey.PublicKey, KID: "rsa-key"},
-		{Key: edPub, KID: "ed-key"},
+		{Pub: &ecKey.PublicKey, KID: "ec-key"},
+		{Pub: &rsaKey.PublicKey, KID: "rsa-key"},
+		{Pub: edPub, KID: "ed-key"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2372,7 +2372,7 @@ func TestVerifyTamperedPayload(t *testing.T) {
 	claims := goodClaims()
 	token, _ := signer.SignToString(&claims)
 
-	verifier := goodVerifier(jwt.PublicKey{Key: &privKey.PublicKey, KID: "k"})
+	verifier := goodVerifier(jwt.PublicKey{Pub: &privKey.PublicKey, KID: "k"})
 
 	// Tamper with the payload: change the sub claim.
 	parts := strings.SplitN(token, ".", 3)

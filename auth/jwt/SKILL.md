@@ -136,8 +136,10 @@ Constants: `DefaultTokenTyp = "JWT"`, `AccessTokenTyp = "at+jwt"` (RFC 9068).
 ## Key types
 
 - `NewPrivateKey()` -- generates Ed25519 (default, recommended)
-- `PrivateKey` / `PublicKey` -- type-safe wrappers, marshal as JWK
+- `PrivateKey` -- holds `crypto.Signer` in `.Priv`, JWK metadata (KID, Use, Alg, KeyOps)
+- `PublicKey` -- holds `crypto.PublicKey` in `.Pub`, JWK metadata (KID, Use, Alg, KeyOps)
 - Algorithm derived from key type automatically (EdDSA, ES256, ES384, ES512, RS256)
+- Type-switch on `.Pub` to access raw key: `*ecdsa.PublicKey`, `*rsa.PublicKey`, `ed25519.PublicKey`
 
 ## CLI tool (cmd/jwt)
 
