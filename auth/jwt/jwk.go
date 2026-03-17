@@ -33,9 +33,9 @@ type CryptoPublicKey interface {
 //
 // PublicKey is the in-memory representation of a JWK.
 // [PublicKey.KeyType] returns the JWK kty string ("EC", "RSA", or "OKP").
-// To access the raw Go key, type-switch on Key:
+// To access the raw Go key, type-switch on Pub:
 //
-//	switch key := pk.Key.(type) {
+//	switch key := pk.Pub.(type) {
 //	case *ecdsa.PublicKey:  // ...
 //	case *rsa.PublicKey:    // ...
 //	case ed25519.PublicKey: // ...
@@ -44,7 +44,7 @@ type CryptoPublicKey interface {
 // For signing keys, use [PrivateKey] instead - it holds the [crypto.Signer]
 // and derives a PublicKey on demand.
 type PublicKey struct {
-	Key    CryptoPublicKey
+	Pub    CryptoPublicKey
 	KID    string
 	Use    string
 	Alg    string
@@ -54,9 +54,9 @@ type PublicKey struct {
 // KeyType returns the JWK "kty" string for the key: "EC", "RSA", or "OKP".
 // Returns "" if the key type is unrecognized.
 //
-// To access the underlying Go key, use a type switch on Key:
+// To access the underlying Go key, use a type switch on Pub:
 //
-//	switch key := k.Key.(type) {
+//	switch key := k.Pub.(type) {
 //	case *ecdsa.PublicKey:  // kty "EC"
 //	    // key is *ecdsa.PublicKey
 //	case *rsa.PublicKey:    // kty "RSA"
@@ -67,7 +67,7 @@ type PublicKey struct {
 //	    // unrecognized key type
 //	}
 func (k PublicKey) KeyType() string {
-	switch k.Key.(type) {
+	switch k.Pub.(type) {
 	case *ecdsa.PublicKey:
 		return "EC"
 	case *rsa.PublicKey:
@@ -163,11 +163,11 @@ func (k PublicKey) Thumbprint() (string, error) {
 //
 // Use [FromPrivateKey] to construct.
 type PrivateKey struct {
-	privKey crypto.Signer
-	KID     string
-	Use     string
-	Alg     string
-	KeyOps  []string
+	Priv   crypto.Signer
+	KID    string
+	Use    string
+	Alg    string
+	KeyOps []string
 }
 
 // PublicKey derives the [PublicKey] for this signing key.
@@ -179,12 +179,12 @@ type PrivateKey struct {
 // known CryptoPublicKey type - this should never happen for keys created
 // through this library.
 func (k *PrivateKey) PublicKey() (*PublicKey, error) {
-	pub, ok := k.privKey.Public().(CryptoPublicKey)
+	pub, ok := k.Priv.Public().(CryptoPublicKey)
 	if !ok {
-		return nil, fmt.Errorf("%w: private key type %T did not produce a known public key type", ErrSanityFail, k.privKey)
+		return nil, fmt.Errorf("%w: private key type %T did not produce a known public key type", ErrSanityFail, k.Priv)
 	}
 	return &PublicKey{
-		Key:    pub,
+		Pub:    pub,
 		KID:    k.KID,
 		Use:    k.Use,
 		Alg:    k.Alg,
@@ -232,7 +232,7 @@ func NewPrivateKey() (*PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("NewPrivateKey: generate Ed25519 key: %w", err)
 	}
-	pk := &PrivateKey{privKey: priv}
+	pk := &PrivateKey{Priv: priv}
 	pub, err := pk.PublicKey()
 	if err != nil {
 		return nil, fmt.Errorf("NewPrivateKey: derive public key: %w", err)
@@ -307,7 +307,7 @@ type WellKnownJWKs struct {
 func encode(k PublicKey) (rawKey, error) {
 	rk := rawKey{KID: k.KID, Use: k.Use, Alg: k.Alg, KeyOps: k.KeyOps}
 
-	switch key := k.Key.(type) {
+	switch key := k.Pub.(type) {
 	case *ecdsa.PublicKey:
 		ci, err := ecInfo(key.Curve)
 		if err != nil {
@@ -337,7 +337,7 @@ func encode(k PublicKey) (rawKey, error) {
 		return rk, nil
 
 	default:
-		return rawKey{}, fmt.Errorf("%T: %w", k.Key, ErrUnsupportedKeyType)
+		return rawKey{}, fmt.Errorf("%T: %w", k.Pub, ErrUnsupportedKeyType)
 	}
 }
 
@@ -354,7 +354,7 @@ func encodePrivate(k PrivateKey) (rawKey, error) {
 		return rawKey{}, err
 	}
 
-	switch priv := k.privKey.(type) {
+	switch priv := k.Priv.(type) {
 	case *ecdsa.PrivateKey:
 		dBytes, err := priv.Bytes()
 		if err != nil {
@@ -379,7 +379,7 @@ func encodePrivate(k PrivateKey) (rawKey, error) {
 		rk.D = base64.RawURLEncoding.EncodeToString(priv.Seed())
 
 	default:
-		return rawKey{}, fmt.Errorf("%T: %w", k.privKey, ErrUnsupportedKeyType)
+		return rawKey{}, fmt.Errorf("%T: %w", k.Priv, ErrUnsupportedKeyType)
 	}
 
 	return rk, nil
@@ -396,7 +396,7 @@ func FromPublicKey(pub crypto.PublicKey) (*PublicKey, error) {
 		return nil, fmt.Errorf("%T: %w", pub, ErrUnsupportedKeyType)
 	}
 
-	pk := &PublicKey{Key: cpk}
+	pk := &PublicKey{Pub: cpk}
 
 	// Derive Alg from key type.
 	switch key := pub.(type) {
@@ -435,7 +435,7 @@ func FromPrivateKey(signer crypto.Signer, kid string) (*PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &PrivateKey{privKey: signer, KID: kid, Alg: alg}, nil
+	return &PrivateKey{Priv: signer, KID: kid, Alg: alg}, nil
 }
 
 // decodeOne parses a single rawKey wire struct into a [PublicKey].
@@ -577,13 +577,13 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 // newPublicKey creates a [PublicKey] from a crypto key, copying metadata
 // (KID, Use, Alg, KeyOps) from the rawKey.
 func (kj rawKey) newPublicKey(key CryptoPublicKey) *PublicKey {
-	return &PublicKey{Key: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}
+	return &PublicKey{Pub: key, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}
 }
 
 // newPrivateKey creates a [PrivateKey] from a crypto.Signer, copying metadata
 // (KID, Use, Alg, KeyOps) from the rawKey.
 func (kj rawKey) newPrivateKey(signer crypto.Signer) *PrivateKey {
-	return &PrivateKey{privKey: signer, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}
+	return &PrivateKey{Priv: signer, KID: kj.KID, Use: kj.Use, Alg: kj.Alg, KeyOps: kj.KeyOps}
 }
 
 // decodeB64Field decodes a base64url-encoded JWK field value, returning a

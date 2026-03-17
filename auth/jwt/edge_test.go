@@ -47,7 +47,7 @@ func TestPrivateKeyMissingD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pub := jwt.PublicKey{Key: &ecKey.PublicKey, KID: "test"}
+	pub := jwt.PublicKey{Pub: &ecKey.PublicKey, KID: "test"}
 	pubJSON, err := json.Marshal(pub)
 	if err != nil {
 		t.Fatal(err)
@@ -439,7 +439,7 @@ func TestVerifyWrongKeyTypeForAlg(t *testing.T) {
 		t.Fatal(err)
 	}
 	rsaPub := jwt.PublicKey{
-		Key: &rsaKey.PublicKey,
+		Pub: &rsaKey.PublicKey,
 		KID: edKey.KID, // same KID
 	}
 

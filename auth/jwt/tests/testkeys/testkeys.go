@@ -98,7 +98,7 @@ func GenerateEdDSA(kid string) KeySet {
 	pub := priv.Public().(ed25519.PublicKey)
 	return KeySet{
 		PrivKey: mustPK(priv, kid),
-		PubKey:  jwt.PublicKey{Key: pub, KID: kid},
+		PubKey:  jwt.PublicKey{Pub: pub, KID: kid},
 		RawPriv: priv, RawPub: pub,
 		KID: kid, AlgName: "EdDSA",
 	}
@@ -120,7 +120,7 @@ func generateEC(kid string, curve elliptic.Curve, alg string) KeySet {
 	}
 	return KeySet{
 		PrivKey: mustPK(priv, kid),
-		PubKey:  jwt.PublicKey{Key: &priv.PublicKey, KID: kid},
+		PubKey:  jwt.PublicKey{Pub: &priv.PublicKey, KID: kid},
 		RawPriv: priv, RawPub: &priv.PublicKey,
 		KID: kid, AlgName: alg,
 	}
@@ -134,7 +134,7 @@ func GenerateRS256(kid string) KeySet {
 	}
 	return KeySet{
 		PrivKey: mustPK(priv, kid),
-		PubKey:  jwt.PublicKey{Key: &priv.PublicKey, KID: kid},
+		PubKey:  jwt.PublicKey{Pub: &priv.PublicKey, KID: kid},
 		RawPriv: priv, RawPub: &priv.PublicKey,
 		KID: kid, AlgName: "RS256",
 	}
