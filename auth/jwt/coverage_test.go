@@ -944,7 +944,11 @@ func TestCov_Thumbprint(t *testing.T) {
 
 func TestCov_PrivateKey_Thumbprint(t *testing.T) {
 	pk := mustFromPrivate(t, mustEdKey(t))
-	thumb, err := pk.Thumbprint()
+	pub, err := pk.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	thumb, err := pub.Thumbprint()
 	if err != nil || thumb == "" {
 		t.Fatal(err)
 	}

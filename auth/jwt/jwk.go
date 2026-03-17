@@ -219,16 +219,6 @@ func toPublicKeyOps(ops []string) []string {
 	return out
 }
 
-// Thumbprint computes the RFC 7638 thumbprint for this key's public side.
-// It delegates to [PublicKey.Thumbprint] on the result of [PrivateKey.PublicKey].
-func (k *PrivateKey) Thumbprint() (string, error) {
-	pub, err := k.PublicKey()
-	if err != nil {
-		return "", err
-	}
-	return pub.Thumbprint()
-}
-
 // NewPrivateKey generates a new private key using the best universally
 // available algorithm, currently Ed25519. The algorithm may change in
 // future versions; use [FromPrivateKey] to wrap a specific key type.
@@ -243,7 +233,11 @@ func NewPrivateKey() (*PrivateKey, error) {
 		return nil, fmt.Errorf("NewPrivateKey: generate Ed25519 key: %w", err)
 	}
 	pk := &PrivateKey{privKey: priv}
-	kid, err := pk.Thumbprint()
+	pub, err := pk.PublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("NewPrivateKey: derive public key: %w", err)
+	}
+	kid, err := pub.Thumbprint()
 	if err != nil {
 		return nil, fmt.Errorf("NewPrivateKey: compute thumbprint: %w", err)
 	}
@@ -434,7 +428,7 @@ func FromPublicKey(pub crypto.PublicKey) (*PublicKey, error) {
 //
 // Returns [ErrUnsupportedKeyType] if the signer is not a supported type.
 // If kid is empty, [NewSigner] will auto-compute it from the key's
-// RFC 7638 JWK Thumbprint. For standalone use, call [PrivateKey.Thumbprint]
+// RFC 7638 JWK Thumbprint. For standalone use, call [PublicKey.Thumbprint]
 // and set KID manually.
 func FromPrivateKey(signer crypto.Signer, kid string) (*PrivateKey, error) {
 	alg, _, _, err := signingParams(signer)
@@ -567,7 +561,11 @@ func decodePrivate(kj rawKey) (*PrivateKey, error) {
 	}
 
 	if pk.KID == "" {
-		kid, err := pk.Thumbprint()
+		pub, err := pk.PublicKey()
+		if err != nil {
+			return nil, fmt.Errorf("derive public key: %w", err)
+		}
+		kid, err := pub.Thumbprint()
 		if err != nil {
 			return nil, fmt.Errorf("compute thumbprint: %w", err)
 		}

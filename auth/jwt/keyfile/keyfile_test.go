@@ -500,7 +500,11 @@ func TestSavePrivateJWK_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kid, err := pk.Thumbprint()
+	pub, err := pk.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid, err := pub.Thumbprint()
 	if err != nil {
 		t.Fatal(err)
 	}
