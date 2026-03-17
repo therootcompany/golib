@@ -87,7 +87,11 @@ func NewSigner(keys []*PrivateKey, retiredKeys ...PublicKey) (*Signer, error) {
 
 		// Auto-compute KID from thumbprint if empty.
 		if ss[i].KID == "" {
-			thumb, err := ss[i].Thumbprint()
+			pub, err := ss[i].PublicKey()
+			if err != nil {
+				return nil, fmt.Errorf("NewSigner: derive public key for key[%d]: %w", i, err)
+			}
+			thumb, err := pub.Thumbprint()
 			if err != nil {
 				return nil, fmt.Errorf("NewSigner: compute thumbprint for key[%d]: %w", i, err)
 			}
