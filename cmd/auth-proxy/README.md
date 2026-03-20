@@ -6,10 +6,17 @@ I created this for integrations like Google Sheets (both loading and retrieving 
 
 1. Setup some users and/or tokens and/or "guest"
    ```sh
+   # create the ./credentials.tsv 
    csvauth init
-   csvauth store --roles '/' 'my-admin-user'
-   csvauth store --roles '/' --token 'an-admin-token'
-   csvauth store --roles 'GET:/public/ POST:/dropbox/' --ask-password 'guest'
+
+   # create a Basic Auth credential 'my-admin-user' with Full Access
+   csvauth store --roles '/' my-admin-user
+
+   # create a Bearer Token credential with the id 'an-admin-token' with Full Access
+   csvauth store --roles '/' --token an-admin-token
+
+   # create a limited Guest user (no password) with access to specific routes
+   csvauth store --roles 'GET:/public/ POST:/dropbox/' --ask-password guest
    ```
 2. Stand up the proxy behind the TLS Proxy \
    (snirouter, [Caddy](https://webinstall.dev/caddy), Traefik, Nginx+certbot, etc)
