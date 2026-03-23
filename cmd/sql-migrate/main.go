@@ -87,6 +87,7 @@ EXAMPLE
    sql-migrate -d ./sql/migrations/ up 99
    sql-migrate -d ./sql/migrations/ down 1
    sql-migrate -d ./sql/migrations/ list
+   sql-migrate -d ./sql/migrations/ sync
 
 COMMANDS
    init          - creates migrations directory, initial migration, log file,
@@ -97,6 +98,7 @@ COMMANDS
    up [n]        - create a script to run pending migrations (ALL by default)
    down [n]      - create a script to roll back migrations (ONE by default)
    list          - lists migrations
+   sync          - create a script to refresh migrations.log from the DB
 
 OPTIONS
    -d <migrations directory>  default: ./sql/migrations/
@@ -184,7 +186,7 @@ func main() {
 		fsSub = flag.NewFlagSet("init", flag.ExitOnError)
 		fsSub.StringVar(&cfg.logPath, "migrations-log", "", fmt.Sprintf("migration log file (default: %s) relative to and saved in %s", defaultLogPath, M_MIGRATOR_NAME))
 		fsSub.StringVar(&cfg.sqlCommand, "sql-command", sqlCommandPSQL, "construct scripts with this to execute SQL files: 'psql', 'mysql', 'mariadb', or custom arguments")
-	case "create", "up", "down", "status", "list":
+	case "create", "up", "down", "status", "list", "sync":
 		fsSub = flag.NewFlagSet(subcmd, flag.ExitOnError)
 	default:
 		log.Printf("unknown command %s", subcmd)
@@ -355,6 +357,11 @@ func main() {
 		}
 
 		err = down(&state, downN)
+		if err != nil {
+			log.Fatal(err)
+		}
+	case "sync":
+		err = syncLog(&state)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -981,6 +988,21 @@ func down(state *State, n int) error {
 	fmt.Println("cat", filepathUnclean(state.LogPath))
 
 	showFixes(fixedUp, fixedDown)
+	return nil
+}
+
+func syncLog(state *State) error {
+	getMigsPath := filepath.Join(state.MigrationsDir, LOG_QUERY_NAME)
+	getMigsPath = filepathUnclean(getMigsPath)
+	getMigs := strings.Replace(state.SQLCommand, "%s", getMigsPath, 1)
+
+	logPath := filepathUnclean(state.LogPath)
+
+	fmt.Printf(shHeader)
+	fmt.Println("")
+	fmt.Println("# SYNC: reload migrations log from DB")
+	fmt.Println(getMigs + " > " + logPath + " || true")
+	fmt.Println("cat", logPath)
 	return nil
 }
 
