@@ -39,9 +39,9 @@ const (
 	sqlCommandMariaDB     = `mariadb --defaults-extra-file="$MY_CNF" -s -N --raw < %s`
 	sqlCommandMySQL       = `mysql --defaults-extra-file="$MY_CNF" -s -N --raw < %s`
 	LOG_QUERY_NAME        = "_migrations.sql"
-	M_MIGRATOR_NAME       = "0001-01-01-01000_init-migrations"
-	M_MIGRATOR_UP_NAME    = "0001-01-01-01000_init-migrations.up.sql"
-	M_MIGRATOR_DOWN_NAME  = "0001-01-01-01000_init-migrations.down.sql"
+	M_MIGRATOR_NAME       = "0001-01-01-001000_init-migrations"
+	M_MIGRATOR_UP_NAME    = "0001-01-01-001000_init-migrations.up.sql"
+	M_MIGRATOR_DOWN_NAME  = "0001-01-01-001000_init-migrations.down.sql"
 	defaultMigratorUpTmpl = `-- Config variables for sql-migrate (do not delete)
 -- sql_command: %s
 -- migrations_log: %s
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS _migrations (
 
 -- note: to enable text-based tools to grep and sort we put 'name' before 'id'
 --       grep -r 'INSERT INTO _migrations' ./sql/migrations/ | cut -d':' -f2 | sort
-INSERT INTO _migrations (name, id) VALUES ('0001-01-01-01000_init-migrations', '00000001');
+INSERT INTO _migrations (name, id) VALUES ('0001-01-01-001000_init-migrations', '00000001');
 `
 	defaultMigratorDown = `DELETE FROM _migrations WHERE id = '00000001';
 
@@ -112,7 +112,7 @@ NOTES
 		-- sql_command: psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --file %s
 
 	The log is generated on each migration file contains a list of all migrations:
-      0001-01-01-001000_migrations.up.sql
+      0001-01-01-001000_init-migrations.up.sql
       2020-12-31-001000_init-app.up.sql
       2020-12-31-001100_add-customer-tables.up.sql
       2020-12-31-002000_add-ALL-THE-TABLES.up.sql
@@ -437,11 +437,11 @@ func filepathJoin(src, dst string) string {
 //
 // - ./sql/migrations
 //
-// - ./sql/migrations/0001-01-01-01000_init-migrations.up.sql
+// - ./sql/migrations/0001-01-01-001000_init-migrations.up.sql
 //   - migrations_log: ./sql/migrations.log
 //   - sql_command: psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --file %s
 //
-// - ./sql/migrations/0001-01-01-01000_init-migrations.down.sql
+// - ./sql/migrations/0001-01-01-001000_init-migrations.down.sql
 func mustInit(cfg *MainConfig) {
 	fmt.Fprintf(os.Stderr, "Initializing %q ...\n", cfg.migrationsDir)
 
