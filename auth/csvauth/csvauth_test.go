@@ -5,7 +5,59 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestAuthenticateTokenNoDeadlock guards against the v1.2.4 regression where
+// Authenticate held a.mux via defer and then called loadAndVerifyToken, which
+// also tried to acquire a.mux — causing a deadlock on all token auth requests.
+func TestAuthenticateTokenNoDeadlock(t *testing.T) {
+	var key [16]byte
+	a := New(key[:])
+
+	const secret = "supersecrettoken"
+	c := a.NewCredential(PurposeToken, "ci-bot", secret, []string{"plain"}, []string{"deploy"}, "")
+	if err := a.CacheCredential(*c); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		p   any
+		err error
+	}
+
+	// Authenticate("", token) — the token-as-password form
+	ch := make(chan result, 1)
+	go func() {
+		p, err := a.Authenticate("", secret)
+		ch <- result{p, err}
+	}()
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			t.Fatalf("Authenticate(\"\", token): unexpected error: %v", r.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Authenticate deadlocked — mutex was not released before calling loadAndVerifyToken")
+	}
+
+	// Authenticate("api", token) — the named-token-username form
+	ch2 := make(chan result, 1)
+	go func() {
+		p, err := a.Authenticate("api", secret)
+		ch2 <- result{p, err}
+	}()
+
+	select {
+	case r := <-ch2:
+		if r.err != nil {
+			t.Fatalf("Authenticate(\"api\", token): unexpected error: %v", r.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Authenticate deadlocked — mutex was not released before calling loadAndVerifyToken")
+	}
+}
 
 func TestCredentialCreationAndVerification(t *testing.T) {
 	type testCase struct {
