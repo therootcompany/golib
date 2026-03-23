@@ -48,9 +48,9 @@ const (
 --
 
 CREATE TABLE IF NOT EXISTS _migrations (
-   id CHAR(8) PRIMARY KEY DEFAULT encode(gen_random_bytes(4), 'hex'),
+   id CHAR(8) PRIMARY KEY,
    name VARCHAR(80) NULL UNIQUE,
-   applied_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+   applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- note: to enable text-based tools to grep and sort we put 'name' before 'id'
