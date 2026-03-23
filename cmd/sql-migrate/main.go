@@ -371,7 +371,7 @@ func migrationsList(migrationsDir string, entries []os.DirEntry) (ups, downs []s
 			continue
 		}
 		name := entry.Name()
-		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || strings.HasPrefix(name, "+") {
 			if name != LOG_QUERY_NAME {
 				fmt.Fprintf(os.Stderr, "   ignoring %s\n", filepathJoin(migrationsDir, name))
 			}
