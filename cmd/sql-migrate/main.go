@@ -83,6 +83,7 @@ USAGE
 EXAMPLE
    sql-migrate -d ./sql/migrations/ init --sql-command <psql|mariadb|mysql>
    sql-migrate -d ./sql/migrations/ create <kebab-case-description>
+   sql-migrate -d ./sql/migrations/ sync
    sql-migrate -d ./sql/migrations/ status
    sql-migrate -d ./sql/migrations/ up 99
    sql-migrate -d ./sql/migrations/ down 1
@@ -93,6 +94,7 @@ COMMANDS
 	                and query for migrations
    create        - creates a new, canonically-named up/down file pair in the
                    migrations directory, with corresponding insert
+   sync          - create a script to reload migrations.log from the DB
    status        - shows the same output as if processing a forward-migration
    up [n]        - create a script to run pending migrations (ALL by default)
    down [n]      - create a script to roll back migrations (ONE by default)
@@ -184,7 +186,7 @@ func main() {
 		fsSub = flag.NewFlagSet("init", flag.ExitOnError)
 		fsSub.StringVar(&cfg.logPath, "migrations-log", "", fmt.Sprintf("migration log file (default: %s) relative to and saved in %s", defaultLogPath, M_MIGRATOR_NAME))
 		fsSub.StringVar(&cfg.sqlCommand, "sql-command", sqlCommandPSQL, "construct scripts with this to execute SQL files: 'psql', 'mysql', 'mariadb', or custom arguments")
-	case "create", "up", "down", "status", "list":
+	case "create", "sync", "up", "down", "status", "list":
 		fsSub = flag.NewFlagSet(subcmd, flag.ExitOnError)
 	default:
 		log.Printf("unknown command %s", subcmd)
@@ -275,6 +277,11 @@ func main() {
 	switch subcmd {
 	case "init":
 		break
+	case "sync":
+		if err := syncLog(&state); err != nil {
+			log.Fatal(err)
+		}
+		return
 	case "create":
 		if len(leafArgs) == 0 {
 			log.Fatal("create requires a description")
@@ -842,6 +849,20 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 	}
 
 	return up, down, nil, nil
+}
+
+func syncLog(state *State) error {
+	getMigsPath := filepath.Join(state.MigrationsDir, LOG_QUERY_NAME)
+	getMigsPath = filepathUnclean(getMigsPath)
+	getMigs := strings.Replace(state.SQLCommand, "%s", getMigsPath, 1)
+	logPath := filepathUnclean(state.LogPath)
+
+	fmt.Printf(shHeader)
+	fmt.Println("")
+	fmt.Println("# SYNC: reload migrations log from DB")
+	fmt.Printf("%s > %s || true\n", getMigs, logPath)
+	fmt.Printf("cat %s\n", logPath)
+	return nil
 }
 
 func up(state *State, ups []string, n int) error {
