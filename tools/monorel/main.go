@@ -63,14 +63,14 @@ var stopMarkers = []string{".git"}
 // separately via the --ios and --android-ndk flags.
 var defaultGoos = []string{
 	"darwin", "freebsd", "js", "linux",
-	"netbsd", "openbsd", "wasip1", "windows",
+	"netbsd", "openbsd", "wasip1",
 }
 
 // almostAllGoos extends defaultGoos with less-commonly-targeted CGO_ENABLED=0 platforms.
 var almostAllGoos = []string{
 	"aix", "darwin", "dragonfly", "freebsd", "illumos",
 	"js", "linux", "netbsd", "openbsd", "plan9",
-	"solaris", "wasip1", "windows",
+	"solaris", "wasip1",
 }
 
 // defaultGoarch is the conservative architecture list for generated builds.
@@ -90,11 +90,19 @@ var almostAllGoarch = []string{
 // Included whenever "arm" appears in the goarch list.
 var defaultGoarm = []string{"6", "7"}
 
-// defaultGoamd64 is the amd64 micro-architecture level list used with --almost-all.
-var defaultGoamd64 = []string{"v1", "v2"}
+// defaultGoamd64 is the amd64 micro-architecture level list.
+var defaultGoamd64 = []string{"v1", "v2", "v3", "v4"}
 
 // almostAllGoamd64 is the amd64 micro-architecture level list used with --almost-all.
 var almostAllGoamd64 = []string{"v1", "v2", "v3", "v4"}
+
+// defaultWindowsGoarch is the architecture list for Windows builds.
+// Windows is kept in a separate build entry because it does not support
+// ARM v6/v7, so it cannot share the same goarch matrix as non-Windows builds.
+var defaultWindowsGoarch = []string{"amd64", "arm64"}
+
+// almostAllWindowsGoarch extends defaultWindowsGoarch with 32-bit x86.
+var almostAllWindowsGoarch = []string{"386", "amd64", "arm64"}
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -1406,10 +1414,12 @@ func goreleaserYAML(projectName string, bins []binary, opts buildOptions) string
 	goos := defaultGoos
 	goarch := defaultGoarch
 	goamd64 := defaultGoamd64
+	windowsGoarch := defaultWindowsGoarch
 	if opts.almostAll {
 		goos = almostAllGoos
 		goarch = almostAllGoarch
 		goamd64 = almostAllGoamd64
+		windowsGoarch = almostAllWindowsGoarch
 	}
 
 	// When multiple binaries share a module, define the common build options
@@ -1496,17 +1506,42 @@ func goreleaserYAML(projectName string, bins []binary, opts buildOptions) string
 		}
 	}
 
+	// Windows-only builds: Windows does not support ARM v6/v7, so it cannot
+	// share the goarch matrix with the main non-Windows builds.
+	for _, bin := range bins {
+		wf("  - id: %s-windows\n", bin.name)
+		wf("    binary: %s\n", bin.name)
+		if bin.mainPath != "." {
+			wf("    main: %s\n", bin.mainPath)
+		}
+		wf("    env:\n      - CGO_ENABLED=0\n")
+		wf("    ldflags:\n      - -s -w"+
+			" -X main.version={{.Env.VERSION}}"+
+			" -X main.commit={{.Commit}}"+
+			" -X main.date={{.Date}}"+
+			" -X main.builtBy=goreleaser\n")
+		w("    goos:\n      - windows\n")
+		w("    goarch:\n")
+		for _, a := range windowsGoarch {
+			wf("      - %s\n", a)
+		}
+		w("    goamd64:\n")
+		for _, v := range goamd64 {
+			wf("      - %s\n", v)
+		}
+	}
+
 	w("\narchives:\n")
 	for _, bin := range bins {
 		wf("  - id: %s\n", bin.name)
-		wf("    ids: [%s]\n", bin.name)
+		wf("    ids: [%s, %s-windows]\n", bin.name, bin.name)
 		w("    formats: [tar.gz, tar.zst]\n")
 		w("    # this name template makes the OS and Arch compatible with the results of `uname`.\n")
 		w("    # it uses the VERSION env var so the prefixed monorepo tag doesn't appear in archive filenames.\n")
 		w("    name_template: >-\n")
 		wf("      %s_{{ .Env.VERSION }}_\n", bin.name)
 		w("      {{- title .Os }}_\n")
-		w("      {{- if eq .Arch \"amd64\" }}x86_64\n")
+		w("      {{- if eq .Arch \"amd64\" }}x86_64{{ if .Amd64 }}_{{ .Amd64 }}{{ end }}\n")
 		w("      {{- else if eq .Arch \"386\" }}i386\n")
 		w("      {{- else }}{{ .Arch }}{{ end }}\n")
 		w("      {{- if .Arm }}v{{ .Arm }}{{ end }}\n")
