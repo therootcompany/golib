@@ -220,6 +220,23 @@ func TestCov_SpaceDelimited_UnmarshalJSON(t *testing.T) {
 			t.Fatalf("expected empty, got %v", s)
 		}
 	})
+	t.Run("array_values", func(t *testing.T) {
+		var s SpaceDelimited
+		json.Unmarshal([]byte(`["openid","profile"]`), &s)
+		if len(s) != 2 || s[0] != "openid" || s[1] != "profile" {
+			t.Fatalf("got %v", s)
+		}
+	})
+	t.Run("array_empty", func(t *testing.T) {
+		var s SpaceDelimited
+		json.Unmarshal([]byte(`[]`), &s)
+		if s == nil {
+			t.Fatal("expected non-nil empty SpaceDelimited, got nil")
+		}
+		if len(s) != 0 {
+			t.Fatalf("expected empty, got %v", s)
+		}
+	})
 	t.Run("invalid", func(t *testing.T) {
 		var s SpaceDelimited
 		if err := json.Unmarshal([]byte(`123`), &s); err == nil {

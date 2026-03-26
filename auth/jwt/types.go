@@ -89,16 +89,30 @@ type SpaceDelimited []string
 // UnmarshalJSON decodes a space-separated string into a slice.
 // An empty string "" unmarshals to a non-nil empty SpaceDelimited{},
 // preserving the distinction from a nil (absent) SpaceDelimited.
+//
+// As a compatibility extension, it also accepts a JSON array of strings,
+// because some issuers (e.g. PaperOS) emit scope as [] instead of "".
 func (s *SpaceDelimited) UnmarshalJSON(data []byte) error {
 	var str string
-	if err := json.Unmarshal(data, &str); err != nil {
-		return fmt.Errorf("space-delimited must be a string: %w: %w", ErrInvalidPayload, err)
-	}
-	if str == "" {
-		*s = SpaceDelimited{}
+	if err := json.Unmarshal(data, &str); err == nil {
+		if str == "" {
+			*s = SpaceDelimited{}
+			return nil
+		}
+		*s = strings.Fields(str)
 		return nil
 	}
-	*s = strings.Fields(str)
+
+	// Fallback: accept a JSON array of strings (non-standard but used in the wild).
+	var ss []string
+	if err := json.Unmarshal(data, &ss); err != nil {
+		return fmt.Errorf("space-delimited must be a string or array of strings: %w: %w", ErrInvalidPayload, err)
+	}
+	if ss == nil {
+		*s = SpaceDelimited{}
+	} else {
+		*s = SpaceDelimited(ss)
+	}
 	return nil
 }
 
