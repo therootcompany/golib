@@ -29,7 +29,6 @@ builds:
       - netbsd
       - openbsd
       - wasip1
-      - windows
     goarch:
       - amd64
       - arm
@@ -45,17 +44,35 @@ builds:
     goamd64:
       - v1
       - v2
+      - v3
+      - v4
+  - id: sql-migrate-windows
+    binary: sql-migrate
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Env.VERSION}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goamd64:
+      - v1
+      - v2
+      - v3
+      - v4
 
 archives:
   - id: sql-migrate
-    ids: [sql-migrate]
+    ids: [sql-migrate, sql-migrate-windows]
     formats: [tar.gz, tar.zst]
     # this name template makes the OS and Arch compatible with the results of `uname`.
     # it uses the VERSION env var so the prefixed monorepo tag doesn't appear in archive filenames.
     name_template: >-
       sql-migrate_{{ .Env.VERSION }}_
       {{- title .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
+      {{- if eq .Arch "amd64" }}x86_64{{ if .Amd64 }}_{{ .Amd64 }}{{ end }}
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
