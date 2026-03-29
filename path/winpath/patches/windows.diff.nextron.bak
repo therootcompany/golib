@@ -1,0 +1,341 @@
+diff --git a/windows/path_lite.go b/windows/path_lite.go
+index 4a37298..2ebb0d1 100644
+--- a/windows/path_lite.go
++++ b/windows/path_lite.go
+@@ -2,17 +2,12 @@
+ // Use of this source code is governed by a BSD-style
+ // license that can be found in the LICENSE file.
+ 
+-// Package filepathlite implements a subset of path/filepath,
+-// only using packages which may be imported by "os".
+-//
+-// Tests for these functions are in path/filepath.
+-package filepathlite
++package windows
+ 
+ import (
+ 	"errors"
+-	"internal/stringslite"
+-	"io/fs"
+ 	"slices"
++	"strings"
+ )
+ 
+ var errInvalidPath = errors.New("invalid path")
+@@ -137,41 +132,6 @@ func Clean(path string) string {
+ 	return FromSlash(out.string())
+ }
+ 
+-// IsLocal is filepath.IsLocal.
+-func IsLocal(path string) bool {
+-	return isLocal(path)
+-}
+-
+-func unixIsLocal(path string) bool {
+-	if IsAbs(path) || path == "" {
+-		return false
+-	}
+-	hasDots := false
+-	for p := path; p != ""; {
+-		var part string
+-		part, p, _ = stringslite.Cut(p, "/")
+-		if part == "." || part == ".." {
+-			hasDots = true
+-			break
+-		}
+-	}
+-	if hasDots {
+-		path = Clean(path)
+-	}
+-	if path == ".." || stringslite.HasPrefix(path, "../") {
+-		return false
+-	}
+-	return true
+-}
+-
+-// Localize is filepath.Localize.
+-func Localize(path string) (string, error) {
+-	if !fs.ValidPath(path) {
+-		return "", errInvalidPath
+-	}
+-	return localize(path)
+-}
+-
+ // ToSlash is filepath.ToSlash.
+ func ToSlash(path string) string {
+ 	if Separator == '/' {
+@@ -189,7 +149,7 @@ func FromSlash(path string) string {
+ }
+ 
+ func replaceStringByte(s string, old, new byte) string {
+-	if stringslite.IndexByte(s, old) == -1 {
++	if strings.IndexByte(s, old) == -1 {
+ 		return s
+ 	}
+ 	n := []byte(s)
+diff --git a/windows/path_lite_windowsspecific.go b/windows/path_lite_windowsspecific.go
+index 011baa9..23ba2b6 100644
+--- a/windows/path_lite_windowsspecific.go
++++ b/windows/path_lite_windowsspecific.go
+@@ -2,14 +2,7 @@
+ // Use of this source code is governed by a BSD-style
+ // license that can be found in the LICENSE file.
+ 
+-package filepathlite
+-
+-import (
+-	"internal/bytealg"
+-	"internal/stringslite"
+-	"internal/syscall/windows"
+-	"syscall"
+-)
++package windows
+ 
+ const (
+ 	Separator     = '\\' // OS-specific path separator
+@@ -20,159 +13,6 @@ func IsPathSeparator(c uint8) bool {
+ 	return c == '\\' || c == '/'
+ }
+ 
+-func isLocal(path string) bool {
+-	if path == "" {
+-		return false
+-	}
+-	if IsPathSeparator(path[0]) {
+-		// Path rooted in the current drive.
+-		return false
+-	}
+-	if stringslite.IndexByte(path, ':') >= 0 {
+-		// Colons are only valid when marking a drive letter ("C:foo").
+-		// Rejecting any path with a colon is conservative but safe.
+-		return false
+-	}
+-	hasDots := false // contains . or .. path elements
+-	for p := path; p != ""; {
+-		var part string
+-		part, p, _ = cutPath(p)
+-		if part == "." || part == ".." {
+-			hasDots = true
+-		}
+-		if isReservedName(part) {
+-			return false
+-		}
+-	}
+-	if hasDots {
+-		path = Clean(path)
+-	}
+-	if path == ".." || stringslite.HasPrefix(path, `..\`) {
+-		return false
+-	}
+-	return true
+-}
+-
+-func localize(path string) (string, error) {
+-	for i := 0; i < len(path); i++ {
+-		switch path[i] {
+-		case ':', '\\', 0:
+-			return "", errInvalidPath
+-		}
+-	}
+-	containsSlash := false
+-	for p := path; p != ""; {
+-		// Find the next path element.
+-		var element string
+-		i := bytealg.IndexByteString(p, '/')
+-		if i < 0 {
+-			element = p
+-			p = ""
+-		} else {
+-			containsSlash = true
+-			element = p[:i]
+-			p = p[i+1:]
+-		}
+-		if isReservedName(element) {
+-			return "", errInvalidPath
+-		}
+-	}
+-	if containsSlash {
+-		// We can't depend on strings, so substitute \ for / manually.
+-		buf := []byte(path)
+-		for i, b := range buf {
+-			if b == '/' {
+-				buf[i] = '\\'
+-			}
+-		}
+-		path = string(buf)
+-	}
+-	return path, nil
+-}
+-
+-// isReservedName reports if name is a Windows reserved device name.
+-// It does not detect names with an extension, which are also reserved on some Windows versions.
+-//
+-// For details, search for PRN in
+-// https://docs.microsoft.com/en-us/windows/desktop/fileio/naming-a-file.
+-func isReservedName(name string) bool {
+-	// Device names can have arbitrary trailing characters following a dot or colon.
+-	base := name
+-	for i := 0; i < len(base); i++ {
+-		switch base[i] {
+-		case ':', '.':
+-			base = base[:i]
+-		}
+-	}
+-	// Trailing spaces in the last path element are ignored.
+-	for len(base) > 0 && base[len(base)-1] == ' ' {
+-		base = base[:len(base)-1]
+-	}
+-	if !isReservedBaseName(base) {
+-		return false
+-	}
+-	if len(base) == len(name) {
+-		return true
+-	}
+-	// The path element is a reserved name with an extension.
+-	// Since Windows 11, reserved names with extensions are no
+-	// longer reserved. For example, "CON.txt" is a valid file
+-	// name. Use RtlIsDosDeviceName_U to see if the name is reserved.
+-	p, err := syscall.UTF16PtrFromString(name)
+-	if err != nil {
+-		return false
+-	}
+-	return windows.RtlIsDosDeviceName_U(p) > 0
+-}
+-
+-func isReservedBaseName(name string) bool {
+-	if len(name) == 3 {
+-		switch string([]byte{toUpper(name[0]), toUpper(name[1]), toUpper(name[2])}) {
+-		case "CON", "PRN", "AUX", "NUL":
+-			return true
+-		}
+-	}
+-	if len(name) >= 4 {
+-		switch string([]byte{toUpper(name[0]), toUpper(name[1]), toUpper(name[2])}) {
+-		case "COM", "LPT":
+-			if len(name) == 4 && '1' <= name[3] && name[3] <= '9' {
+-				return true
+-			}
+-			// Superscript ¹, ², and ³ are considered numbers as well.
+-			switch name[3:] {
+-			case "\u00b2", "\u00b3", "\u00b9":
+-				return true
+-			}
+-			return false
+-		}
+-	}
+-
+-	// Passing CONIN$ or CONOUT$ to CreateFile opens a console handle.
+-	// https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea#consoles
+-	//
+-	// While CONIN$ and CONOUT$ aren't documented as being files,
+-	// they behave the same as CON. For example, ./CONIN$ also opens the console input.
+-	if len(name) == 6 && name[5] == '$' && equalFold(name, "CONIN$") {
+-		return true
+-	}
+-	if len(name) == 7 && name[6] == '$' && equalFold(name, "CONOUT$") {
+-		return true
+-	}
+-	return false
+-}
+-
+-func equalFold(a, b string) bool {
+-	if len(a) != len(b) {
+-		return false
+-	}
+-	for i := 0; i < len(a); i++ {
+-		if toUpper(a[i]) != toUpper(b[i]) {
+-			return false
+-		}
+-	}
+-	return true
+-}
+-
+ func toUpper(c byte) byte {
+ 	if 'a' <= c && c <= 'z' {
+ 		return c - ('a' - 'A')
+diff --git a/windows/path_windowsspecific.go b/windows/path_windowsspecific.go
+index d0eb42c..40b9315 100644
+--- a/windows/path_windowsspecific.go
++++ b/windows/path_windowsspecific.go
+@@ -2,71 +2,14 @@
+ // Use of this source code is governed by a BSD-style
+ // license that can be found in the LICENSE file.
+ 
+-package filepath
++package windows
+ 
+ import (
+ 	"os"
+ 	"strings"
+-	"syscall"
+ )
+ 
+-// HasPrefix exists for historical compatibility and should not be used.
+-//
+-// Deprecated: HasPrefix does not respect path boundaries and
+-// does not ignore case when required.
+-func HasPrefix(p, prefix string) bool {
+-	if strings.HasPrefix(p, prefix) {
+-		return true
+-	}
+-	return strings.HasPrefix(strings.ToLower(p), strings.ToLower(prefix))
+-}
+-
+-func splitList(path string) []string {
+-	// The same implementation is used in LookPath in os/exec;
+-	// consider changing os/exec when changing this.
+-
+-	if path == "" {
+-		return []string{}
+-	}
+-
+-	// Split path, respecting but preserving quotes.
+-	list := []string{}
+-	start := 0
+-	quo := false
+-	for i := 0; i < len(path); i++ {
+-		switch c := path[i]; {
+-		case c == '"':
+-			quo = !quo
+-		case c == ListSeparator && !quo:
+-			list = append(list, path[start:i])
+-			start = i + 1
+-		}
+-	}
+-	list = append(list, path[start:])
+-
+-	// Remove quotes.
+-	for i, s := range list {
+-		list[i] = strings.ReplaceAll(s, `"`, ``)
+-	}
+-
+-	return list
+-}
+-
+-func abs(path string) (string, error) {
+-	if path == "" {
+-		// syscall.FullPath returns an error on empty path, because it's not a valid path.
+-		// To implement Abs behavior of returning working directory on empty string input,
+-		// special-case empty path by changing it to "." path. See golang.org/issue/24441.
+-		path = "."
+-	}
+-	fullPath, err := syscall.FullPath(path)
+-	if err != nil {
+-		return "", err
+-	}
+-	return Clean(fullPath), nil
+-}
+-
+-func join(elem []string) string {
++func Join(elem ...string) string {
+ 	var b strings.Builder
+ 	var lastChar byte
+ 	for _, e := range elem {
+@@ -112,7 +55,3 @@ func join(elem []string) string {
+ 	}
+ 	return Clean(b.String())
+ }
+-
+-func sameWord(a, b string) bool {
+-	return strings.EqualFold(a, b)
+-}

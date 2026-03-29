@@ -1,0 +1,234 @@
+--- orig/path_lite.go	2026-03-28 16:17:06
++++ path_lite.go	2026-03-28 16:17:03
+@@ -2,25 +2,18 @@
+ // Use of this source code is governed by a BSD-style
+ // license that can be found in the LICENSE file.
+ 
+-// Package filepathlite implements a subset of path/filepath,
+-// only using packages which may be imported by "os".
+-//
+-// Tests for these functions are in path/filepath.
+-package filepathlite
++// Package windows provides Windows-style path manipulation
++// that works on any platform.
++package winpath
+ 
+ import (
+ 	"errors"
+-	"internal/stringslite"
+-	"io/fs"
+ 	"slices"
++	"strings"
+ )
+ 
+ var errInvalidPath = errors.New("invalid path")
+ 
+-// A lazybuf is a lazily constructed path buffer.
+-// It supports append, reading previously appended bytes,
+-// and retrieving the final string. It does not allocate a buffer
+-// to hold the output until that output diverges from s.
+ type lazybuf struct {
+ 	path       string
+ 	buf        []byte
+@@ -61,25 +54,18 @@
+ 	return b.volAndPath[:b.volLen] + string(b.buf[:b.w])
+ }
+ 
+-// Clean is filepath.Clean.
+ func Clean(path string) string {
+ 	originalPath := path
+ 	volLen := volumeNameLen(path)
+ 	path = path[volLen:]
+ 	if path == "" {
+ 		if volLen > 1 && IsPathSeparator(originalPath[0]) && IsPathSeparator(originalPath[1]) {
+-			// should be UNC
+ 			return FromSlash(originalPath)
+ 		}
+ 		return originalPath + "."
+ 	}
+ 	rooted := IsPathSeparator(path[0])
+ 
+-	// Invariants:
+-	//	reading from path; r is index of next byte to process.
+-	//	writing to buf; w is index of next byte to write.
+-	//	dotdot is index in buf where .. must stop, either because
+-	//		it is the leading slash or it is a leading ../../.. prefix.
+ 	n := len(path)
+ 	out := lazybuf{path: path, volAndPath: originalPath, volLen: volLen}
+ 	r, dotdot := 0, 0
+@@ -91,23 +77,18 @@
+ 	for r < n {
+ 		switch {
+ 		case IsPathSeparator(path[r]):
+-			// empty path element
+ 			r++
+ 		case path[r] == '.' && (r+1 == n || IsPathSeparator(path[r+1])):
+-			// . element
+ 			r++
+ 		case path[r] == '.' && path[r+1] == '.' && (r+2 == n || IsPathSeparator(path[r+2])):
+-			// .. element: remove to last separator
+ 			r += 2
+ 			switch {
+ 			case out.w > dotdot:
+-				// can backtrack
+ 				out.w--
+ 				for out.w > dotdot && !IsPathSeparator(out.index(out.w)) {
+ 					out.w--
+ 				}
+ 			case !rooted:
+-				// cannot backtrack, but not rooted, so append .. element.
+ 				if out.w > 0 {
+ 					out.append(Separator)
+ 				}
+@@ -116,63 +97,23 @@
+ 				dotdot = out.w
+ 			}
+ 		default:
+-			// real path element.
+-			// add slash if needed
+ 			if rooted && out.w != 1 || !rooted && out.w != 0 {
+ 				out.append(Separator)
+ 			}
+-			// copy element
+ 			for ; r < n && !IsPathSeparator(path[r]); r++ {
+ 				out.append(path[r])
+ 			}
+ 		}
+ 	}
+ 
+-	// Turn empty string into "."
+ 	if out.w == 0 {
+ 		out.append('.')
+ 	}
+ 
+-	postClean(&out) // avoid creating absolute paths on Windows
++	postClean(&out)
+ 	return FromSlash(out.string())
+ }
+ 
+-// IsLocal is filepath.IsLocal.
+-func IsLocal(path string) bool {
+-	return isLocal(path)
+-}
+-
+-func unixIsLocal(path string) bool {
+-	if IsAbs(path) || path == "" {
+-		return false
+-	}
+-	hasDots := false
+-	for p := path; p != ""; {
+-		var part string
+-		part, p, _ = stringslite.Cut(p, "/")
+-		if part == "." || part == ".." {
+-			hasDots = true
+-			break
+-		}
+-	}
+-	if hasDots {
+-		path = Clean(path)
+-	}
+-	if path == ".." || stringslite.HasPrefix(path, "../") {
+-		return false
+-	}
+-	return true
+-}
+-
+-// Localize is filepath.Localize.
+-func Localize(path string) (string, error) {
+-	if !fs.ValidPath(path) {
+-		return "", errInvalidPath
+-	}
+-	return localize(path)
+-}
+-
+-// ToSlash is filepath.ToSlash.
+ func ToSlash(path string) string {
+ 	if Separator == '/' {
+ 		return path
+@@ -180,7 +121,6 @@
+ 	return replaceStringByte(path, Separator, '/')
+ }
+ 
+-// FromSlash is filepath.FromSlash.
+ func FromSlash(path string) string {
+ 	if Separator == '/' {
+ 		return path
+@@ -189,7 +129,7 @@
+ }
+ 
+ func replaceStringByte(s string, old, new byte) string {
+-	if stringslite.IndexByte(s, old) == -1 {
++	if strings.IndexByte(s, old) == -1 {
+ 		return s
+ 	}
+ 	n := []byte(s)
+@@ -201,7 +141,6 @@
+ 	return string(n)
+ }
+ 
+-// Split is filepath.Split.
+ func Split(path string) (dir, file string) {
+ 	vol := VolumeName(path)
+ 	i := len(path) - 1
+@@ -211,7 +150,6 @@
+ 	return path[:i+1], path[i+1:]
+ }
+ 
+-// Ext is filepath.Ext.
+ func Ext(path string) string {
+ 	for i := len(path) - 1; i >= 0 && !IsPathSeparator(path[i]); i-- {
+ 		if path[i] == '.' {
+@@ -221,18 +159,14 @@
+ 	return ""
+ }
+ 
+-// Base is filepath.Base.
+ func Base(path string) string {
+ 	if path == "" {
+ 		return "."
+ 	}
+-	// Strip trailing slashes.
+ 	for len(path) > 0 && IsPathSeparator(path[len(path)-1]) {
+ 		path = path[0 : len(path)-1]
+ 	}
+-	// Throw away volume name
+ 	path = path[len(VolumeName(path)):]
+-	// Find the last element
+ 	i := len(path) - 1
+ 	for i >= 0 && !IsPathSeparator(path[i]) {
+ 		i--
+@@ -240,14 +174,12 @@
+ 	if i >= 0 {
+ 		path = path[i+1:]
+ 	}
+-	// If empty now, it had only slashes.
+ 	if path == "" {
+ 		return string(Separator)
+ 	}
+ 	return path
+ }
+ 
+-// Dir is filepath.Dir.
+ func Dir(path string) string {
+ 	vol := VolumeName(path)
+ 	i := len(path) - 1
+@@ -256,19 +188,15 @@
+ 	}
+ 	dir := Clean(path[len(vol) : i+1])
+ 	if dir == "." && len(vol) > 2 {
+-		// must be UNC
+ 		return vol
+ 	}
+ 	return vol + dir
+ }
+ 
+-// VolumeName is filepath.VolumeName.
+ func VolumeName(path string) string {
+ 	return FromSlash(path[:volumeNameLen(path)])
+ }
+ 
+-// VolumeNameLen returns the length of the leading volume name on Windows.
+-// It returns 0 elsewhere.
+ func VolumeNameLen(path string) int {
+ 	return volumeNameLen(path)
+ }

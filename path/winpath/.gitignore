@@ -1,0 +1,5 @@
+# Ignore downloaded original files
+orig/
+*.orig
+*.tmp
+*.tmp.d
