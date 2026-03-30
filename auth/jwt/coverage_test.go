@@ -220,9 +220,18 @@ func TestCov_SpaceDelimited_UnmarshalJSON(t *testing.T) {
 			t.Fatalf("expected empty, got %v", s)
 		}
 	})
+	// Scope must be a space-delimited string per RFC 6749 §3.3, not a number or
+	// JSON array. If a token arrives with "scope":[] the issuer has a bug (e.g.
+	// using []string instead of SpaceDelimited in its claims struct).
 	t.Run("invalid", func(t *testing.T) {
 		var s SpaceDelimited
 		if err := json.Unmarshal([]byte(`123`), &s); err == nil {
+			t.Fatal("expected error")
+		}
+		if err := json.Unmarshal([]byte(`[]`), &s); err == nil {
+			t.Fatal("expected error")
+		}
+		if err := json.Unmarshal([]byte(`["openid","profile"]`), &s); err == nil {
 			t.Fatal("expected error")
 		}
 	})
