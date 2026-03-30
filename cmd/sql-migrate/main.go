@@ -660,7 +660,7 @@ func (state *State) parseAndFixupBatches(text string) error {
 
 func showFixes(fixedUp, fixedDown []string) {
 	if len(fixedUp) > 0 {
-		fmt.Fprintf(os.Stderr, "Fixup: prepended missing 'INSERT INTO _migrations ...' to:\n")
+		fmt.Fprintf(os.Stderr, "Fixup: appended missing 'INSERT INTO _migrations ...' to:\n")
 		for _, up := range fixedUp {
 			fmt.Fprintf(os.Stderr, "   %s\n", up)
 		}
@@ -743,7 +743,7 @@ func create(state *State, desc string) error {
 	// We trust the person running the migrations to not use malicious names.
 	// (we don't want to embed db-specific logic here, and SQL doesn't define escaping)
 	migrationInsert := fmt.Sprintf("INSERT INTO _migrations (name, id) VALUES ('%s', '%s');", basename, id)
-	upContent := fmt.Appendf(nil, "-- leave this as the first line\n%s\n\n-- %s (up)\nSELECT 'place your UP migration here';\n", migrationInsert, desc)
+	upContent := fmt.Appendf(nil, "-- %s (up)\nSELECT 'place your UP migration here';\n\n-- leave this as the last line\n%s\n", desc, migrationInsert)
 	_ = os.WriteFile(upPath, upContent, 0644)
 	migrationDelete := fmt.Sprintf("DELETE FROM _migrations WHERE id = '%s';", id)
 	downContent := fmt.Appendf(nil, "-- %s (down)\nSELECT 'place your DOWN migration here';\n\n-- leave this as the last line\n%s\n", desc, migrationDelete)
@@ -801,10 +801,10 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 			return false, false, warn, nil
 		}
 
-		migrationInsertLn := fmt.Sprintf("INSERT INTO _migrations (name, id) VALUES ('%s', '%s');\n\n", basename, id)
-		upBytes = append([]byte(migrationInsertLn), upBytes...)
+		migrationInsertLn := fmt.Sprintf("\n-- leave this as the last line\nINSERT INTO _migrations (name, id) VALUES ('%s', '%s');\n", basename, id)
+		upBytes = append(upBytes, []byte(migrationInsertLn)...)
 		if err = os.WriteFile(upPath, upBytes, 0644); err != nil {
-			warn = fmt.Errorf("failed to prepend 'INSERT INTO _migrations ...' to %s: %w", upPath, err)
+			warn = fmt.Errorf("failed to append 'INSERT INTO _migrations ...' to %s: %w", upPath, err)
 			return false, false, warn, nil
 		}
 		up = true
