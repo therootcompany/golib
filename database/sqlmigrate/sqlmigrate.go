@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -29,8 +30,15 @@ var (
 // Migration represents a paired up/down migration.
 type Migration struct {
 	Name string // e.g. "2026-04-05-001000_create-todos"
+	ID   string // 8-char hex from INSERT INTO _migrations, parsed by Collect
 	Up   string // SQL content of the .up.sql file
 	Down string // SQL content of the .down.sql file
+}
+
+// AppliedMigration represents a migration recorded in the _migrations table.
+type AppliedMigration struct {
+	ID   string
+	Name string
 }
 
 // Status represents the current migration state.
@@ -50,14 +58,22 @@ type Migrator interface {
 	// ExecDown runs the down migration.
 	ExecDown(ctx context.Context, m Migration) error
 
-	// Applied returns the names of all applied migrations, sorted
-	// lexicographically. Returns an empty slice (not an error) if the
-	// migrations table or log does not exist yet.
-	Applied(ctx context.Context) ([]string, error)
+	// Applied returns all applied migrations from the _migrations table,
+	// sorted lexicographically by name. Returns an empty slice (not an
+	// error) if the migrations table or log does not exist yet.
+	Applied(ctx context.Context) ([]AppliedMigration, error)
 }
+
+// idFromInsert extracts the hex ID from an INSERT INTO _migrations line.
+// Matches: INSERT INTO _migrations (name, id) VALUES ('...', '<hex>');
+var idFromInsert = regexp.MustCompile(
+	`(?i)INSERT\s+INTO\s+_migrations\s*\(\s*name\s*,\s*id\s*\)\s*VALUES\s*\(\s*'[^']*'\s*,\s*'([0-9a-fA-F]+)'\s*\)`,
+)
 
 // Collect reads .up.sql and .down.sql files from fsys, pairs them by
 // basename, and returns them sorted lexicographically by name.
+// If the up SQL contains an INSERT INTO _migrations line, the hex ID
+// is extracted and stored in Migration.ID.
 func Collect(fsys fs.FS) ([]Migration, error) {
 	ups := map[string]string{}
 	downs := map[string]string{}
@@ -100,8 +116,13 @@ func Collect(fsys fs.FS) ([]Migration, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: %s", ErrMissingDown, name)
 		}
+		var id string
+		if m := idFromInsert.FindStringSubmatch(upSQL); m != nil {
+			id = m[1]
+		}
 		migrations = append(migrations, Migration{
 			Name: name,
+			ID:   id,
 			Up:   upSQL,
 			Down: downSQL,
 		})
@@ -130,17 +151,43 @@ func NamesOnly(names []string) []Migration {
 	return migrations
 }
 
+// isApplied returns true if the migration matches any applied entry by name or ID.
+func isApplied(m Migration, applied []AppliedMigration) bool {
+	for _, a := range applied {
+		if a.Name == m.Name {
+			return true
+		}
+		if m.ID != "" && a.ID != "" && a.ID == m.ID {
+			return true
+		}
+	}
+	return false
+}
+
+// findMigration looks up a migration by the applied entry's name or ID.
+func findMigration(a AppliedMigration, byName map[string]Migration, byID map[string]Migration) (Migration, bool) {
+	if m, ok := byName[a.Name]; ok {
+		return m, true
+	}
+	if a.ID != "" {
+		if m, ok := byID[a.ID]; ok {
+			return m, true
+		}
+	}
+	return Migration{}, false
+}
+
 // Up applies up to n pending migrations using the given Runner.
 // If n <= 0, applies all pending. Returns the names of applied migrations.
 func Up(ctx context.Context, r Migrator, migrations []Migration, n int) ([]string, error) {
-	appliedNames, err := r.Applied(ctx)
+	applied, err := r.Applied(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var pending []Migration
 	for _, m := range migrations {
-		if !slices.Contains(appliedNames, m.Name) {
+		if !isApplied(m, applied) {
 			pending = append(pending, m)
 		}
 	}
@@ -166,18 +213,22 @@ func Up(ctx context.Context, r Migrator, migrations []Migration, n int) ([]strin
 // Down rolls back up to n applied migrations, most recent first.
 // If n <= 0, rolls back all applied. Returns the names of rolled-back migrations.
 func Down(ctx context.Context, r Migrator, migrations []Migration, n int) ([]string, error) {
-	appliedNames, err := r.Applied(ctx)
+	applied, err := r.Applied(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	byName := map[string]Migration{}
+	byID := map[string]Migration{}
 	for _, m := range migrations {
 		byName[m.Name] = m
+		if m.ID != "" {
+			byID[m.ID] = m
+		}
 	}
 
-	reversed := make([]string, len(appliedNames))
-	copy(reversed, appliedNames)
+	reversed := make([]AppliedMigration, len(applied))
+	copy(reversed, applied)
 	slices.Reverse(reversed)
 
 	if n <= 0 || n > len(reversed) {
@@ -185,15 +236,15 @@ func Down(ctx context.Context, r Migrator, migrations []Migration, n int) ([]str
 	}
 
 	var ran []string
-	for _, name := range reversed[:n] {
-		m, ok := byName[name]
+	for _, a := range reversed[:n] {
+		m, ok := findMigration(a, byName, byID)
 		if !ok {
-			return ran, fmt.Errorf("%w: %s", ErrMissingDown, name)
+			return ran, fmt.Errorf("%w: %s", ErrMissingDown, a.Name)
 		}
 		if err := r.ExecDown(ctx, m); err != nil {
-			return ran, fmt.Errorf("%s (down): %w", name, err)
+			return ran, fmt.Errorf("%s (down): %w", a.Name, err)
 		}
-		ran = append(ran, name)
+		ran = append(ran, a.Name)
 	}
 
 	return ran, nil
@@ -201,14 +252,19 @@ func Down(ctx context.Context, r Migrator, migrations []Migration, n int) ([]str
 
 // GetStatus returns applied and pending migration lists.
 func GetStatus(ctx context.Context, r Migrator, migrations []Migration) (*Status, error) {
-	appliedNames, err := r.Applied(ctx)
+	applied, err := r.Applied(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	appliedNames := make([]string, len(applied))
+	for i, a := range applied {
+		appliedNames[i] = a.Name
+	}
+
 	var pending []string
 	for _, m := range migrations {
-		if !slices.Contains(appliedNames, m.Name) {
+		if !isApplied(m, applied) {
 			pending = append(pending, m.Name)
 		}
 	}

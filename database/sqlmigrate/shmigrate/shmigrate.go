@@ -87,10 +87,11 @@ func (r *Migrator) exec(name, suffix, label string) error {
 	return nil
 }
 
-// Applied reads the migrations log file and returns applied migration names.
+// Applied reads the migrations log file and returns applied migrations.
+// The log file contains only names (one per line), so IDs will be empty.
 // Returns an empty slice if the file does not exist. When FS is set, reads
 // from that filesystem; otherwise reads from the OS filesystem.
-func (r *Migrator) Applied(ctx context.Context) ([]string, error) {
+func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, error) {
 	var f io.ReadCloser
 	var err error
 	if r.FS != nil {
@@ -106,7 +107,7 @@ func (r *Migrator) Applied(ctx context.Context) ([]string, error) {
 	}
 	defer f.Close()
 
-	var names []string
+	var applied []sqlmigrate.AppliedMigration
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -115,11 +116,11 @@ func (r *Migrator) Applied(ctx context.Context) ([]string, error) {
 			line = strings.TrimSpace(line[:idx])
 		}
 		if line != "" {
-			names = append(names, line)
+			applied = append(applied, sqlmigrate.AppliedMigration{Name: line})
 		}
 	}
 
-	return names, nil
+	return applied, nil
 }
 
 // Reset resets the migration counter. Call between Up and Down

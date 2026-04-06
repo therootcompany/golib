@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -54,10 +53,10 @@ func (r *Migrator) execInTx(ctx context.Context, sql string) error {
 	return nil
 }
 
-// Applied returns the names of all applied migrations from the _migrations table.
+// Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist (PG error 42P01).
-func (r *Migrator) Applied(ctx context.Context) ([]string, error) {
-	rows, err := r.Pool.Query(ctx, "SELECT name FROM _migrations ORDER BY name")
+func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, error) {
+	rows, err := r.Pool.Query(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
 		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "42P01" {
 			return nil, nil
@@ -66,10 +65,17 @@ func (r *Migrator) Applied(ctx context.Context) ([]string, error) {
 	}
 	defer rows.Close()
 
-	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
+	var applied []sqlmigrate.AppliedMigration
+	for rows.Next() {
+		var a sqlmigrate.AppliedMigration
+		if err := rows.Scan(&a.ID, &a.Name); err != nil {
+			return nil, fmt.Errorf("%w: scanning row: %w", sqlmigrate.ErrQueryApplied, err)
+		}
+		applied = append(applied, a)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("%w: reading rows: %w", sqlmigrate.ErrQueryApplied, err)
 	}
 
-	return names, nil
+	return applied, nil
 }

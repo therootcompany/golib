@@ -55,10 +55,10 @@ func (m *Migrator) execInTx(ctx context.Context, sqlStr string) error {
 	return nil
 }
 
-// Applied returns the names of all applied migrations from the _migrations table.
+// Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist (SQL Server error 208).
-func (m *Migrator) Applied(ctx context.Context) ([]string, error) {
-	rows, err := m.DB.QueryContext(ctx, "SELECT name FROM _migrations ORDER BY name")
+func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, error) {
+	rows, err := m.DB.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
 		// SQL Server error 208: "Invalid object name '_migrations'"
 		if msErr, ok := errors.AsType[mssql.Error](err); ok && msErr.Number == 208 {
@@ -68,17 +68,17 @@ func (m *Migrator) Applied(ctx context.Context) ([]string, error) {
 	}
 	defer rows.Close()
 
-	var names []string
+	var applied []sqlmigrate.AppliedMigration
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var a sqlmigrate.AppliedMigration
+		if err := rows.Scan(&a.ID, &a.Name); err != nil {
 			return nil, fmt.Errorf("%w: scanning row: %w", sqlmigrate.ErrQueryApplied, err)
 		}
-		names = append(names, name)
+		applied = append(applied, a)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("%w: reading rows: %w", sqlmigrate.ErrQueryApplied, err)
 	}
 
-	return names, nil
+	return applied, nil
 }
