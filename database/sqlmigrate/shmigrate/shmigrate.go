@@ -77,8 +77,11 @@ func (r *Migrator) exec(name, suffix, label string) error {
 	logPath := unclean(r.LogPath)
 
 	fmt.Fprintf(r.Writer, "# %s %s\n", label, name)
+	if _, err := os.Stat(filepath.Join(r.MigrationsDir, name+suffix)); err != nil {
+		fmt.Fprintln(r.Writer, "# ERROR: MISSING FILE")
+	}
 	fmt.Fprintln(r.Writer, cmd)
-	fmt.Fprintf(r.Writer, "%s > %s || true\n", syncCmd, logPath)
+	fmt.Fprintf(r.Writer, "%s > %s\n", syncCmd, logPath)
 	fmt.Fprintln(r.Writer)
 
 	return nil
