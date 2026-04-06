@@ -64,7 +64,7 @@ DROP TABLE IF EXISTS _migrations;
 	LOG_MIGRATIONS_QUERY = `-- note: CLI arguments must be passed to the sql command to keep output clean
 SELECT name FROM _migrations ORDER BY name;
 `
-	shHeader = `#/bin/sh
+	shHeader = `#!/bin/sh
 set -e
 set -u
 
