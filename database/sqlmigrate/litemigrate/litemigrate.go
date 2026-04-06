@@ -1,0 +1,84 @@
+// Package litemigrate implements sqlmigrate.Migrator for SQLite
+// using database/sql. The caller imports the driver:
+//
+//	import _ "modernc.org/sqlite"
+//
+//	db, err := sql.Open("sqlite", "file:app.db")
+package litemigrate
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+
+	"github.com/therootcompany/golib/database/sqlmigrate"
+)
+
+// Migrator implements sqlmigrate.Migrator using a *sql.DB with SQLite.
+type Migrator struct {
+	DB *sql.DB
+}
+
+// New creates a Migrator from the given database handle.
+func New(db *sql.DB) *Migrator {
+	return &Migrator{DB: db}
+}
+
+var _ sqlmigrate.Migrator = (*Migrator)(nil)
+
+// ExecUp runs the up migration SQL inside a transaction.
+func (m *Migrator) ExecUp(ctx context.Context, mig sqlmigrate.Migration) error {
+	return m.execInTx(ctx, mig.Up)
+}
+
+// ExecDown runs the down migration SQL inside a transaction.
+func (m *Migrator) ExecDown(ctx context.Context, mig sqlmigrate.Migration) error {
+	return m.execInTx(ctx, mig.Down)
+}
+
+func (m *Migrator) execInTx(ctx context.Context, sqlStr string) error {
+	tx, err := m.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("%w: begin: %w", sqlmigrate.ErrExecFailed, err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, sqlStr); err != nil {
+		return fmt.Errorf("%w: exec: %w", sqlmigrate.ErrExecFailed, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: commit: %w", sqlmigrate.ErrExecFailed, err)
+	}
+
+	return nil
+}
+
+// Applied returns the names of all applied migrations from the _migrations table.
+// Returns an empty slice if the table does not exist.
+func (m *Migrator) Applied(ctx context.Context) ([]string, error) {
+	rows, err := m.DB.QueryContext(ctx, "SELECT name FROM _migrations ORDER BY name")
+	if err != nil {
+		// SQLite reports "no such table: _migrations" — stable across versions
+		if strings.Contains(err.Error(), "no such table") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%w: %w", sqlmigrate.ErrQueryApplied, err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("%w: scanning row: %w", sqlmigrate.ErrQueryApplied, err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: reading rows: %w", sqlmigrate.ErrQueryApplied, err)
+	}
+
+	return names, nil
+}
