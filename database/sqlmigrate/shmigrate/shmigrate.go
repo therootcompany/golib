@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,10 @@ type Migrator struct {
 	// LogPath is the path to the migrations.log file.
 	LogPath string
 
+	// FS is an optional filesystem for reading the migrations log.
+	// When nil, the OS filesystem is used.
+	FS fs.FS
+
 	counter int
 }
 
@@ -80,18 +85,26 @@ func (r *Migrator) exec(name, suffix, label string) error {
 }
 
 // Applied reads the migrations log file and returns applied migration names.
-// Returns an empty slice if the file does not exist.
+// Returns an empty slice if the file does not exist. When FS is set, reads
+// from that filesystem; otherwise reads from the OS filesystem.
 func (r *Migrator) Applied(ctx context.Context) ([]string, error) {
-	data, err := os.ReadFile(r.LogPath)
+	var f io.ReadCloser
+	var err error
+	if r.FS != nil {
+		f, err = r.FS.Open(r.LogPath)
+	} else {
+		f, err = os.Open(r.LogPath)
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading migrations log: %w", err)
 	}
+	defer f.Close()
 
 	var names []string
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		// strip inline comments

@@ -1,6 +1,11 @@
-// Package sqlmigrate provides types and utilities for SQL migration files.
-// It is database-agnostic — see pgmigrate for PostgreSQL execution,
-// shmigrate for shell script generation.
+// Package sqlmigrate provides a database-agnostic SQL migration interface.
+//
+// Backend implementations (each a separate Go module):
+//   - pgmigrate: PostgreSQL via pgx/v5
+//   - mymigrate: MySQL/MariaDB via go-sql-driver/mysql
+//   - litemigrate: SQLite via database/sql
+//   - msmigrate: SQL Server via go-mssqldb
+//   - shmigrate: POSIX shell script generation
 package sqlmigrate
 
 import (
@@ -159,15 +164,11 @@ func Up(ctx context.Context, r Migrator, migrations []Migration, n int) ([]strin
 }
 
 // Down rolls back up to n applied migrations, most recent first.
-// If n <= 0, rolls back one. Returns the names of rolled-back migrations.
+// If n <= 0, rolls back all applied. Returns the names of rolled-back migrations.
 func Down(ctx context.Context, r Migrator, migrations []Migration, n int) ([]string, error) {
 	appliedNames, err := r.Applied(ctx)
 	if err != nil {
 		return nil, err
-	}
-
-	if n <= 0 {
-		n = 1
 	}
 
 	byName := map[string]Migration{}
@@ -179,7 +180,7 @@ func Down(ctx context.Context, r Migrator, migrations []Migration, n int) ([]str
 	copy(reversed, appliedNames)
 	slices.Reverse(reversed)
 
-	if n > len(reversed) {
+	if n <= 0 || n > len(reversed) {
 		n = len(reversed)
 	}
 

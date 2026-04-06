@@ -177,11 +177,11 @@ func runMigrate(ctx context.Context, runner sqlmigrate.Migrator, migrations []sq
 		return err
 
 	case "down":
-		n := 0
+		n := 1
 		if len(args) > 1 {
 			var err error
 			n, err = strconv.Atoi(args[1])
-			if err != nil || n < 0 {
+			if err != nil || n < 1 {
 				return fmt.Errorf("%q is not a valid count", args[1])
 			}
 		}
@@ -209,7 +209,7 @@ func runMigrate(ctx context.Context, runner sqlmigrate.Migrator, migrations []sq
 		return nil
 
 	case "reset":
-		rolled, err := sqlmigrate.Down(ctx, runner, migrations, len(migrations))
+		rolled, err := sqlmigrate.Down(ctx, runner, migrations, 0)
 		if len(rolled) == 0 && err == nil {
 			fmt.Println("Nothing to reset.")
 		} else if err == nil {
