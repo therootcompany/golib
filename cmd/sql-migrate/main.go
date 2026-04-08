@@ -320,7 +320,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "status":
-		if len(leafArgs) > 0 && subcmd != "create" {
+		if len(leafArgs) > 0 {
 			fmt.Fprintf(os.Stderr, "Error: unexpected args: %s\n", strings.Join(leafArgs, " "))
 			os.Exit(1)
 		}
@@ -329,7 +329,7 @@ func main() {
 			log.Fatal(err)
 		}
 	case "list":
-		if len(leafArgs) > 0 && subcmd != "create" {
+		if len(leafArgs) > 0 {
 			fmt.Fprintf(os.Stderr, "Error: unexpected args: %s\n", strings.Join(leafArgs, " "))
 			os.Exit(1)
 		}
