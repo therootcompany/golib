@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -28,8 +29,11 @@ import (
 	"time"
 )
 
-const (
-	version = "2.0.3"
+// replaced by goreleaser / ldflags
+var (
+	version = "0.0.0-dev"
+	commit  = "0000000"
+	date    = "0001-01-01"
 )
 
 const (
@@ -74,8 +78,13 @@ fi
 `
 )
 
-const helpText = `
-sql-migrate v` + version + ` - a feature-branch-friendly SQL migrator
+// printVersion displays the version, commit, and build date.
+func printVersion(w io.Writer) {
+	_, _ = fmt.Fprintf(w, "sql-migrate v%s %s (%s)\n", version, commit[:7], date)
+}
+
+var helpText = `
+sql-migrate - a feature-branch-friendly SQL migrator
 
 USAGE
    sql-migrate [-d sqldir] <command> [args]
@@ -146,17 +155,22 @@ type MainConfig struct {
 
 func main() {
 	var cfg MainConfig
-	var date = time.Now()
+	var today = time.Now()
 
 	if len(os.Args) < 2 {
-		//nolint
+		printVersion(os.Stdout)
+		fmt.Println("")
 		fmt.Printf("%s\n", helpText)
 		os.Exit(0)
 	}
 
 	switch os.Args[1] {
-	case "help", "--help",
-		"version", "--version", "-V":
+	case "-V", "-version", "--version", "version":
+		printVersion(os.Stdout)
+		os.Exit(0)
+	case "help", "-help", "--help":
+		printVersion(os.Stdout)
+		fmt.Println("")
 		fmt.Printf("%s\n", helpText)
 		os.Exit(0)
 	default:
@@ -190,7 +204,8 @@ func main() {
 		fsSub = flag.NewFlagSet(subcmd, flag.ExitOnError)
 	default:
 		log.Printf("unknown command %s", subcmd)
-		fmt.Printf("%s\n", helpText)
+		printVersion(os.Stderr)
+		fmt.Fprintf(os.Stderr, "%s\n", helpText)
 		os.Exit(1)
 	}
 	if err := fsSub.Parse(subArgs); err != nil {
@@ -247,7 +262,7 @@ func main() {
 	// mMigratorDownPath := filepath.Join(cfg.migrationsDir, M_MIGRATOR_DOWN_NAME)
 
 	state := State{
-		Date:          date,
+		Date:          today,
 		MigrationsDir: cfg.migrationsDir,
 	}
 	state.SQLCommand, state.LogPath, err = extractVars(mMigratorUpPath)
@@ -367,7 +382,8 @@ func main() {
 		}
 	default:
 		log.Printf("unknown command %s", subcmd)
-		fmt.Printf("%s\n", helpText)
+		printVersion(os.Stderr)
+		fmt.Fprintf(os.Stderr, "%s\n", helpText)
 		os.Exit(1)
 	}
 }
