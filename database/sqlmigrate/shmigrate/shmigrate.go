@@ -88,7 +88,10 @@ func (r *Migrator) exec(name, suffix, label string) error {
 }
 
 // Applied reads the migrations log file and returns applied migrations.
-// The log file contains only names (one per line), so IDs will be empty.
+// Supports two formats:
+//   - New: "id\tname" (tab-separated, written by updated _migrations.sql)
+//   - Old: "name" (name only, for backwards compatibility)
+//
 // Returns an empty slice if the file does not exist. When FS is set, reads
 // from that filesystem; otherwise reads from the OS filesystem.
 func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, error) {
@@ -115,7 +118,12 @@ func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, 
 		if idx := strings.Index(line, "#"); idx >= 0 {
 			line = strings.TrimSpace(line[:idx])
 		}
-		if line != "" {
+		if line == "" {
+			continue
+		}
+		if id, name, ok := strings.Cut(line, "\t"); ok {
+			applied = append(applied, sqlmigrate.AppliedMigration{ID: id, Name: name})
+		} else {
 			applied = append(applied, sqlmigrate.AppliedMigration{Name: line})
 		}
 	}

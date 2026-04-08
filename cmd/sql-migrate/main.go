@@ -43,7 +43,7 @@ var (
 const (
 	defaultMigrationDir   = "./sql/migrations/"
 	defaultLogPath        = "../migrations.log"
-	sqlCommandPSQL        = `psql "$PG_URL" -v ON_ERROR_STOP=on -A -t --file %s`
+	sqlCommandPSQL        = `psql "$PG_URL" -v ON_ERROR_STOP=on -v schema="${TENANT_SCHEMA:-public}" -A -t --file %s`
 	sqlCommandMariaDB     = `mariadb --defaults-extra-file="$MY_CNF" -s -N --raw < %s`
 	sqlCommandMySQL       = `mysql --defaults-extra-file="$MY_CNF" -s -N --raw < %s`
 	LOG_QUERY_NAME        = "_migrations.sql"
@@ -69,9 +69,9 @@ INSERT INTO _migrations (name, id) VALUES ('0001-01-01-001000_init-migrations', 
 
 DROP TABLE IF EXISTS _migrations;
 `
-	LOG_MIGRATIONS_QUERY = `-- note: CLI arguments must be passed to the sql command to keep output clean
-SELECT name FROM _migrations ORDER BY name;
-`
+	// logMigrationsQueryOld is the pre-v2.2 format (name only).
+	// Used for detection during auto-upgrade.
+	logMigrationsQueryOld = `SELECT name FROM _migrations ORDER BY name;`
 	shHeader = `#!/bin/sh
 set -e
 set -u
@@ -108,6 +108,7 @@ COMMANDS
    create        - creates a new, canonically-named up/down file pair in the
                    migrations directory, with corresponding insert
    sync          - create a script to reload migrations.log from the DB
+                   (run after upgrading sql-migrate)
    status        - shows the same output as if processing a forward-migration
    up [n]        - create a script to run pending migrations (ALL by default)
    down [n]      - create a script to roll back migrations (ONE by default)
@@ -124,7 +125,7 @@ NOTES
 
 	The initial migration file contains configuration variables:
 		-- migrations_log: ./sql/migrations.log
-		-- sql_command: psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --file %s
+		-- sql_command: psql "$PG_URL" -v ON_ERROR_STOP=on -v schema="${TENANT_SCHEMA:-public}" -A -t --file %s
 
 	The log is generated on each migration file contains a list of all migrations:
       0001-01-01-001000_init-migrations.up.sql
@@ -135,12 +136,51 @@ NOTES
    The 'create' generates an up/down pair of files using the current date and
       the number 1000. If either file exists, the number is incremented by 1000 and
       tried again.
+
+UPGRADING
+   After upgrading sql-migrate, run sync to refresh the log format:
+      sql-migrate -d ./sql/migrations/ sync | sh
+
+POSTGRESQL MULTI-TENANT SCHEMAS
+   The default psql command passes :schema (defaults to "public") so
+   migrations can target a specific PostgreSQL schema:
+
+      -- in each migration file:
+      SET search_path TO :schema;
+      CREATE TABLE users (...);
+
+      # run for a specific tenant:
+      TENANT_SCHEMA=tenant_abc123 sql-migrate up | sh
+
+   Each schema gets its own _migrations table, so tenants are migrated
+   independently. The :schema variable is set automatically via
+   -v schema="${TENANT_SCHEMA:-public}" in the psql command.
 `
 
 var (
 	nonWordRe      = regexp.MustCompile(`\W+`)
 	commentStartRe = regexp.MustCompile(`(^|\s+)#.*`)
 )
+
+// logMigrationsQuery returns the DB-specific SQL to dump id+name from _migrations.
+// The output format is "id<tab>name" per row, compatible with shmigrate.Applied().
+func logMigrationsQuery(sqlCommand string) string {
+	var prefix, selectExpr string
+	switch {
+	case strings.Contains(sqlCommand, "mysql") || strings.Contains(sqlCommand, "mariadb"):
+		selectExpr = "CONCAT(id, CHAR(9), name)"
+	case strings.Contains(sqlCommand, "psql"):
+		prefix = "SET search_path TO :schema;\n"
+		selectExpr = "id || CHR(9) || name"
+	default:
+		// SQLite and most others support || and CHR/CHAR
+		selectExpr = "id || CHR(9) || name"
+	}
+	return fmt.Sprintf(
+		"-- note: CLI arguments must be passed to the sql command to keep output clean\n%sSELECT %s FROM _migrations ORDER BY name;\n",
+		prefix, selectExpr,
+	)
+}
 
 type State struct {
 	Date          time.Time
@@ -274,6 +314,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: couldn't read config from initial migration: %v\n", err)
 		os.Exit(1)
 	}
+
+	// auto-upgrade _migrations.sql to include id in output
+	maybeUpgradeLogQuery(logQueryPath, state.SQLCommand)
 
 	logText, err := os.ReadFile(state.LogPath)
 	if err != nil {
@@ -562,7 +605,7 @@ func mustInit(cfg *MainConfig) {
 	}
 
 	logQueryPath := filepath.Join(state.MigrationsDir, LOG_QUERY_NAME)
-	if created, err := initFile(logQueryPath, LOG_MIGRATIONS_QUERY); err != nil {
+	if created, err := initFile(logQueryPath, logMigrationsQuery(state.SQLCommand)); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: init couldn't create migrations query: %v\n", err)
 		os.Exit(1)
 	} else if created {
@@ -576,6 +619,25 @@ func mustInit(cfg *MainConfig) {
 		fmt.Fprintf(os.Stderr, "done\n")
 		return
 	}
+}
+
+// maybeUpgradeLogQuery rewrites _migrations.sql if it still uses the old
+// name-only SELECT. This enables ID-based matching in migrations.log without
+// any manual steps when upgrading sql-migrate.
+func maybeUpgradeLogQuery(path, sqlCommand string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	if !strings.Contains(string(b), logMigrationsQueryOld) {
+		return
+	}
+	newQuery := logMigrationsQuery(sqlCommand)
+	if err := os.WriteFile(path, []byte(newQuery), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Warn: couldn't upgrade %s: %v\n", path, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "   upgraded %s (added id to output)\n", filepathUnclean(path))
 }
 
 func initFile(path, contents string) (bool, error) {
