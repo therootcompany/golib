@@ -344,10 +344,10 @@ func main() {
 		var upN int
 		switch len(leafArgs) {
 		case 0:
-			// ignore
+			// no arg: upN stays 0, meaning "all pending"
 		case 1:
 			upN, err = strconv.Atoi(leafArgs[0])
-			if err != nil || upN < 0 {
+			if err != nil || upN < 1 {
 				fmt.Fprintf(os.Stderr, "Error: %s is not a positive number\n", leafArgs[0])
 				os.Exit(1)
 			}
