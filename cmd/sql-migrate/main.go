@@ -13,6 +13,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"flag"
@@ -27,6 +28,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/therootcompany/golib/database/sqlmigrate"
+	"github.com/therootcompany/golib/database/sqlmigrate/shmigrate"
 )
 
 // replaced by goreleaser / ldflags
@@ -67,14 +71,6 @@ DROP TABLE IF EXISTS _migrations;
 `
 	LOG_MIGRATIONS_QUERY = `-- note: CLI arguments must be passed to the sql command to keep output clean
 SELECT name FROM _migrations ORDER BY name;
-`
-	shHeader = `#!/bin/sh
-set -e
-set -u
-
-if test -s ./.env; then
-   . ./.env
-fi
 `
 )
 
@@ -297,14 +293,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx := context.Background()
+	runner := &shmigrate.Migrator{
+		Writer:        os.Stdout,
+		SqlCommand:    state.SQLCommand,
+		MigrationsDir: state.MigrationsDir,
+		LogQueryPath:  filepath.Join(state.MigrationsDir, LOG_QUERY_NAME),
+		LogPath:       state.LogPath,
+	}
+	migrations := sqlmigrate.NamesOnly(ups)
+
 	switch subcmd {
 	case "init":
 		break
 	case "sync":
-		if err := syncLog(&state); err != nil {
-			log.Fatal(err)
-		}
-		return
+		syncLog(runner)
 	case "create":
 		if len(leafArgs) == 0 {
 			log.Fatal("create requires a description")
@@ -324,8 +327,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: unexpected args: %s\n", strings.Join(leafArgs, " "))
 			os.Exit(1)
 		}
-		err = status(&state, ups)
-		if err != nil {
+		if err := cmdStatus(ctx, &state, runner, migrations); err != nil {
 			log.Fatal(err)
 		}
 	case "list":
@@ -364,12 +366,11 @@ func main() {
 			os.Exit(1)
 		}
 
-		err = up(&state, ups, upN)
-		if err != nil {
+		if err := cmdUp(ctx, &state, runner, migrations, upN); err != nil {
 			log.Fatal(err)
 		}
 	case "down":
-		var downN int
+		downN := 1
 		switch len(leafArgs) {
 		case 0:
 			// default: roll back one
@@ -384,8 +385,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		err = down(&state, downN)
-		if err != nil {
+		if err := cmdDown(ctx, &state, runner, migrations, downN); err != nil {
 			log.Fatal(err)
 		}
 	default:
@@ -875,190 +875,171 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 	return up, down, nil, nil
 }
 
-func syncLog(state *State) error {
-	getMigsPath := filepath.Join(state.MigrationsDir, LOG_QUERY_NAME)
-	getMigsPath = filepathUnclean(getMigsPath)
-	getMigs := strings.Replace(state.SQLCommand, "%s", getMigsPath, 1)
-	logPath := filepathUnclean(state.LogPath)
+func syncLog(runner *shmigrate.Migrator) {
+	syncCmd := strings.Replace(runner.SqlCommand, "%s", filepathUnclean(runner.LogQueryPath), 1)
+	logPath := filepathUnclean(runner.LogPath)
 
-	fmt.Printf(shHeader)
+	fmt.Printf(shmigrate.ShHeader)
 	fmt.Println("")
 	fmt.Println("# SYNC: reload migrations log from DB")
-	fmt.Printf("%s > %s || true\n", getMigs, logPath)
+	fmt.Printf("%s > %s || true\n", syncCmd, logPath)
 	fmt.Printf("cat %s\n", logPath)
-	return nil
 }
 
-func up(state *State, ups []string, n int) error {
-	var pending []string
-	for _, mig := range ups {
-		found := slices.Contains(state.Migrated, mig)
-		if !found {
-			pending = append(pending, mig)
-		}
+func cmdUp(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Migration, n int) error {
+	// fixup pending migrations before generating the script
+	fixedUp, fixedDown := fixupAll(state.MigrationsDir, state.Migrated, migrations)
+
+	status, err := sqlmigrate.GetStatus(ctx, runner, migrations)
+	if err != nil {
+		return err
 	}
 
-	getMigsPath := filepath.Join(state.MigrationsDir, LOG_QUERY_NAME)
-	getMigsPath = filepathUnclean(getMigsPath)
-	getMigs := strings.Replace(state.SQLCommand, "%s", getMigsPath, 1)
-
-	if len(pending) == 0 {
+	if len(status.Pending) == 0 {
+		syncCmd := strings.Replace(runner.SqlCommand, "%s", filepathUnclean(runner.LogQueryPath), 1)
 		fmt.Fprintf(os.Stderr, "# Already up-to-date\n")
 		fmt.Fprintf(os.Stderr, "#\n")
 		fmt.Fprintf(os.Stderr, "# To reload the migrations log:\n")
-		fmt.Fprintf(os.Stderr, "# %s > %s\n", getMigs, filepathUnclean(state.LogPath))
+		fmt.Fprintf(os.Stderr, "# %s > %s\n", syncCmd, filepathUnclean(runner.LogPath))
 		return nil
 	}
-	if n == 0 {
-		n = len(pending)
-	}
 
-	fixedUp := []string{}
-	fixedDown := []string{}
-
-	fmt.Printf(shHeader)
+	fmt.Printf(shmigrate.ShHeader)
 	fmt.Println("")
 	fmt.Println("# FORWARD / UP Migrations")
 	fmt.Println("")
-	for i, migration := range pending {
-		if i >= n {
-			break
-		}
 
-		path := filepath.Join(state.MigrationsDir, migration+".up.sql")
-		path = filepathUnclean(path)
-		{
-			up, down, warn, err := fixupMigration(state.MigrationsDir, migration)
-			if warn != nil {
-				fmt.Fprintf(os.Stderr, "Warn: %s\n", warn)
-			}
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "%v\n", err)
-			}
-			if up {
-				fixedUp = append(fixedUp, migration)
-			}
-			if down {
-				fixedDown = append(fixedDown, migration)
-			}
-		}
-		cmd := strings.Replace(state.SQLCommand, "%s", path, 1)
-		fmt.Printf("# +%d %s\n", i+1, migration)
-		fmt.Println(cmd)
-		fmt.Println(getMigs + " > " + filepathUnclean(state.LogPath))
-		fmt.Println("")
+	applied, err := sqlmigrate.Up(ctx, runner, migrations, n)
+	if err != nil {
+		return err
 	}
-	fmt.Println("cat", filepathUnclean(state.LogPath))
+	_ = applied
+
+	fmt.Println("cat", filepathUnclean(runner.LogPath))
 
 	showFixes(fixedUp, fixedDown)
 	return nil
 }
 
-func down(state *State, n int) error {
-	lines := make([]string, len(state.Lines))
-	copy(lines, state.Lines)
-	slices.Reverse(lines)
+func cmdDown(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Migration, n int) error {
+	// fixup applied migrations before generating the script
+	fixedUp, fixedDown := fixupAll(state.MigrationsDir, state.Migrated, migrations)
 
-	getMigsPath := filepath.Join(state.MigrationsDir, LOG_QUERY_NAME)
-	getMigsPath = filepathUnclean(getMigsPath)
-	getMigs := strings.Replace(state.SQLCommand, "%s", getMigsPath, 1)
+	status, err := sqlmigrate.GetStatus(ctx, runner, migrations)
+	if err != nil {
+		return err
+	}
 
-	if len(lines) == 0 {
+	if len(status.Applied) == 0 {
+		syncCmd := strings.Replace(runner.SqlCommand, "%s", filepathUnclean(runner.LogQueryPath), 1)
 		fmt.Fprintf(os.Stderr, "# No migration history\n")
 		fmt.Fprintf(os.Stderr, "#\n")
 		fmt.Fprintf(os.Stderr, "# To reload the migrations log:\n")
-		fmt.Fprintf(os.Stderr, "# %s > %s\n", getMigs, filepathUnclean(state.LogPath))
+		fmt.Fprintf(os.Stderr, "# %s > %s\n", syncCmd, filepathUnclean(runner.LogPath))
 		return nil
 	}
-	if n == 0 {
-		n = 1
-	}
 
-	fixedUp := []string{}
-	fixedDown := []string{}
-
-	var applied []string
-	for _, line := range lines {
-		migration := commentStartRe.ReplaceAllString(line, "")
-		migration = strings.TrimSpace(migration)
-		if migration == "" {
-			continue
-		}
-		applied = append(applied, migration)
-	}
-
-	fmt.Printf(shHeader)
+	fmt.Printf(shmigrate.ShHeader)
 	fmt.Println("")
 	fmt.Println("# ROLLBACK / DOWN Migration")
 	fmt.Println("")
-	for i, migration := range applied {
-		if i >= n {
-			break
-		}
 
-		downPath := filepath.Join(state.MigrationsDir, migration+".down.sql")
-		cmd := strings.Replace(state.SQLCommand, "%s", downPath, 1)
-		fmt.Printf("\n# -%d %s\n", i+1, migration)
+	// check for missing down files before generating script
+	reversed := make([]string, len(status.Applied))
+	copy(reversed, status.Applied)
+	slices.Reverse(reversed)
+	limit := n
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > len(reversed) {
+		limit = len(reversed)
+	}
+	for _, name := range reversed[:limit] {
+		downPath := filepath.Join(state.MigrationsDir, name+".down.sql")
 		if !fileExists(downPath) {
 			fmt.Fprintf(os.Stderr, "# Warn: missing %s\n", filepathUnclean(downPath))
 			fmt.Fprintf(os.Stderr, "#      (the migration will fail to run)\n")
-			fmt.Printf("# ERROR: MISSING FILE\n")
-		} else {
-			up, down, warn, err := fixupMigration(state.MigrationsDir, migration)
-			if warn != nil {
-				fmt.Fprintf(os.Stderr, "Warn: %s\n", warn)
-			}
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "%v\n", err)
-			}
-			if up {
-				fixedUp = append(fixedUp, migration)
-			}
-			if down {
-				fixedDown = append(fixedDown, migration)
-			}
 		}
-
-		fmt.Println(cmd)
-		fmt.Println(getMigs + " > " + filepathUnclean(state.LogPath))
-		fmt.Println("")
 	}
-	fmt.Println("cat", filepathUnclean(state.LogPath))
+
+	rolled, err := sqlmigrate.Down(ctx, runner, migrations, n)
+	if err != nil {
+		return err
+	}
+	_ = rolled
+
+	fmt.Println("cat", filepathUnclean(runner.LogPath))
 
 	showFixes(fixedUp, fixedDown)
 	return nil
 }
 
-func status(state *State, ups []string) error {
-	previous := make([]string, len(state.Lines))
-	copy(previous, state.Lines)
-	slices.Reverse(previous)
+func cmdStatus(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Migration) error {
+	status, err := sqlmigrate.GetStatus(ctx, runner, migrations)
+	if err != nil {
+		return err
+	}
 
 	fmt.Fprintf(os.Stderr, "migrations_dir: %s\n", filepathUnclean(state.MigrationsDir))
 	fmt.Fprintf(os.Stderr, "migrations_log: %s\n", filepathUnclean(state.LogPath))
 	fmt.Fprintf(os.Stderr, "sql_command: %s\n", state.SQLCommand)
 	fmt.Fprintf(os.Stderr, "\n")
-	fmt.Printf("# previous: %d\n", len(previous))
-	for _, mig := range previous {
+
+	// show applied in reverse (most recent first)
+	applied := make([]string, len(status.Applied))
+	copy(applied, status.Applied)
+	slices.Reverse(applied)
+
+	fmt.Printf("# previous: %d\n", len(applied))
+	for _, mig := range applied {
 		fmt.Printf("   %s\n", mig)
 	}
-	if len(previous) == 0 {
+	if len(applied) == 0 {
 		fmt.Println("   # (no previous migrations)")
 	}
 	fmt.Println("")
-	var pending []string
-	for _, mig := range ups {
-		found := slices.Contains(state.Migrated, mig)
-		if !found {
-			pending = append(pending, mig)
-		}
-	}
-	fmt.Printf("# pending: %d\n", len(pending))
-	for _, mig := range pending {
+	fmt.Printf("# pending: %d\n", len(status.Pending))
+	for _, mig := range status.Pending {
 		fmt.Printf("   %s\n", mig)
 	}
-	if len(pending) == 0 {
+	if len(status.Pending) == 0 {
 		fmt.Println("   # (no pending migrations)")
 	}
 	return nil
+}
+
+// fixupAll runs fixupMigration on all known migrations (applied + pending).
+func fixupAll(migrationsDir string, applied []string, migrations []sqlmigrate.Migration) (fixedUp, fixedDown []string) {
+	seen := map[string]bool{}
+	var all []string
+	for _, name := range applied {
+		if !seen[name] {
+			all = append(all, name)
+			seen[name] = true
+		}
+	}
+	for _, m := range migrations {
+		if !seen[m.Name] {
+			all = append(all, m.Name)
+			seen[m.Name] = true
+		}
+	}
+
+	for _, name := range all {
+		up, down, warn, err := fixupMigration(migrationsDir, name)
+		if warn != nil {
+			fmt.Fprintf(os.Stderr, "Warn: %s\n", warn)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+		}
+		if up {
+			fixedUp = append(fixedUp, name)
+		}
+		if down {
+			fixedDown = append(fixedDown, name)
+		}
+	}
+	return fixedUp, fixedDown
 }
