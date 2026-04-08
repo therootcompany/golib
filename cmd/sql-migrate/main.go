@@ -364,10 +364,10 @@ func main() {
 		var downN int
 		switch len(leafArgs) {
 		case 0:
-			// ignore
+			// default: roll back one
 		case 1:
 			downN, err = strconv.Atoi(leafArgs[0])
-			if err != nil || downN < 0 {
+			if err != nil || downN < 1 {
 				fmt.Fprintf(os.Stderr, "Error: %s is not a positive number\n", leafArgs[0])
 				os.Exit(1)
 			}
