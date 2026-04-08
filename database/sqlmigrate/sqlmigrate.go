@@ -25,6 +25,7 @@ var (
 	ErrWalkFailed   = errors.New("walking migrations")
 	ErrExecFailed   = errors.New("migration exec failed")
 	ErrQueryApplied = errors.New("querying applied migrations")
+	ErrInvalidN     = errors.New("n must be positive or -1 for all")
 )
 
 // Migration represents a paired up/down migration.
@@ -178,8 +179,13 @@ func findMigration(a AppliedMigration, byName map[string]Migration, byID map[str
 }
 
 // Up applies up to n pending migrations using the given Runner.
-// If n <= 0, applies all pending. Returns the names of applied migrations.
+// If n < 0, applies all pending. If n == 0, returns ErrInvalidN.
+// Returns the names of applied migrations.
 func Up(ctx context.Context, r Migrator, migrations []Migration, n int) ([]string, error) {
+	if n == 0 {
+		return nil, ErrInvalidN
+	}
+
 	applied, err := r.Applied(ctx)
 	if err != nil {
 		return nil, err
@@ -192,7 +198,7 @@ func Up(ctx context.Context, r Migrator, migrations []Migration, n int) ([]strin
 		}
 	}
 
-	if n <= 0 {
+	if n < 0 {
 		n = len(pending)
 	}
 	if n > len(pending) {
@@ -211,8 +217,13 @@ func Up(ctx context.Context, r Migrator, migrations []Migration, n int) ([]strin
 }
 
 // Down rolls back up to n applied migrations, most recent first.
-// If n <= 0, rolls back all applied. Returns the names of rolled-back migrations.
+// If n < 0, rolls back all applied. If n == 0, returns ErrInvalidN.
+// Returns the names of rolled-back migrations.
 func Down(ctx context.Context, r Migrator, migrations []Migration, n int) ([]string, error) {
+	if n == 0 {
+		return nil, ErrInvalidN
+	}
+
 	applied, err := r.Applied(ctx)
 	if err != nil {
 		return nil, err
@@ -231,7 +242,7 @@ func Down(ctx context.Context, r Migrator, migrations []Migration, n int) ([]str
 	copy(reversed, applied)
 	slices.Reverse(reversed)
 
-	if n <= 0 || n > len(reversed) {
+	if n < 0 || n > len(reversed) {
 		n = len(reversed)
 	}
 

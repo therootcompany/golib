@@ -351,10 +351,10 @@ func main() {
 			fmt.Println("  ", d)
 		}
 	case "up":
-		var upN int
+		upN := -1
 		switch len(leafArgs) {
 		case 0:
-			// no arg: upN stays 0, meaning "all pending"
+			// no arg: apply all pending
 		case 1:
 			upN, err = strconv.Atoi(leafArgs[0])
 			if err != nil || upN < 1 {

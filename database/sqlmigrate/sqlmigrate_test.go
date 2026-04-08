@@ -190,12 +190,20 @@ func TestUp(t *testing.T) {
 
 	t.Run("apply all", func(t *testing.T) {
 		m := &mockMigrator{}
-		ran, err := sqlmigrate.Up(ctx, m, migrations, 0)
+		ran, err := sqlmigrate.Up(ctx, m, migrations, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !slices.Equal(ran, []string{"001_init", "002_users", "003_posts"}) {
 			t.Errorf("applied = %v", ran)
+		}
+	})
+
+	t.Run("n=0 is error", func(t *testing.T) {
+		m := &mockMigrator{}
+		_, err := sqlmigrate.Up(ctx, m, migrations, 0)
+		if !errors.Is(err, sqlmigrate.ErrInvalidN) {
+			t.Errorf("got %v, want ErrInvalidN", err)
 		}
 	})
 
@@ -212,7 +220,7 @@ func TestUp(t *testing.T) {
 
 	t.Run("none pending", func(t *testing.T) {
 		m := &mockMigrator{applied: applied("001_init", "002_users", "003_posts")}
-		ran, err := sqlmigrate.Up(ctx, m, migrations, 0)
+		ran, err := sqlmigrate.Up(ctx, m, migrations, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -223,7 +231,7 @@ func TestUp(t *testing.T) {
 
 	t.Run("partial pending", func(t *testing.T) {
 		m := &mockMigrator{applied: applied("001_init")}
-		ran, err := sqlmigrate.Up(ctx, m, migrations, 0)
+		ran, err := sqlmigrate.Up(ctx, m, migrations, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,7 +253,7 @@ func TestUp(t *testing.T) {
 
 	t.Run("exec error stops and returns partial", func(t *testing.T) {
 		m := &failOnNthMigrator{failAt: 1}
-		ran, err := sqlmigrate.Up(ctx, m, migrations, 0)
+		ran, err := sqlmigrate.Up(ctx, m, migrations, -1)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -263,7 +271,7 @@ func TestUp(t *testing.T) {
 			{Name: "001_new-name", ID: "aa11bb22", Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
 			{Name: "002_users", Up: "CREATE TABLE b;", Down: "DROP TABLE b;"},
 		}
-		ran, err := sqlmigrate.Up(ctx, m, migs, 0)
+		ran, err := sqlmigrate.Up(ctx, m, migs, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -315,7 +323,7 @@ func TestDown(t *testing.T) {
 
 	t.Run("rollback all", func(t *testing.T) {
 		m := &mockMigrator{applied: applied("001_init", "002_users", "003_posts")}
-		rolled, err := sqlmigrate.Down(ctx, m, migrations, 0)
+		rolled, err := sqlmigrate.Down(ctx, m, migrations, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -327,6 +335,14 @@ func TestDown(t *testing.T) {
 		}
 		if rolled[2] != "001_init" {
 			t.Errorf("last rollback = %q, want 001_init", rolled[2])
+		}
+	})
+
+	t.Run("n=0 is error", func(t *testing.T) {
+		m := &mockMigrator{applied: applied("001_init", "002_users")}
+		_, err := sqlmigrate.Down(ctx, m, migrations, 0)
+		if !errors.Is(err, sqlmigrate.ErrInvalidN) {
+			t.Errorf("got %v, want ErrInvalidN", err)
 		}
 	})
 
@@ -343,7 +359,7 @@ func TestDown(t *testing.T) {
 
 	t.Run("none applied", func(t *testing.T) {
 		m := &mockMigrator{}
-		rolled, err := sqlmigrate.Down(ctx, m, migrations, 0)
+		rolled, err := sqlmigrate.Down(ctx, m, migrations, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -368,7 +384,7 @@ func TestDown(t *testing.T) {
 
 	t.Run("unknown migration in applied", func(t *testing.T) {
 		m := &mockMigrator{applied: applied("001_init", "999_unknown")}
-		_, err := sqlmigrate.Down(ctx, m, migrations, 0)
+		_, err := sqlmigrate.Down(ctx, m, migrations, -1)
 		if !errors.Is(err, sqlmigrate.ErrMissingDown) {
 			t.Errorf("got %v, want ErrMissingDown", err)
 		}
