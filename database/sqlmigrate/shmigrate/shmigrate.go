@@ -6,6 +6,7 @@ package shmigrate
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -103,7 +104,7 @@ func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, 
 		f, err = os.Open(r.LogPath)
 	}
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading migrations log: %w", err)
