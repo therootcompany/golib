@@ -1,4 +1,21 @@
 // Package pgmigrate implements sqlmigrate.Migrator for PostgreSQL via pgx/v5.
+//
+// # Multi-tenant schemas
+//
+// For schema-based multi-tenancy, set search_path on the pool's connection
+// config so all migrations target the correct schema:
+//
+//	config, _ := pgxpool.ParseConfig(pgURL)
+//	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+//	    _, err := conn.Exec(ctx, "SET search_path TO "+schema)
+//	    return err
+//	}
+//	pool, _ := pgxpool.NewWithConfig(ctx, config)
+//	runner := pgmigrate.New(pool)
+//
+// Each schema gets its own _migrations table, so tenants are migrated
+// independently. The sql-migrate CLI supports this via TENANT_SCHEMA;
+// see the CLI help for details.
 package pgmigrate
 
 import (
