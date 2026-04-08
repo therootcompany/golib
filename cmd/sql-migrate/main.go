@@ -131,6 +131,14 @@ NOTES
    The 'create' generates an up/down pair of files using the current date and
       the number 1000. If either file exists, the number is incremented by 1000 and
       tried again.
+
+NOTE: POSTGRES SCHEMAS
+   Set PGOPTIONS to target a specific PostgreSQL schema:
+
+      PGOPTIONS="-c search_path=tenant123" sql-migrate up | sh
+
+   Each schema gets its own _migrations table, so tenants are migrated
+   independently. PGOPTIONS is supported by psql and all libpq clients.
 `
 
 var (
