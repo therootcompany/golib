@@ -69,9 +69,10 @@ INSERT INTO _migrations (name, id) VALUES ('0001-01-01-001000_init-migrations', 
 
 DROP TABLE IF EXISTS _migrations;
 `
-	LOG_MIGRATIONS_QUERY = `-- note: CLI arguments must be passed to the sql command to keep output clean
-SELECT name FROM _migrations ORDER BY name;
-`
+	// Used for detection during auto-upgrade.
+	logMigrationsQueryPrev2_2_0 = `SELECT name FROM _migrations ORDER BY name;`
+
+	logMigrationsQueryNote = "-- note: CLI arguments must be passed to the sql command to keep output machine-readable\n"
 )
 
 // printVersion displays the version, commit, and build date.
@@ -100,6 +101,7 @@ COMMANDS
    create        - creates a new, canonically-named up/down file pair in the
                    migrations directory, with corresponding insert
    sync          - create a script to reload migrations.log from the DB
+                   (run after upgrading sql-migrate)
    status        - shows the same output as if processing a forward-migration
    up [n]        - create a script to run pending migrations (ALL by default)
    down [n]      - create a script to roll back migrations (ONE by default)
@@ -135,12 +137,32 @@ NOTE: POSTGRES SCHEMAS
 
    Each schema gets its own _migrations table, so tenants are migrated
    independently. PGOPTIONS is supported by psql and all libpq clients.
+
+UPGRADING
+   After upgrading sql-migrate, run sync to refresh the log format:
+      sql-migrate -d ./sql/migrations/ sync | sh
 `
 
 var (
 	nonWordRe      = regexp.MustCompile(`\W+`)
 	commentStartRe = regexp.MustCompile(`(^|\s+)#.*`)
 )
+
+// logMigrationsSelect returns the DB-specific SELECT line for _migrations.
+// The output format is "id<tab>name" per row, compatible with shmigrate.Applied().
+func logMigrationsSelect(sqlCommand string) string {
+	var selectExpr string
+	switch {
+	case strings.Contains(sqlCommand, "psql"):
+		selectExpr = "id || CHR(9) || name"
+	case strings.Contains(sqlCommand, "mysql") || strings.Contains(sqlCommand, "mariadb"):
+		selectExpr = "CONCAT(id, CHAR(9), name)"
+	default:
+		fmt.Fprintf(os.Stderr, "Error: unrecognized --sql-command %q; cannot generate _migrations.sql\n", sqlCommand)
+		os.Exit(1)
+	}
+	return fmt.Sprintf("SELECT %s FROM _migrations ORDER BY name;", selectExpr)
+}
 
 type State struct {
 	Date          time.Time
@@ -274,6 +296,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: couldn't read config from initial migration: %v\n", err)
 		os.Exit(1)
 	}
+
+	// auto-upgrade _migrations.sql to include id in output
+	maybeUpgradeLogQuery(logQueryPath, state.SQLCommand)
 
 	logText, err := os.ReadFile(state.LogPath)
 	if err != nil {
@@ -562,7 +587,7 @@ func mustInit(cfg *MainConfig) {
 	}
 
 	logQueryPath := filepath.Join(state.MigrationsDir, LOG_QUERY_NAME)
-	if created, err := initFile(logQueryPath, LOG_MIGRATIONS_QUERY); err != nil {
+	if created, err := initFile(logQueryPath, logMigrationsQueryNote+logMigrationsSelect(state.SQLCommand)+"\n"); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: init couldn't create migrations query: %v\n", err)
 		os.Exit(1)
 	} else if created {
@@ -576,6 +601,34 @@ func mustInit(cfg *MainConfig) {
 		fmt.Fprintf(os.Stderr, "done\n")
 		return
 	}
+}
+
+// maybeUpgradeLogQuery replaces the old name-only SELECT in _migrations.sql
+// with the new id+name SELECT. Only the matching line is replaced; comments
+// and other customizations are preserved.
+func maybeUpgradeLogQuery(path, sqlCommand string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var replaced bool
+	var lines []string
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if !replaced && strings.TrimSpace(line) == logMigrationsQueryPrev2_2_0 {
+			line = logMigrationsSelect(sqlCommand)
+			replaced = true
+		}
+		lines = append(lines, line)
+	}
+	if !replaced {
+		return
+	}
+
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Warn: couldn't upgrade %s: %v\n", path, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "   upgraded %s (added id to output)\n", filepathUnclean(path))
 }
 
 func initFile(path, contents string) (bool, error) {
