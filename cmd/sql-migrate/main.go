@@ -120,7 +120,7 @@ NOTES
 
 	The initial migration file contains configuration variables:
 		-- migrations_log: ./sql/migrations.log
-		-- sql_command: psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --file %s
+		-- sql_command: psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --tuples-only --file %s
 
 	The log is generated on each migration file contains a list of all migrations:
       0001-01-01-001000_init-migrations.up.sql
@@ -462,7 +462,7 @@ func filepathJoin(src, dst string) string {
 //
 // - ./sql/migrations/0001-01-01-001000_init-migrations.up.sql
 //   - migrations_log: ./sql/migrations.log
-//   - sql_command: psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --file %s
+//   - sql_command: psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --tuples-only --file %s
 //
 // - ./sql/migrations/0001-01-01-001000_init-migrations.down.sql
 func mustInit(cfg *MainConfig) {
