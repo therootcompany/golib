@@ -59,13 +59,15 @@ type Migrator struct {
 var _ sqlmigrate.Migrator = (*Migrator)(nil)
 
 // ExecUp outputs a shell command to run the .up.sql migration file.
-func (r *Migrator) ExecUp(ctx context.Context, m sqlmigrate.Migration) error {
+// The sql parameter is ignored — shmigrate references files on disk.
+func (r *Migrator) ExecUp(ctx context.Context, m sqlmigrate.Migration, sql string) error {
 	r.counter++
 	return r.exec(m.Name, ".up.sql", fmt.Sprintf("+%d", r.counter))
 }
 
 // ExecDown outputs a shell command to run the .down.sql migration file.
-func (r *Migrator) ExecDown(ctx context.Context, m sqlmigrate.Migration) error {
+// The sql parameter is ignored — shmigrate references files on disk.
+func (r *Migrator) ExecDown(ctx context.Context, m sqlmigrate.Migration, sql string) error {
 	r.counter++
 	return r.exec(m.Name, ".down.sql", fmt.Sprintf("-%d", r.counter))
 }
@@ -95,7 +97,7 @@ func (r *Migrator) exec(name, suffix, label string) error {
 //
 // Returns an empty slice if the file does not exist. When FS is set, reads
 // from that filesystem; otherwise reads from the OS filesystem.
-func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, error) {
+func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
 	var f io.ReadCloser
 	var err error
 	if r.FS != nil {
@@ -111,7 +113,7 @@ func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, 
 	}
 	defer f.Close()
 
-	var applied []sqlmigrate.AppliedMigration
+	var applied []sqlmigrate.Migration
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -123,9 +125,9 @@ func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, 
 			continue
 		}
 		if id, name, ok := strings.Cut(line, "\t"); ok {
-			applied = append(applied, sqlmigrate.AppliedMigration{ID: id, Name: name})
+			applied = append(applied, sqlmigrate.Migration{ID: id, Name: name})
 		} else {
-			applied = append(applied, sqlmigrate.AppliedMigration{Name: line})
+			applied = append(applied, sqlmigrate.Migration{Name: line})
 		}
 	}
 

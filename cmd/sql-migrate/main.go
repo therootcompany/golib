@@ -939,7 +939,7 @@ func syncLog(runner *shmigrate.Migrator) {
 	fmt.Printf("cat %s\n", logPath)
 }
 
-func cmdUp(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Migration, n int) error {
+func cmdUp(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Script, n int) error {
 	// fixup pending migrations before generating the script
 	fixedUp, fixedDown := fixupAll(state.MigrationsDir, state.Migrated, migrations)
 
@@ -974,7 +974,7 @@ func cmdUp(ctx context.Context, state *State, runner *shmigrate.Migrator, migrat
 	return nil
 }
 
-func cmdDown(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Migration, n int) error {
+func cmdDown(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Script, n int) error {
 	// fixup applied migrations before generating the script
 	fixedUp, fixedDown := fixupAll(state.MigrationsDir, state.Migrated, migrations)
 
@@ -998,7 +998,7 @@ func cmdDown(ctx context.Context, state *State, runner *shmigrate.Migrator, migr
 	fmt.Println("")
 
 	// check for missing down files before generating script
-	reversed := make([]string, len(status.Applied))
+	reversed := make([]sqlmigrate.Migration, len(status.Applied))
 	copy(reversed, status.Applied)
 	slices.Reverse(reversed)
 	limit := n
@@ -1008,8 +1008,8 @@ func cmdDown(ctx context.Context, state *State, runner *shmigrate.Migrator, migr
 	if limit > len(reversed) {
 		limit = len(reversed)
 	}
-	for _, name := range reversed[:limit] {
-		downPath := filepath.Join(state.MigrationsDir, name+".down.sql")
+	for _, a := range reversed[:limit] {
+		downPath := filepath.Join(state.MigrationsDir, a.Name+".down.sql")
 		if !fileExists(downPath) {
 			fmt.Fprintf(os.Stderr, "# Warn: missing %s\n", filepathUnclean(downPath))
 			fmt.Fprintf(os.Stderr, "#      (the migration will fail to run)\n")
@@ -1028,7 +1028,7 @@ func cmdDown(ctx context.Context, state *State, runner *shmigrate.Migrator, migr
 	return nil
 }
 
-func cmdStatus(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Migration) error {
+func cmdStatus(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Script) error {
 	status, err := sqlmigrate.GetStatus(ctx, runner, migrations)
 	if err != nil {
 		return err
@@ -1040,21 +1040,21 @@ func cmdStatus(ctx context.Context, state *State, runner *shmigrate.Migrator, mi
 	fmt.Fprintf(os.Stderr, "\n")
 
 	// show applied in reverse (most recent first)
-	applied := make([]string, len(status.Applied))
-	copy(applied, status.Applied)
-	slices.Reverse(applied)
+	appliedList := make([]sqlmigrate.Migration, len(status.Applied))
+	copy(appliedList, status.Applied)
+	slices.Reverse(appliedList)
 
-	fmt.Printf("# previous: %d\n", len(applied))
-	for _, mig := range applied {
-		fmt.Printf("   %s\n", mig)
+	fmt.Printf("# previous: %d\n", len(appliedList))
+	for _, mig := range appliedList {
+		fmt.Printf("   %s\n", mig.Name)
 	}
-	if len(applied) == 0 {
+	if len(appliedList) == 0 {
 		fmt.Println("   # (no previous migrations)")
 	}
 	fmt.Println("")
 	fmt.Printf("# pending: %d\n", len(status.Pending))
 	for _, mig := range status.Pending {
-		fmt.Printf("   %s\n", mig)
+		fmt.Printf("   %s\n", mig.Name)
 	}
 	if len(status.Pending) == 0 {
 		fmt.Println("   # (no pending migrations)")
@@ -1063,7 +1063,7 @@ func cmdStatus(ctx context.Context, state *State, runner *shmigrate.Migrator, mi
 }
 
 // fixupAll runs fixupMigration on all known migrations (applied + pending).
-func fixupAll(migrationsDir string, applied []string, migrations []sqlmigrate.Migration) (fixedUp, fixedDown []string) {
+func fixupAll(migrationsDir string, applied []string, migrations []sqlmigrate.Script) (fixedUp, fixedDown []string) {
 	seen := map[string]bool{}
 	var all []string
 	for _, name := range applied {

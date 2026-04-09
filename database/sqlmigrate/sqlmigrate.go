@@ -28,41 +28,40 @@ var (
 	ErrInvalidN     = errors.New("n must be positive or -1 for all")
 )
 
-// Migration represents a paired up/down migration.
+// Migration identifies a migration by its name and optional hex ID.
 type Migration struct {
-	Name string // e.g. "2026-04-05-001000_create-todos"
 	ID   string // 8-char hex from INSERT INTO _migrations, parsed by Collect
+	Name string // e.g. "2026-04-05-001000_create-todos"
+}
+
+// Script is a Migration with its up and down SQL content, as returned by Collect.
+type Script struct {
+	Migration
 	Up   string // SQL content of the .up.sql file
 	Down string // SQL content of the .down.sql file
 }
 
-// AppliedMigration represents a migration recorded in the _migrations table.
-type AppliedMigration struct {
-	ID   string
-	Name string
-}
-
 // Status represents the current migration state.
 type Status struct {
-	Applied []string
-	Pending []string
+	Applied []Migration
+	Pending []Migration
 }
 
 // Migrator executes migrations. Implementations handle the
 // database-specific or output-specific details.
 type Migrator interface {
-	// ExecUp runs the up migration. For database migrators this executes
-	// m.Up in a transaction. For shell migrators this outputs a command
-	// referencing the .up.sql file.
-	ExecUp(ctx context.Context, m Migration) error
+	// ExecUp runs the up migration SQL. For database migrators this
+	// executes the SQL in a transaction. For shell migrators this
+	// outputs a command referencing the .up.sql file.
+	ExecUp(ctx context.Context, m Migration, sql string) error
 
-	// ExecDown runs the down migration.
-	ExecDown(ctx context.Context, m Migration) error
+	// ExecDown runs the down migration SQL.
+	ExecDown(ctx context.Context, m Migration, sql string) error
 
 	// Applied returns all applied migrations from the _migrations table,
 	// sorted lexicographically by name. Returns an empty slice (not an
 	// error) if the migrations table or log does not exist yet.
-	Applied(ctx context.Context) ([]AppliedMigration, error)
+	Applied(ctx context.Context) ([]Migration, error)
 }
 
 // idFromInsert extracts the hex ID from an INSERT INTO _migrations line.
@@ -75,8 +74,8 @@ var idFromInsert = regexp.MustCompile(
 // pairs them by basename, and returns them sorted lexicographically by name.
 // If subpath is "" or ".", the root of fsys is used.
 // If the up SQL contains an INSERT INTO _migrations line, the hex ID
-// is extracted and stored in Migration.ID.
-func Collect(fsys fs.FS, subpath string) ([]Migration, error) {
+// is extracted and stored in Script.ID.
+func Collect(fsys fs.FS, subpath string) ([]Script, error) {
 	if subpath != "" && subpath != "." {
 		var err error
 		fsys, err = fs.Sub(fsys, subpath)
@@ -120,7 +119,7 @@ func Collect(fsys fs.FS, subpath string) ([]Migration, error) {
 		return nil, fmt.Errorf("%w: %w", ErrWalkFailed, err)
 	}
 
-	var migrations []Migration
+	var ddls []Script
 	for name, upSQL := range ups {
 		downSQL, ok := downs[name]
 		if !ok {
@@ -130,11 +129,10 @@ func Collect(fsys fs.FS, subpath string) ([]Migration, error) {
 		if m := idFromInsert.FindStringSubmatch(upSQL); m != nil {
 			id = m[1]
 		}
-		migrations = append(migrations, Migration{
-			Name: name,
-			ID:   id,
-			Up:   upSQL,
-			Down: downSQL,
+		ddls = append(ddls, Script{
+			Migration: Migration{ID: id, Name: name},
+			Up:        upSQL,
+			Down:      downSQL,
 		})
 	}
 	for name := range downs {
@@ -143,54 +141,54 @@ func Collect(fsys fs.FS, subpath string) ([]Migration, error) {
 		}
 	}
 
-	slices.SortFunc(migrations, func(a, b Migration) int {
+	slices.SortFunc(ddls, func(a, b Script) int {
 		return strings.Compare(a.Name, b.Name)
 	})
 
-	return migrations, nil
+	return ddls, nil
 }
 
-// NamesOnly builds a Migration slice from a list of names, with empty
+// NamesOnly builds a Script slice from a list of names, with empty
 // Up/Down content. Useful for shell-based runners that reference files
 // on disk rather than executing SQL directly.
-func NamesOnly(names []string) []Migration {
-	migrations := make([]Migration, len(names))
+func NamesOnly(names []string) []Script {
+	ddls := make([]Script, len(names))
 	for i, name := range names {
-		migrations[i] = Migration{Name: name}
+		ddls[i] = Script{Migration: Migration{Name: name}}
 	}
-	return migrations
+	return ddls
 }
 
-// isApplied returns true if the migration matches any applied entry by name or ID.
-func isApplied(m Migration, applied []AppliedMigration) bool {
+// isApplied returns true if the Script matches any applied entry by name or ID.
+func isApplied(d Script, applied []Migration) bool {
 	for _, a := range applied {
-		if a.Name == m.Name {
+		if a.Name == d.Name {
 			return true
 		}
-		if m.ID != "" && a.ID != "" && a.ID == m.ID {
+		if d.ID != "" && a.ID != "" && a.ID == d.ID {
 			return true
 		}
 	}
 	return false
 }
 
-// findMigration looks up a migration by the applied entry's name or ID.
-func findMigration(a AppliedMigration, byName map[string]Migration, byID map[string]Migration) (Migration, bool) {
-	if m, ok := byName[a.Name]; ok {
-		return m, true
+// findScript looks up a Script by the applied entry's name or ID.
+func findScript(a Migration, byName map[string]Script, byID map[string]Script) (Script, bool) {
+	if d, ok := byName[a.Name]; ok {
+		return d, true
 	}
 	if a.ID != "" {
-		if m, ok := byID[a.ID]; ok {
-			return m, true
+		if d, ok := byID[a.ID]; ok {
+			return d, true
 		}
 	}
-	return Migration{}, false
+	return Script{}, false
 }
 
-// Up applies up to n pending migrations using the given Runner.
+// Up applies up to n pending migrations using the given Migrator.
 // If n < 0, applies all pending. If n == 0, returns ErrInvalidN.
-// Returns the names of applied migrations.
-func Up(ctx context.Context, r Migrator, migrations []Migration, n int) ([]string, error) {
+// Returns the applied migrations.
+func Up(ctx context.Context, r Migrator, ddls []Script, n int) ([]Migration, error) {
 	if n == 0 {
 		return nil, ErrInvalidN
 	}
@@ -200,10 +198,10 @@ func Up(ctx context.Context, r Migrator, migrations []Migration, n int) ([]strin
 		return nil, err
 	}
 
-	var pending []Migration
-	for _, m := range migrations {
-		if !isApplied(m, applied) {
-			pending = append(pending, m)
+	var pending []Script
+	for _, d := range ddls {
+		if !isApplied(d, applied) {
+			pending = append(pending, d)
 		}
 	}
 
@@ -214,12 +212,12 @@ func Up(ctx context.Context, r Migrator, migrations []Migration, n int) ([]strin
 		n = len(pending)
 	}
 
-	var ran []string
-	for _, m := range pending[:n] {
-		if err := r.ExecUp(ctx, m); err != nil {
-			return ran, fmt.Errorf("%s (up): %w", m.Name, err)
+	var ran []Migration
+	for _, d := range pending[:n] {
+		if err := r.ExecUp(ctx, d.Migration, d.Up); err != nil {
+			return ran, fmt.Errorf("%s (up): %w", d.Name, err)
 		}
-		ran = append(ran, m.Name)
+		ran = append(ran, d.Migration)
 	}
 
 	return ran, nil
@@ -227,8 +225,8 @@ func Up(ctx context.Context, r Migrator, migrations []Migration, n int) ([]strin
 
 // Down rolls back up to n applied migrations, most recent first.
 // If n < 0, rolls back all applied. If n == 0, returns ErrInvalidN.
-// Returns the names of rolled-back migrations.
-func Down(ctx context.Context, r Migrator, migrations []Migration, n int) ([]string, error) {
+// Returns the rolled-back migrations.
+func Down(ctx context.Context, r Migrator, ddls []Script, n int) ([]Migration, error) {
 	if n == 0 {
 		return nil, ErrInvalidN
 	}
@@ -238,16 +236,16 @@ func Down(ctx context.Context, r Migrator, migrations []Migration, n int) ([]str
 		return nil, err
 	}
 
-	byName := map[string]Migration{}
-	byID := map[string]Migration{}
-	for _, m := range migrations {
-		byName[m.Name] = m
-		if m.ID != "" {
-			byID[m.ID] = m
+	byName := map[string]Script{}
+	byID := map[string]Script{}
+	for _, d := range ddls {
+		byName[d.Name] = d
+		if d.ID != "" {
+			byID[d.ID] = d
 		}
 	}
 
-	reversed := make([]AppliedMigration, len(applied))
+	reversed := make([]Migration, len(applied))
 	copy(reversed, applied)
 	slices.Reverse(reversed)
 
@@ -255,52 +253,47 @@ func Down(ctx context.Context, r Migrator, migrations []Migration, n int) ([]str
 		n = len(reversed)
 	}
 
-	var ran []string
+	var ran []Migration
 	for _, a := range reversed[:n] {
-		m, ok := findMigration(a, byName, byID)
+		d, ok := findScript(a, byName, byID)
 		if !ok {
 			return ran, fmt.Errorf("%w: %s", ErrMissingDown, a.Name)
 		}
-		if err := r.ExecDown(ctx, m); err != nil {
+		if err := r.ExecDown(ctx, a, d.Down); err != nil {
 			return ran, fmt.Errorf("%s (down): %w", a.Name, err)
 		}
-		ran = append(ran, a.Name)
+		ran = append(ran, a)
 	}
 
 	return ran, nil
 }
 
 // GetStatus returns applied and pending migration lists.
-func GetStatus(ctx context.Context, r Migrator, migrations []Migration) (*Status, error) {
+func GetStatus(ctx context.Context, r Migrator, ddls []Script) (*Status, error) {
 	applied, err := r.Applied(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	appliedNames := make([]string, len(applied))
-	for i, a := range applied {
-		appliedNames[i] = a.Name
-	}
-
-	var pending []string
-	for _, m := range migrations {
-		if !isApplied(m, applied) {
-			pending = append(pending, m.Name)
+	var pending []Migration
+	for _, d := range ddls {
+		if !isApplied(d, applied) {
+			pending = append(pending, d.Migration)
 		}
 	}
 
 	return &Status{
-		Applied: appliedNames,
+		Applied: applied,
 		Pending: pending,
 	}, nil
 }
 
-// Latest applies all pending migrations. Equivalent to Up(ctx, r, migrations, -1).
-func Latest(ctx context.Context, r Migrator, migrations []Migration) ([]string, error) {
-	return Up(ctx, r, migrations, -1)
+// Latest applies all pending migrations. Equivalent to Up(ctx, r, ddls, -1).
+func Latest(ctx context.Context, r Migrator, ddls []Script) ([]Migration, error) {
+	return Up(ctx, r, ddls, -1)
 }
 
-// Drop rolls back all applied migrations. Equivalent to Down(ctx, r, migrations, -1).
-func Drop(ctx context.Context, r Migrator, migrations []Migration) ([]string, error) {
-	return Down(ctx, r, migrations, -1)
+// Drop rolls back all applied migrations. Equivalent to Down(ctx, r, ddls, -1).
+func Drop(ctx context.Context, r Migrator, ddls []Script) ([]Migration, error) {
+	return Down(ctx, r, ddls, -1)
 }

@@ -11,45 +11,54 @@ import (
 	"github.com/therootcompany/golib/database/sqlmigrate"
 )
 
-// applied builds an []AppliedMigration from names (IDs empty).
-func applied(names ...string) []sqlmigrate.AppliedMigration {
-	out := make([]sqlmigrate.AppliedMigration, len(names))
+// migs builds []Migration from names (IDs empty).
+func migs(names ...string) []sqlmigrate.Migration {
+	out := make([]sqlmigrate.Migration, len(names))
 	for i, n := range names {
-		out[i] = sqlmigrate.AppliedMigration{Name: n}
+		out[i] = sqlmigrate.Migration{Name: n}
+	}
+	return out
+}
+
+// names extracts just the Name field from a slice of Migration.
+func names(ms []sqlmigrate.Migration) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = m.Name
 	}
 	return out
 }
 
 // mockMigrator tracks applied migrations in memory.
 type mockMigrator struct {
-	applied   []sqlmigrate.AppliedMigration
+	applied   []sqlmigrate.Migration
 	execErr   error // if set, ExecUp/ExecDown return this on every call
 	upCalls   []string
 	downCalls []string
 }
 
-func (m *mockMigrator) ExecUp(_ context.Context, mig sqlmigrate.Migration) error {
+func (m *mockMigrator) ExecUp(_ context.Context, mig sqlmigrate.Migration, _ string) error {
 	m.upCalls = append(m.upCalls, mig.Name)
 	if m.execErr != nil {
 		return m.execErr
 	}
-	m.applied = append(m.applied, sqlmigrate.AppliedMigration{Name: mig.Name, ID: mig.ID})
-	slices.SortFunc(m.applied, func(a, b sqlmigrate.AppliedMigration) int {
+	m.applied = append(m.applied, mig)
+	slices.SortFunc(m.applied, func(a, b sqlmigrate.Migration) int {
 		return strings.Compare(a.Name, b.Name)
 	})
 	return nil
 }
 
-func (m *mockMigrator) ExecDown(_ context.Context, mig sqlmigrate.Migration) error {
+func (m *mockMigrator) ExecDown(_ context.Context, mig sqlmigrate.Migration, _ string) error {
 	m.downCalls = append(m.downCalls, mig.Name)
 	if m.execErr != nil {
 		return m.execErr
 	}
-	m.applied = slices.DeleteFunc(m.applied, func(a sqlmigrate.AppliedMigration) bool { return a.Name == mig.Name })
+	m.applied = slices.DeleteFunc(m.applied, func(a sqlmigrate.Migration) bool { return a.Name == mig.Name })
 	return nil
 }
 
-func (m *mockMigrator) Applied(_ context.Context) ([]sqlmigrate.AppliedMigration, error) {
+func (m *mockMigrator) Applied(_ context.Context) ([]sqlmigrate.Migration, error) {
 	return slices.Clone(m.applied), nil
 }
 
@@ -63,24 +72,24 @@ func TestCollect(t *testing.T) {
 			"001_first.up.sql":    {Data: []byte("CREATE TABLE a;")},
 			"001_first.down.sql":  {Data: []byte("DROP TABLE a;")},
 		}
-		migrations, err := sqlmigrate.Collect(fsys, ".")
+		ddls, err := sqlmigrate.Collect(fsys, ".")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(migrations) != 2 {
-			t.Fatalf("got %d migrations, want 2", len(migrations))
+		if len(ddls) != 2 {
+			t.Fatalf("got %d ddls, want 2", len(ddls))
 		}
-		if migrations[0].Name != "001_first" {
-			t.Errorf("first = %q, want %q", migrations[0].Name, "001_first")
+		if ddls[0].Name != "001_first" {
+			t.Errorf("first = %q, want %q", ddls[0].Name, "001_first")
 		}
-		if migrations[1].Name != "002_second" {
-			t.Errorf("second = %q, want %q", migrations[1].Name, "002_second")
+		if ddls[1].Name != "002_second" {
+			t.Errorf("second = %q, want %q", ddls[1].Name, "002_second")
 		}
-		if migrations[0].Up != "CREATE TABLE a;" {
-			t.Errorf("first.Up = %q", migrations[0].Up)
+		if ddls[0].Up != "CREATE TABLE a;" {
+			t.Errorf("first.Up = %q", ddls[0].Up)
 		}
-		if migrations[0].Down != "DROP TABLE a;" {
-			t.Errorf("first.Down = %q", migrations[0].Down)
+		if ddls[0].Down != "DROP TABLE a;" {
+			t.Errorf("first.Down = %q", ddls[0].Down)
 		}
 	})
 
@@ -89,12 +98,12 @@ func TestCollect(t *testing.T) {
 			"001_init.up.sql":   {Data: []byte("CREATE TABLE a;\nINSERT INTO _migrations (name, id) VALUES ('001_init', 'abcd1234');")},
 			"001_init.down.sql": {Data: []byte("DROP TABLE a;\nDELETE FROM _migrations WHERE id = 'abcd1234';")},
 		}
-		migrations, err := sqlmigrate.Collect(fsys, ".")
+		ddls, err := sqlmigrate.Collect(fsys, ".")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if migrations[0].ID != "abcd1234" {
-			t.Errorf("ID = %q, want %q", migrations[0].ID, "abcd1234")
+		if ddls[0].ID != "abcd1234" {
+			t.Errorf("ID = %q, want %q", ddls[0].ID, "abcd1234")
 		}
 	})
 
@@ -103,12 +112,12 @@ func TestCollect(t *testing.T) {
 			"001_init.up.sql":   {Data: []byte("CREATE TABLE a;")},
 			"001_init.down.sql": {Data: []byte("DROP TABLE a;")},
 		}
-		migrations, err := sqlmigrate.Collect(fsys, ".")
+		ddls, err := sqlmigrate.Collect(fsys, ".")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if migrations[0].ID != "" {
-			t.Errorf("ID = %q, want empty", migrations[0].ID)
+		if ddls[0].ID != "" {
+			t.Errorf("ID = %q, want empty", ddls[0].ID)
 		}
 	})
 
@@ -139,23 +148,23 @@ func TestCollect(t *testing.T) {
 			"README.md":         {Data: []byte("# Migrations")},
 			"_migrations.sql":   {Data: []byte("SELECT name FROM _migrations;")},
 		}
-		migrations, err := sqlmigrate.Collect(fsys, ".")
+		ddls, err := sqlmigrate.Collect(fsys, ".")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(migrations) != 1 {
-			t.Fatalf("got %d migrations, want 1", len(migrations))
+		if len(ddls) != 1 {
+			t.Fatalf("got %d ddls, want 1", len(ddls))
 		}
 	})
 
 	t.Run("empty fs", func(t *testing.T) {
 		fsys := fstest.MapFS{}
-		migrations, err := sqlmigrate.Collect(fsys, ".")
+		ddls, err := sqlmigrate.Collect(fsys, ".")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(migrations) != 0 {
-			t.Fatalf("got %d migrations, want 0", len(migrations))
+		if len(ddls) != 0 {
+			t.Fatalf("got %d ddls, want 0", len(ddls))
 		}
 	})
 }
@@ -163,16 +172,16 @@ func TestCollect(t *testing.T) {
 // --- NamesOnly ---
 
 func TestNamesOnly(t *testing.T) {
-	names := []string{"001_init", "002_users"}
-	migrations := sqlmigrate.NamesOnly(names)
-	if len(migrations) != 2 {
-		t.Fatalf("got %d, want 2", len(migrations))
+	ns := []string{"001_init", "002_users"}
+	ddls := sqlmigrate.NamesOnly(ns)
+	if len(ddls) != 2 {
+		t.Fatalf("got %d, want 2", len(ddls))
 	}
-	for i, m := range migrations {
-		if m.Name != names[i] {
-			t.Errorf("[%d].Name = %q, want %q", i, m.Name, names[i])
+	for i, d := range ddls {
+		if d.Name != ns[i] {
+			t.Errorf("[%d].Name = %q, want %q", i, d.Name, ns[i])
 		}
-		if m.Up != "" || m.Down != "" {
+		if d.Up != "" || d.Down != "" {
 			t.Errorf("[%d] has non-empty content", i)
 		}
 	}
@@ -182,26 +191,26 @@ func TestNamesOnly(t *testing.T) {
 
 func TestUp(t *testing.T) {
 	ctx := t.Context()
-	migrations := []sqlmigrate.Migration{
-		{Name: "001_init", Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
-		{Name: "002_users", Up: "CREATE TABLE b;", Down: "DROP TABLE b;"},
-		{Name: "003_posts", Up: "CREATE TABLE c;", Down: "DROP TABLE c;"},
+	ddls := []sqlmigrate.Script{
+		{Migration: sqlmigrate.Migration{Name: "001_init"}, Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
+		{Migration: sqlmigrate.Migration{Name: "002_users"}, Up: "CREATE TABLE b;", Down: "DROP TABLE b;"},
+		{Migration: sqlmigrate.Migration{Name: "003_posts"}, Up: "CREATE TABLE c;", Down: "DROP TABLE c;"},
 	}
 
 	t.Run("apply all", func(t *testing.T) {
 		m := &mockMigrator{}
-		ran, err := sqlmigrate.Up(ctx, m, migrations, -1)
+		ran, err := sqlmigrate.Up(ctx, m, ddls, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(ran, []string{"001_init", "002_users", "003_posts"}) {
-			t.Errorf("applied = %v", ran)
+		if !slices.Equal(names(ran), []string{"001_init", "002_users", "003_posts"}) {
+			t.Errorf("applied = %v", names(ran))
 		}
 	})
 
 	t.Run("n=0 is error", func(t *testing.T) {
 		m := &mockMigrator{}
-		_, err := sqlmigrate.Up(ctx, m, migrations, 0)
+		_, err := sqlmigrate.Up(ctx, m, ddls, 0)
 		if !errors.Is(err, sqlmigrate.ErrInvalidN) {
 			t.Errorf("got %v, want ErrInvalidN", err)
 		}
@@ -209,18 +218,18 @@ func TestUp(t *testing.T) {
 
 	t.Run("apply n", func(t *testing.T) {
 		m := &mockMigrator{}
-		ran, err := sqlmigrate.Up(ctx, m, migrations, 2)
+		ran, err := sqlmigrate.Up(ctx, m, ddls, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(ran, []string{"001_init", "002_users"}) {
-			t.Errorf("applied = %v", ran)
+		if !slices.Equal(names(ran), []string{"001_init", "002_users"}) {
+			t.Errorf("applied = %v", names(ran))
 		}
 	})
 
 	t.Run("none pending", func(t *testing.T) {
-		m := &mockMigrator{applied: applied("001_init", "002_users", "003_posts")}
-		ran, err := sqlmigrate.Up(ctx, m, migrations, -1)
+		m := &mockMigrator{applied: migs("001_init", "002_users", "003_posts")}
+		ran, err := sqlmigrate.Up(ctx, m, ddls, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -230,19 +239,19 @@ func TestUp(t *testing.T) {
 	})
 
 	t.Run("partial pending", func(t *testing.T) {
-		m := &mockMigrator{applied: applied("001_init")}
-		ran, err := sqlmigrate.Up(ctx, m, migrations, -1)
+		m := &mockMigrator{applied: migs("001_init")}
+		ran, err := sqlmigrate.Up(ctx, m, ddls, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(ran, []string{"002_users", "003_posts"}) {
-			t.Errorf("applied = %v", ran)
+		if !slices.Equal(names(ran), []string{"002_users", "003_posts"}) {
+			t.Errorf("applied = %v", names(ran))
 		}
 	})
 
 	t.Run("n exceeds pending", func(t *testing.T) {
-		m := &mockMigrator{applied: applied("001_init")}
-		ran, err := sqlmigrate.Up(ctx, m, migrations, 99)
+		m := &mockMigrator{applied: migs("001_init")}
+		ran, err := sqlmigrate.Up(ctx, m, ddls, 99)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -253,7 +262,7 @@ func TestUp(t *testing.T) {
 
 	t.Run("exec error stops and returns partial", func(t *testing.T) {
 		m := &failOnNthMigrator{failAt: 1}
-		ran, err := sqlmigrate.Up(ctx, m, migrations, -1)
+		ran, err := sqlmigrate.Up(ctx, m, ddls, -1)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -264,50 +273,50 @@ func TestUp(t *testing.T) {
 
 	t.Run("skips migration matched by ID", func(t *testing.T) {
 		// DB has migration applied under old name, but same ID
-		m := &mockMigrator{applied: []sqlmigrate.AppliedMigration{
+		m := &mockMigrator{applied: []sqlmigrate.Migration{
 			{Name: "001_old-name", ID: "aa11bb22"},
 		}}
-		migs := []sqlmigrate.Migration{
-			{Name: "001_new-name", ID: "aa11bb22", Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
-			{Name: "002_users", Up: "CREATE TABLE b;", Down: "DROP TABLE b;"},
+		idDDLs := []sqlmigrate.Script{
+			{Migration: sqlmigrate.Migration{Name: "001_new-name", ID: "aa11bb22"}, Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
+			{Migration: sqlmigrate.Migration{Name: "002_users"}, Up: "CREATE TABLE b;", Down: "DROP TABLE b;"},
 		}
-		ran, err := sqlmigrate.Up(ctx, m, migs, -1)
+		ran, err := sqlmigrate.Up(ctx, m, idDDLs, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
 		// Only 002_users should be applied; 001 is matched by ID
-		if !slices.Equal(ran, []string{"002_users"}) {
-			t.Errorf("applied = %v, want [002_users]", ran)
+		if !slices.Equal(names(ran), []string{"002_users"}) {
+			t.Errorf("applied = %v, want [002_users]", names(ran))
 		}
 	})
 }
 
 // failOnNthMigrator fails on the Nth ExecUp call (0-indexed).
 type failOnNthMigrator struct {
-	applied []sqlmigrate.AppliedMigration
+	applied []sqlmigrate.Migration
 	calls   int
 	failAt  int
 }
 
-func (m *failOnNthMigrator) ExecUp(_ context.Context, mig sqlmigrate.Migration) error {
+func (m *failOnNthMigrator) ExecUp(_ context.Context, mig sqlmigrate.Migration, _ string) error {
 	if m.calls == m.failAt {
 		m.calls++
 		return errors.New("connection lost")
 	}
 	m.calls++
-	m.applied = append(m.applied, sqlmigrate.AppliedMigration{Name: mig.Name, ID: mig.ID})
-	slices.SortFunc(m.applied, func(a, b sqlmigrate.AppliedMigration) int {
+	m.applied = append(m.applied, mig)
+	slices.SortFunc(m.applied, func(a, b sqlmigrate.Migration) int {
 		return strings.Compare(a.Name, b.Name)
 	})
 	return nil
 }
 
-func (m *failOnNthMigrator) ExecDown(_ context.Context, mig sqlmigrate.Migration) error {
-	m.applied = slices.DeleteFunc(m.applied, func(a sqlmigrate.AppliedMigration) bool { return a.Name == mig.Name })
+func (m *failOnNthMigrator) ExecDown(_ context.Context, mig sqlmigrate.Migration, _ string) error {
+	m.applied = slices.DeleteFunc(m.applied, func(a sqlmigrate.Migration) bool { return a.Name == mig.Name })
 	return nil
 }
 
-func (m *failOnNthMigrator) Applied(_ context.Context) ([]sqlmigrate.AppliedMigration, error) {
+func (m *failOnNthMigrator) Applied(_ context.Context) ([]sqlmigrate.Migration, error) {
 	return slices.Clone(m.applied), nil
 }
 
@@ -315,51 +324,51 @@ func (m *failOnNthMigrator) Applied(_ context.Context) ([]sqlmigrate.AppliedMigr
 
 func TestDown(t *testing.T) {
 	ctx := t.Context()
-	migrations := []sqlmigrate.Migration{
-		{Name: "001_init", Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
-		{Name: "002_users", Up: "CREATE TABLE b;", Down: "DROP TABLE b;"},
-		{Name: "003_posts", Up: "CREATE TABLE c;", Down: "DROP TABLE c;"},
+	ddls := []sqlmigrate.Script{
+		{Migration: sqlmigrate.Migration{Name: "001_init"}, Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
+		{Migration: sqlmigrate.Migration{Name: "002_users"}, Up: "CREATE TABLE b;", Down: "DROP TABLE b;"},
+		{Migration: sqlmigrate.Migration{Name: "003_posts"}, Up: "CREATE TABLE c;", Down: "DROP TABLE c;"},
 	}
 
 	t.Run("rollback all", func(t *testing.T) {
-		m := &mockMigrator{applied: applied("001_init", "002_users", "003_posts")}
-		rolled, err := sqlmigrate.Down(ctx, m, migrations, -1)
+		m := &mockMigrator{applied: migs("001_init", "002_users", "003_posts")}
+		rolled, err := sqlmigrate.Down(ctx, m, ddls, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(rolled) != 3 {
 			t.Fatalf("rolled %d, want 3", len(rolled))
 		}
-		if rolled[0] != "003_posts" {
-			t.Errorf("first rollback = %q, want 003_posts", rolled[0])
+		if rolled[0].Name != "003_posts" {
+			t.Errorf("first rollback = %q, want 003_posts", rolled[0].Name)
 		}
-		if rolled[2] != "001_init" {
-			t.Errorf("last rollback = %q, want 001_init", rolled[2])
+		if rolled[2].Name != "001_init" {
+			t.Errorf("last rollback = %q, want 001_init", rolled[2].Name)
 		}
 	})
 
 	t.Run("n=0 is error", func(t *testing.T) {
-		m := &mockMigrator{applied: applied("001_init", "002_users")}
-		_, err := sqlmigrate.Down(ctx, m, migrations, 0)
+		m := &mockMigrator{applied: migs("001_init", "002_users")}
+		_, err := sqlmigrate.Down(ctx, m, ddls, 0)
 		if !errors.Is(err, sqlmigrate.ErrInvalidN) {
 			t.Errorf("got %v, want ErrInvalidN", err)
 		}
 	})
 
 	t.Run("rollback n", func(t *testing.T) {
-		m := &mockMigrator{applied: applied("001_init", "002_users", "003_posts")}
-		rolled, err := sqlmigrate.Down(ctx, m, migrations, 2)
+		m := &mockMigrator{applied: migs("001_init", "002_users", "003_posts")}
+		rolled, err := sqlmigrate.Down(ctx, m, ddls, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(rolled, []string{"003_posts", "002_users"}) {
-			t.Errorf("rolled = %v", rolled)
+		if !slices.Equal(names(rolled), []string{"003_posts", "002_users"}) {
+			t.Errorf("rolled = %v", names(rolled))
 		}
 	})
 
 	t.Run("none applied", func(t *testing.T) {
 		m := &mockMigrator{}
-		rolled, err := sqlmigrate.Down(ctx, m, migrations, -1)
+		rolled, err := sqlmigrate.Down(ctx, m, ddls, -1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -370,10 +379,10 @@ func TestDown(t *testing.T) {
 
 	t.Run("exec error", func(t *testing.T) {
 		m := &mockMigrator{
-			applied: applied("001_init", "002_users"),
+			applied: migs("001_init", "002_users"),
 			execErr: errors.New("permission denied"),
 		}
-		rolled, err := sqlmigrate.Down(ctx, m, migrations, 1)
+		rolled, err := sqlmigrate.Down(ctx, m, ddls, 1)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -383,16 +392,16 @@ func TestDown(t *testing.T) {
 	})
 
 	t.Run("unknown migration in applied", func(t *testing.T) {
-		m := &mockMigrator{applied: applied("001_init", "999_unknown")}
-		_, err := sqlmigrate.Down(ctx, m, migrations, -1)
+		m := &mockMigrator{applied: migs("001_init", "999_unknown")}
+		_, err := sqlmigrate.Down(ctx, m, ddls, -1)
 		if !errors.Is(err, sqlmigrate.ErrMissingDown) {
 			t.Errorf("got %v, want ErrMissingDown", err)
 		}
 	})
 
 	t.Run("n exceeds applied", func(t *testing.T) {
-		m := &mockMigrator{applied: applied("001_init")}
-		rolled, err := sqlmigrate.Down(ctx, m, migrations, 99)
+		m := &mockMigrator{applied: migs("001_init")}
+		rolled, err := sqlmigrate.Down(ctx, m, ddls, 99)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -403,18 +412,18 @@ func TestDown(t *testing.T) {
 
 	t.Run("finds migration by ID when name changed", func(t *testing.T) {
 		// DB has old name, file has new name, same ID
-		m := &mockMigrator{applied: []sqlmigrate.AppliedMigration{
+		m := &mockMigrator{applied: []sqlmigrate.Migration{
 			{Name: "001_old-name", ID: "aa11bb22"},
 		}}
-		migs := []sqlmigrate.Migration{
-			{Name: "001_new-name", ID: "aa11bb22", Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
+		idDDLs := []sqlmigrate.Script{
+			{Migration: sqlmigrate.Migration{Name: "001_new-name", ID: "aa11bb22"}, Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
 		}
-		rolled, err := sqlmigrate.Down(ctx, m, migs, 1)
+		rolled, err := sqlmigrate.Down(ctx, m, idDDLs, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(rolled, []string{"001_old-name"}) {
-			t.Errorf("rolled = %v, want [001_old-name]", rolled)
+		if !slices.Equal(names(rolled), []string{"001_old-name"}) {
+			t.Errorf("rolled = %v, want [001_old-name]", names(rolled))
 		}
 	})
 }
@@ -423,15 +432,15 @@ func TestDown(t *testing.T) {
 
 func TestGetStatus(t *testing.T) {
 	ctx := t.Context()
-	migrations := []sqlmigrate.Migration{
-		{Name: "001_init"},
-		{Name: "002_users"},
-		{Name: "003_posts"},
+	ddls := []sqlmigrate.Script{
+		{Migration: sqlmigrate.Migration{Name: "001_init"}},
+		{Migration: sqlmigrate.Migration{Name: "002_users"}},
+		{Migration: sqlmigrate.Migration{Name: "003_posts"}},
 	}
 
 	t.Run("all pending", func(t *testing.T) {
 		m := &mockMigrator{}
-		status, err := sqlmigrate.GetStatus(ctx, m, migrations)
+		status, err := sqlmigrate.GetStatus(ctx, m, ddls)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -444,22 +453,22 @@ func TestGetStatus(t *testing.T) {
 	})
 
 	t.Run("partial", func(t *testing.T) {
-		m := &mockMigrator{applied: applied("001_init")}
-		status, err := sqlmigrate.GetStatus(ctx, m, migrations)
+		m := &mockMigrator{applied: migs("001_init")}
+		status, err := sqlmigrate.GetStatus(ctx, m, ddls)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(status.Applied) != 1 || status.Applied[0] != "001_init" {
+		if len(status.Applied) != 1 || status.Applied[0].Name != "001_init" {
 			t.Errorf("applied = %v", status.Applied)
 		}
-		if !slices.Equal(status.Pending, []string{"002_users", "003_posts"}) {
-			t.Errorf("pending = %v", status.Pending)
+		if !slices.Equal(names(status.Pending), []string{"002_users", "003_posts"}) {
+			t.Errorf("pending = %v", names(status.Pending))
 		}
 	})
 
 	t.Run("all applied", func(t *testing.T) {
-		m := &mockMigrator{applied: applied("001_init", "002_users", "003_posts")}
-		status, err := sqlmigrate.GetStatus(ctx, m, migrations)
+		m := &mockMigrator{applied: migs("001_init", "002_users", "003_posts")}
+		status, err := sqlmigrate.GetStatus(ctx, m, ddls)
 		if err != nil {
 			t.Fatal(err)
 		}
