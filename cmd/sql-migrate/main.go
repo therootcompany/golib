@@ -43,9 +43,11 @@ var (
 const (
 	defaultMigrationDir   = "./sql/migrations/"
 	defaultLogPath        = "../migrations.log"
-	sqlCommandPSQL        = `psql "$PG_URL" -v ON_ERROR_STOP=on -A -t --file %s`
-	sqlCommandMariaDB     = `mariadb --defaults-extra-file="$MY_CNF" -s -N --raw < %s`
-	sqlCommandMySQL       = `mysql --defaults-extra-file="$MY_CNF" -s -N --raw < %s`
+	sqlCommandPSQL        = `psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --tuples-only --file %s`
+	sqlCommandMariaDB     = `mariadb --defaults-extra-file="$MY_CNF" --silent --skip-column-names --raw < %s`
+	sqlCommandMySQL       = `mysql --defaults-extra-file="$MY_CNF" --silent --skip-column-names --raw < %s`
+	sqlCommandSQLite      = `sqlite3 "$SQLITE_PATH" < %s`
+	sqlCommandSQLCmd      = `sqlcmd --exit-on-error --headers -1 --trim-spaces --encrypt-connection strict --input-file %s`
 	LOG_QUERY_NAME        = "_migrations.sql"
 	M_MIGRATOR_NAME       = "0001-01-01-001000_init-migrations"
 	M_MIGRATOR_UP_NAME    = "0001-01-01-001000_init-migrations.up.sql"
@@ -73,6 +75,7 @@ DROP TABLE IF EXISTS _migrations;
 	logMigrationsQueryPrev2_2_0 = `SELECT name FROM _migrations ORDER BY name;`
 
 	logMigrationsQueryNote = "-- note: CLI arguments must be passed to the sql command to keep output machine-readable\n"
+	logMigrationsQuerySQLCmdNote = "-- connection: set SQLCMDSERVER, SQLCMDDATABASE, SQLCMDUSER, SQLCMDPASSWORD in .env\n"
 )
 
 // printVersion displays the version, commit, and build date.
@@ -87,7 +90,7 @@ USAGE
    sql-migrate [-d sqldir] <command> [args]
 
 EXAMPLE
-   sql-migrate -d ./sql/migrations/ init --sql-command <psql|mariadb|mysql>
+   sql-migrate -d ./sql/migrations/ init --sql-command <psql|mariadb|mysql|sqlite|sqlcmd>
    sql-migrate -d ./sql/migrations/ create <kebab-case-description>
    sql-migrate -d ./sql/migrations/ sync
    sql-migrate -d ./sql/migrations/ status
@@ -138,6 +141,31 @@ NOTE: POSTGRES SCHEMAS
    Each schema gets its own _migrations table, so tenants are migrated
    independently. PGOPTIONS is supported by psql and all libpq clients.
 
+NOTE: SQL SERVER (go-sqlcmd)
+   Requires the modern sqlcmd (go-mssqldb), not the legacy ODBC version.
+   Install: brew install sqlcmd (macOS), winget install sqlcmd (Windows)
+
+   The default uses --encrypt-connection strict (TDS 8.0), which provides
+   TLS-first on TCP with ALPN 'tds/8.0' and SNI — required for proper TLS
+   termination at load balancers and reverse proxies.
+
+   Set these SQLCMD environment variables in your .env file:
+
+      SQLCMDSERVER='host\instance'   # or host,port (e.g. localhost,1433)
+      SQLCMDDATABASE=myapp
+      SQLCMDUSER=sa
+      SQLCMDPASSWORD=secret
+
+   SQLCMDSERVER is the instance, not just the host. Common formats:
+      SQLCMDSERVER=localhost              # default instance
+      SQLCMDSERVER='localhost\SQLEXPRESS' # named instance (quote the backslash)
+      SQLCMDSERVER='localhost,1433'       # host and port
+
+   sqlcmd reads these automatically — no credentials in the command template.
+
+   For local development without TLS:
+      --sql-command 'sqlcmd --exit-on-error --headers -1 --trim-spaces --encrypt-connection disable --input-file %s'
+
 UPGRADING
    After upgrading sql-migrate, run sync to refresh the log format:
       sql-migrate -d ./sql/migrations/ sync | sh
@@ -157,6 +185,10 @@ func logMigrationsSelect(sqlCommand string) string {
 		selectExpr = "id || CHR(9) || name"
 	case strings.Contains(sqlCommand, "mysql") || strings.Contains(sqlCommand, "mariadb"):
 		selectExpr = "CONCAT(id, CHAR(9), name)"
+	case strings.Contains(sqlCommand, "sqlite"):
+		selectExpr = "id || CHAR(9) || name"
+	case strings.Contains(sqlCommand, "sqlcmd"):
+		selectExpr = "id + CHAR(9) + name"
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unrecognized --sql-command %q; cannot generate _migrations.sql\n", sqlCommand)
 		os.Exit(1)
@@ -225,7 +257,7 @@ func main() {
 	case "init":
 		fsSub = flag.NewFlagSet("init", flag.ExitOnError)
 		fsSub.StringVar(&cfg.logPath, "migrations-log", "", fmt.Sprintf("migration log file (default: %s) relative to and saved in %s", defaultLogPath, M_MIGRATOR_NAME))
-		fsSub.StringVar(&cfg.sqlCommand, "sql-command", sqlCommandPSQL, "construct scripts with this to execute SQL files: 'psql', 'mysql', 'mariadb', or custom arguments")
+		fsSub.StringVar(&cfg.sqlCommand, "sql-command", sqlCommandPSQL, "construct scripts with this to execute SQL files: 'psql', 'mysql', 'mariadb', 'sqlite', 'sqlcmd', or custom arguments")
 	case "create", "sync", "up", "down", "status", "list":
 		fsSub = flag.NewFlagSet(subcmd, flag.ExitOnError)
 	default:
@@ -246,6 +278,10 @@ func main() {
 		cfg.sqlCommand = sqlCommandMariaDB
 	case "mysql", "my":
 		cfg.sqlCommand = sqlCommandMySQL
+	case "sqlite", "sqlite3", "lite":
+		cfg.sqlCommand = sqlCommandSQLite
+	case "sqlcmd", "mssql", "sqlserver":
+		cfg.sqlCommand = sqlCommandSQLCmd
 	default:
 		// leave as provided by the user
 	}
@@ -587,7 +623,11 @@ func mustInit(cfg *MainConfig) {
 	}
 
 	logQueryPath := filepath.Join(state.MigrationsDir, LOG_QUERY_NAME)
-	if created, err := initFile(logQueryPath, logMigrationsQueryNote+logMigrationsSelect(state.SQLCommand)+"\n"); err != nil {
+	queryHeader := logMigrationsQueryNote
+	if strings.Contains(state.SQLCommand, "sqlcmd") {
+		queryHeader += logMigrationsQuerySQLCmdNote
+	}
+	if created, err := initFile(logQueryPath, queryHeader+logMigrationsSelect(state.SQLCommand)+"\n"); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: init couldn't create migrations query: %v\n", err)
 		os.Exit(1)
 	} else if created {
