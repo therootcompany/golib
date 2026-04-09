@@ -28,13 +28,13 @@ func New(db *sql.DB) *Migrator {
 var _ sqlmigrate.Migrator = (*Migrator)(nil)
 
 // ExecUp runs the up migration SQL inside a transaction.
-func (m *Migrator) ExecUp(ctx context.Context, mig sqlmigrate.Migration) error {
-	return m.execInTx(ctx, mig.Up)
+func (m *Migrator) ExecUp(ctx context.Context, mig sqlmigrate.Migration, sql string) error {
+	return m.execInTx(ctx, sql)
 }
 
 // ExecDown runs the down migration SQL inside a transaction.
-func (m *Migrator) ExecDown(ctx context.Context, mig sqlmigrate.Migration) error {
-	return m.execInTx(ctx, mig.Down)
+func (m *Migrator) ExecDown(ctx context.Context, mig sqlmigrate.Migration, sql string) error {
+	return m.execInTx(ctx, sql)
 }
 
 func (m *Migrator) execInTx(ctx context.Context, sqlStr string) error {
@@ -57,7 +57,7 @@ func (m *Migrator) execInTx(ctx context.Context, sqlStr string) error {
 
 // Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist (SQL Server error 208).
-func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, error) {
+func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
 	rows, err := m.DB.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
 		// SQL Server error 208: "Invalid object name '_migrations'"
@@ -68,9 +68,9 @@ func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, 
 	}
 	defer rows.Close()
 
-	var applied []sqlmigrate.AppliedMigration
+	var applied []sqlmigrate.Migration
 	for rows.Next() {
-		var a sqlmigrate.AppliedMigration
+		var a sqlmigrate.Migration
 		if err := rows.Scan(&a.ID, &a.Name); err != nil {
 			return nil, fmt.Errorf("%w: scanning row: %w", sqlmigrate.ErrQueryApplied, err)
 		}

@@ -32,8 +32,8 @@ github.com/shopspring/decimal v1.4.0 h1:bxl37RwXBklmTi0C79JfXCEBD1cqqHt0bbgBAGFp
 github.com/shopspring/decimal v1.4.0/go.mod h1:gawqmDU56v4yIKSwfBSFip1HdCCXN8/+DMd9qYNcwME=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/therootcompany/golib/database/sqlmigrate v1.0.1 h1:yhQb4KSwSny1WSC1Y1Z6oHT7V1lznKuj1vzZkF6MqFo=
-github.com/therootcompany/golib/database/sqlmigrate v1.0.1/go.mod h1:7PQUjwT78Hx+SftcIKI2PH4zSFlrSO0V9h618PJqC38=
+github.com/therootcompany/golib/database/sqlmigrate v1.0.2 h1:hcmhYyUFVj/GqyChP+0Ry2WZCHnoruFMbsy+2KVzsfA=
+github.com/therootcompany/golib/database/sqlmigrate v1.0.2/go.mod h1:7PQUjwT78Hx+SftcIKI2PH4zSFlrSO0V9h618PJqC38=
 golang.org/x/crypto v0.48.0 h1:/VRzVqiRSggnhY7gNRxPauEQ5Drw9haKdM0jqfcCFts=
 golang.org/x/crypto v0.48.0/go.mod h1:r0kV5h3qnFPlQnBSrULhlsRfryS2pmewsg+XfMgkVos=
 golang.org/x/net v0.51.0 h1:94R/GTO7mt3/4wIKpcR5gkGmRLOuE/2hNGeWq/GBIFo=

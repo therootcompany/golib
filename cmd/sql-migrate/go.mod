@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/jackc/pgx/v5 v5.9.1
-	github.com/therootcompany/golib/database/sqlmigrate v1.0.0
+	github.com/therootcompany/golib/database/sqlmigrate v1.0.2
 	github.com/therootcompany/golib/database/sqlmigrate/shmigrate v0.0.0
 )
 

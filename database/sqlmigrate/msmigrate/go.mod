@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/microsoft/go-mssqldb v1.9.8
-	github.com/therootcompany/golib/database/sqlmigrate v1.0.1
+	github.com/therootcompany/golib/database/sqlmigrate v1.0.2
 )
 
 require (

@@ -45,13 +45,13 @@ func New(pool *pgxpool.Pool) *Migrator {
 var _ sqlmigrate.Migrator = (*Migrator)(nil)
 
 // ExecUp runs the up migration SQL inside a PostgreSQL transaction.
-func (r *Migrator) ExecUp(ctx context.Context, m sqlmigrate.Migration) error {
-	return r.execInTx(ctx, m.Up)
+func (r *Migrator) ExecUp(ctx context.Context, m sqlmigrate.Migration, sql string) error {
+	return r.execInTx(ctx, sql)
 }
 
 // ExecDown runs the down migration SQL inside a PostgreSQL transaction.
-func (r *Migrator) ExecDown(ctx context.Context, m sqlmigrate.Migration) error {
-	return r.execInTx(ctx, m.Down)
+func (r *Migrator) ExecDown(ctx context.Context, m sqlmigrate.Migration, sql string) error {
+	return r.execInTx(ctx, sql)
 }
 
 func (r *Migrator) execInTx(ctx context.Context, sql string) error {
@@ -74,7 +74,7 @@ func (r *Migrator) execInTx(ctx context.Context, sql string) error {
 
 // Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist (PG error 42P01).
-func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, error) {
+func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
 	rows, err := r.Pool.Query(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
 		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "42P01" {
@@ -84,9 +84,9 @@ func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.AppliedMigration, 
 	}
 	defer rows.Close()
 
-	var applied []sqlmigrate.AppliedMigration
+	var applied []sqlmigrate.Migration
 	for rows.Next() {
-		var a sqlmigrate.AppliedMigration
+		var a sqlmigrate.Migration
 		if err := rows.Scan(&a.ID, &a.Name); err != nil {
 			return nil, fmt.Errorf("%w: scanning row: %w", sqlmigrate.ErrQueryApplied, err)
 		}
