@@ -1338,11 +1338,11 @@ func semverLess(a, b string) bool {
 	b = strings.TrimPrefix(b, "v")
 
 	var aPre, bPre string
-	if idx := strings.Index(a, "-"); idx >= 0 {
-		aPre, a = a[idx+1:], a[:idx]
+	if before, after, ok := strings.Cut(a, "-"); ok {
+		aPre, a = after, before
 	}
-	if idx := strings.Index(b, "-"); idx >= 0 {
-		bPre, b = b[idx+1:], b[:idx]
+	if before, after, ok := strings.Cut(b, "-"); ok {
+		bPre, b = after, before
 	}
 
 	aP, bP := semverInts(a), semverInts(b)
@@ -1515,10 +1515,10 @@ func goreleaserYAML(projectName string, bins []binary, opts buildOptions) string
 			wf("    main: %s\n", bin.mainPath)
 		}
 		wf("    env:\n      - CGO_ENABLED=0\n")
-		wf("    ldflags:\n      - -s -w"+
-			" -X main.version={{.Env.VERSION}}"+
-			" -X main.commit={{.Commit}}"+
-			" -X main.date={{.Date}}"+
+		wf("    ldflags:\n      - -s -w" +
+			" -X main.version={{.Env.VERSION}}" +
+			" -X main.commit={{.Commit}}" +
+			" -X main.date={{.Date}}" +
 			" -X main.builtBy=goreleaser\n")
 		w("    goos:\n      - windows\n")
 		w("    goarch:\n")

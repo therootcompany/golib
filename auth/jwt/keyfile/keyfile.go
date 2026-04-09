@@ -28,8 +28,9 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"github.com/therootcompany/golib/auth/jwt"
 	"os"
+
+	"github.com/therootcompany/golib/auth/jwt"
 )
 
 // --- Parse functions (bytes => key) ---
