@@ -10,3 +10,8 @@ require (
 )
 
 require filippo.io/edwards25519 v1.1.0 // indirect
+
+replace (
+	github.com/therootcompany/golib/database/sqlmigrate => ../../../../database/sqlmigrate
+	github.com/therootcompany/golib/database/sqlmigrate/mymigrate => ../../../../database/sqlmigrate/mymigrate
+)

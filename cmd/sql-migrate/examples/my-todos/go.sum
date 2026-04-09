@@ -4,7 +4,3 @@ github.com/go-sql-driver/mysql v1.9.3 h1:U/N249h2WzJ3Ukj8SowVFjdtZKfu9vlLZxjPXV1
 github.com/go-sql-driver/mysql v1.9.3/go.mod h1:qn46aNg1333BRMNU69Lq93t8du/dwxI64Gl8i5p1WMU=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
-github.com/therootcompany/golib/database/sqlmigrate v1.0.2 h1:hcmhYyUFVj/GqyChP+0Ry2WZCHnoruFMbsy+2KVzsfA=
-github.com/therootcompany/golib/database/sqlmigrate v1.0.2/go.mod h1:7PQUjwT78Hx+SftcIKI2PH4zSFlrSO0V9h618PJqC38=
-github.com/therootcompany/golib/database/sqlmigrate/mymigrate v1.0.2 h1:VLJbyDrACQYISfFLMZHn5b8Q8ywVjswtDjy+8Et8HBY=
-github.com/therootcompany/golib/database/sqlmigrate/mymigrate v1.0.2/go.mod h1:zr+08WaGE+2V1dgrDUzrST7EuiJ4L+0XNNyMpqdl9CE=
