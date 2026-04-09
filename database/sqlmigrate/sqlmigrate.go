@@ -20,12 +20,13 @@ import (
 
 // Sentinel errors for migration operations.
 var (
-	ErrMissingUp    = errors.New("missing up migration")
-	ErrMissingDown  = errors.New("missing down migration")
-	ErrWalkFailed   = errors.New("walking migrations")
-	ErrExecFailed   = errors.New("migration exec failed")
-	ErrQueryApplied = errors.New("querying applied migrations")
-	ErrInvalidN     = errors.New("n must be positive or -1 for all")
+	ErrMissingUp     = errors.New("missing up migration")
+	ErrMissingDown   = errors.New("missing down migration")
+	ErrMissingScript = errors.New("unknown applied migration")
+	ErrWalkFailed    = errors.New("walking migrations")
+	ErrExecFailed    = errors.New("migration exec failed")
+	ErrQueryApplied  = errors.New("querying applied migrations")
+	ErrInvalidN      = errors.New("n must be positive or -1 for all")
 )
 
 // Migration identifies a migration by its name and optional hex ID.
@@ -192,7 +193,7 @@ func Up(ctx context.Context, r Migrator, ddls []Script, n int) ([]Migration, err
 
 	applied, err := r.Applied(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrQueryApplied, err)
 	}
 
 	var pending []Script
@@ -211,6 +212,9 @@ func Up(ctx context.Context, r Migrator, ddls []Script, n int) ([]Migration, err
 
 	var ran []Migration
 	for _, d := range pending[:n] {
+		if err := ctx.Err(); err != nil {
+			return ran, err
+		}
 		if err := r.ExecUp(ctx, d.Migration, d.Up); err != nil {
 			return ran, fmt.Errorf("%s (up): %w", d.Name, err)
 		}
@@ -230,7 +234,7 @@ func Down(ctx context.Context, r Migrator, ddls []Script, n int) ([]Migration, e
 
 	applied, err := r.Applied(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrQueryApplied, err)
 	}
 
 	byName := map[string]Script{}
@@ -252,9 +256,12 @@ func Down(ctx context.Context, r Migrator, ddls []Script, n int) ([]Migration, e
 
 	var ran []Migration
 	for _, a := range reversed[:n] {
+		if err := ctx.Err(); err != nil {
+			return ran, err
+		}
 		d, ok := findScript(a, byName, byID)
 		if !ok {
-			return ran, fmt.Errorf("%w: %s", ErrMissingDown, a.Name)
+			return ran, fmt.Errorf("%w: %s", ErrMissingScript, a.Name)
 		}
 		if err := r.ExecDown(ctx, a, d.Down); err != nil {
 			return ran, fmt.Errorf("%s (down): %w", a.Name, err)
@@ -269,7 +276,7 @@ func Down(ctx context.Context, r Migrator, ddls []Script, n int) ([]Migration, e
 func GetStatus(ctx context.Context, r Migrator, ddls []Script) (*Status, error) {
 	applied, err := r.Applied(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrQueryApplied, err)
 	}
 
 	var pending []Migration

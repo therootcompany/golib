@@ -66,7 +66,7 @@ func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) 
 	rows, err := m.Conn.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
 		// SQLite reports "no such table: _migrations" — stable across versions
-		if strings.Contains(err.Error(), "no such table") {
+		if strings.Contains(err.Error(), "no such table: _migrations") {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("%w: %w", sqlmigrate.ErrQueryApplied, err)
