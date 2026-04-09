@@ -74,7 +74,7 @@ DROP TABLE IF EXISTS _migrations;
 	// Used for detection during auto-upgrade.
 	logMigrationsQueryPrev2_2_0 = `SELECT name FROM _migrations ORDER BY name;`
 
-	logMigrationsQueryNote = "-- note: CLI arguments must be passed to the sql command to keep output machine-readable\n"
+	logMigrationsQueryNote       = "-- note: CLI arguments must be passed to the sql command to keep output machine-readable\n"
 	logMigrationsQuerySQLCmdNote = "-- connection: set SQLCMDSERVER, SQLCMDDATABASE, SQLCMDUSER, SQLCMDPASSWORD in .env\n"
 )
 
