@@ -87,36 +87,33 @@ func Collect(fsys fs.FS, subpath string) ([]Script, error) {
 	ups := map[string]string{}
 	downs := map[string]string{}
 
-	err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrWalkFailed, err)
+	}
+
+	for _, d := range entries {
 		if d.IsDir() {
-			return nil
+			continue
 		}
 
 		name := d.Name()
 		if base, ok := strings.CutSuffix(name, ".up.sql"); ok {
-			b, readErr := fs.ReadFile(fsys, path)
+			b, readErr := fs.ReadFile(fsys, name)
 			if readErr != nil {
-				return readErr
+				return nil, fmt.Errorf("%w: %w", ErrWalkFailed, readErr)
 			}
 			ups[base] = string(b)
-			return nil
+			continue
 		}
 		if base, ok := strings.CutSuffix(name, ".down.sql"); ok {
-			b, readErr := fs.ReadFile(fsys, path)
+			b, readErr := fs.ReadFile(fsys, name)
 			if readErr != nil {
-				return readErr
+				return nil, fmt.Errorf("%w: %w", ErrWalkFailed, readErr)
 			}
 			downs[base] = string(b)
-			return nil
+			continue
 		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrWalkFailed, err)
 	}
 
 	var ddls []Script
