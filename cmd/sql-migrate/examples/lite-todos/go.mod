@@ -21,3 +21,8 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace (
+	github.com/therootcompany/golib/database/sqlmigrate => ../../../../database/sqlmigrate
+	github.com/therootcompany/golib/database/sqlmigrate/litemigrate => ../../../../database/sqlmigrate/litemigrate
+)
