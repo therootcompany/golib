@@ -2,18 +2,12 @@
 //
 // # Multi-tenant schemas
 //
-// For schema-based multi-tenancy, set search_path on the pool's connection
-// config so all migrations target the correct schema:
+// For schema-based multi-tenancy, set search_path on the connection
+// before creating the migrator:
 //
-//	import "github.com/jackc/pgx/v5"
-//
-//	config, _ := pgxpool.ParseConfig(pgURL)
-//	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-//	    _, err := conn.Exec(ctx, fmt.Sprintf("SET search_path TO %s", pgx.Identifier{schema}.Sanitize()))
-//	    return err
-//	}
-//	pool, _ := pgxpool.NewWithConfig(ctx, config)
-//	runner := pgmigrate.New(pool)
+//	conn, _ := pgx.Connect(ctx, pgURL)
+//	_, _ = conn.Exec(ctx, fmt.Sprintf("SET search_path TO %s", pgx.Identifier{schema}.Sanitize()))
+//	runner := pgmigrate.New(conn)
 //
 // Each schema gets its own _migrations table, so tenants are migrated
 // independently. The sql-migrate CLI supports this via TENANT_SCHEMA;
@@ -25,20 +19,20 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/therootcompany/golib/database/sqlmigrate"
 )
 
-// Migrator implements sqlmigrate.Migrator using a pgxpool.Pool.
+// Migrator implements sqlmigrate.Migrator using a single pgx.Conn.
 type Migrator struct {
-	Pool *pgxpool.Pool
+	Conn *pgx.Conn
 }
 
-// New creates a Migrator from the given pool.
-func New(pool *pgxpool.Pool) *Migrator {
-	return &Migrator{Pool: pool}
+// New creates a Migrator from the given connection.
+func New(conn *pgx.Conn) *Migrator {
+	return &Migrator{Conn: conn}
 }
 
 // verify interface compliance at compile time
@@ -55,7 +49,7 @@ func (r *Migrator) ExecDown(ctx context.Context, m sqlmigrate.Migration, sql str
 }
 
 func (r *Migrator) execInTx(ctx context.Context, sql string) error {
-	tx, err := r.Pool.Begin(ctx)
+	tx, err := r.Conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: begin: %w", sqlmigrate.ErrExecFailed, err)
 	}
@@ -75,7 +69,7 @@ func (r *Migrator) execInTx(ctx context.Context, sql string) error {
 // Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist (PG error 42P01).
 func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
-	rows, err := r.Pool.Query(ctx, "SELECT id, name FROM _migrations ORDER BY name")
+	rows, err := r.Conn.Query(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
 		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "42P01" {
 			return nil, nil
