@@ -63,7 +63,7 @@ func TestCollect(t *testing.T) {
 			"001_first.up.sql":    {Data: []byte("CREATE TABLE a;")},
 			"001_first.down.sql":  {Data: []byte("DROP TABLE a;")},
 		}
-		migrations, err := sqlmigrate.Collect(fsys)
+		migrations, err := sqlmigrate.Collect(fsys, ".")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +89,7 @@ func TestCollect(t *testing.T) {
 			"001_init.up.sql":   {Data: []byte("CREATE TABLE a;\nINSERT INTO _migrations (name, id) VALUES ('001_init', 'abcd1234');")},
 			"001_init.down.sql": {Data: []byte("DROP TABLE a;\nDELETE FROM _migrations WHERE id = 'abcd1234';")},
 		}
-		migrations, err := sqlmigrate.Collect(fsys)
+		migrations, err := sqlmigrate.Collect(fsys, ".")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,7 +103,7 @@ func TestCollect(t *testing.T) {
 			"001_init.up.sql":   {Data: []byte("CREATE TABLE a;")},
 			"001_init.down.sql": {Data: []byte("DROP TABLE a;")},
 		}
-		migrations, err := sqlmigrate.Collect(fsys)
+		migrations, err := sqlmigrate.Collect(fsys, ".")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +116,7 @@ func TestCollect(t *testing.T) {
 		fsys := fstest.MapFS{
 			"001_only-up.up.sql": {Data: []byte("CREATE TABLE x;")},
 		}
-		_, err := sqlmigrate.Collect(fsys)
+		_, err := sqlmigrate.Collect(fsys, ".")
 		if !errors.Is(err, sqlmigrate.ErrMissingDown) {
 			t.Errorf("got %v, want ErrMissingDown", err)
 		}
@@ -126,7 +126,7 @@ func TestCollect(t *testing.T) {
 		fsys := fstest.MapFS{
 			"001_only-down.down.sql": {Data: []byte("DROP TABLE x;")},
 		}
-		_, err := sqlmigrate.Collect(fsys)
+		_, err := sqlmigrate.Collect(fsys, ".")
 		if !errors.Is(err, sqlmigrate.ErrMissingUp) {
 			t.Errorf("got %v, want ErrMissingUp", err)
 		}
@@ -139,7 +139,7 @@ func TestCollect(t *testing.T) {
 			"README.md":         {Data: []byte("# Migrations")},
 			"_migrations.sql":   {Data: []byte("SELECT name FROM _migrations;")},
 		}
-		migrations, err := sqlmigrate.Collect(fsys)
+		migrations, err := sqlmigrate.Collect(fsys, ".")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -150,7 +150,7 @@ func TestCollect(t *testing.T) {
 
 	t.Run("empty fs", func(t *testing.T) {
 		fsys := fstest.MapFS{}
-		migrations, err := sqlmigrate.Collect(fsys)
+		migrations, err := sqlmigrate.Collect(fsys, ".")
 		if err != nil {
 			t.Fatal(err)
 		}

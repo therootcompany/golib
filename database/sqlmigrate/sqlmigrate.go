@@ -71,11 +71,20 @@ var idFromInsert = regexp.MustCompile(
 	`(?i)INSERT\s+INTO\s+_migrations\s*\(\s*name\s*,\s*id\s*\)\s*VALUES\s*\(\s*'[^']*'\s*,\s*'([0-9a-fA-F]+)'\s*\)`,
 )
 
-// Collect reads .up.sql and .down.sql files from fsys, pairs them by
-// basename, and returns them sorted lexicographically by name.
+// Collect reads .up.sql and .down.sql files from fsys under subpath,
+// pairs them by basename, and returns them sorted lexicographically by name.
+// If subpath is "" or ".", the root of fsys is used.
 // If the up SQL contains an INSERT INTO _migrations line, the hex ID
 // is extracted and stored in Migration.ID.
-func Collect(fsys fs.FS) ([]Migration, error) {
+func Collect(fsys fs.FS, subpath string) ([]Migration, error) {
+	if subpath != "" && subpath != "." {
+		var err error
+		fsys, err = fs.Sub(fsys, subpath)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrWalkFailed, err)
+		}
+	}
+
 	ups := map[string]string{}
 	downs := map[string]string{}
 
@@ -284,4 +293,14 @@ func GetStatus(ctx context.Context, r Migrator, migrations []Migration) (*Status
 		Applied: appliedNames,
 		Pending: pending,
 	}, nil
+}
+
+// Latest applies all pending migrations. Equivalent to Up(ctx, r, migrations, -1).
+func Latest(ctx context.Context, r Migrator, migrations []Migration) ([]string, error) {
+	return Up(ctx, r, migrations, -1)
+}
+
+// Drop rolls back all applied migrations. Equivalent to Down(ctx, r, migrations, -1).
+func Drop(ctx context.Context, r Migrator, migrations []Migration) ([]string, error) {
+	return Down(ctx, r, migrations, -1)
 }
