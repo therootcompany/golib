@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 
@@ -71,8 +72,16 @@ func main() {
 	}
 	defer pool.Close()
 
+	// migrations require a single connection, not a pool
+	conn, err := pgx.Connect(ctx, pgURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: connecting for migrations: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
 	migrations := mustCollectMigrations()
-	runner := pgmigrate.New(pool)
+	runner := pgmigrate.New(conn)
 
 	subcmd := args[0]
 	subArgs := args[1:]
