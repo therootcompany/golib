@@ -31,13 +31,16 @@ func names(ms []sqlmigrate.Migration) []string {
 
 // mockMigrator tracks applied migrations in memory.
 type mockMigrator struct {
-	applied   []sqlmigrate.Migration
-	execErr   error // if set, ExecUp/ExecDown return this on every call
-	upCalls   []string
-	downCalls []string
+	applied    []sqlmigrate.Migration
+	execErr    error // if set, ExecUp/ExecDown return this on every call
+	upCalls    []string
+	downCalls  []string
+	lastCtx    context.Context
+	appliedErr error // if set, Applied returns this error
 }
 
-func (m *mockMigrator) ExecUp(_ context.Context, mig sqlmigrate.Migration, _ string) error {
+func (m *mockMigrator) ExecUp(ctx context.Context, mig sqlmigrate.Migration, _ string) error {
+	m.lastCtx = ctx
 	m.upCalls = append(m.upCalls, mig.Name)
 	if m.execErr != nil {
 		return m.execErr
@@ -49,7 +52,8 @@ func (m *mockMigrator) ExecUp(_ context.Context, mig sqlmigrate.Migration, _ str
 	return nil
 }
 
-func (m *mockMigrator) ExecDown(_ context.Context, mig sqlmigrate.Migration, _ string) error {
+func (m *mockMigrator) ExecDown(ctx context.Context, mig sqlmigrate.Migration, _ string) error {
+	m.lastCtx = ctx
 	m.downCalls = append(m.downCalls, mig.Name)
 	if m.execErr != nil {
 		return m.execErr
@@ -58,7 +62,11 @@ func (m *mockMigrator) ExecDown(_ context.Context, mig sqlmigrate.Migration, _ s
 	return nil
 }
 
-func (m *mockMigrator) Applied(_ context.Context) ([]sqlmigrate.Migration, error) {
+func (m *mockMigrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
+	m.lastCtx = ctx
+	if m.appliedErr != nil {
+		return nil, m.appliedErr
+	}
 	return slices.Clone(m.applied), nil
 }
 
@@ -138,6 +146,34 @@ func TestCollect(t *testing.T) {
 		_, err := sqlmigrate.Collect(fsys, ".")
 		if !errors.Is(err, sqlmigrate.ErrMissingUp) {
 			t.Errorf("got %v, want ErrMissingUp", err)
+		}
+	})
+
+	t.Run("subpath", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"migrations/001_init.up.sql":   {Data: []byte("CREATE TABLE a;")},
+			"migrations/001_init.down.sql": {Data: []byte("DROP TABLE a;")},
+		}
+		ddls, err := sqlmigrate.Collect(fsys, "migrations")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ddls) != 1 || ddls[0].Name != "001_init" {
+			t.Errorf("got %v, want [001_init]", ddls)
+		}
+	})
+
+	t.Run("empty subpath", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"001_init.up.sql":   {Data: []byte("CREATE TABLE a;")},
+			"001_init.down.sql": {Data: []byte("DROP TABLE a;")},
+		}
+		ddls, err := sqlmigrate.Collect(fsys, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ddls) != 1 || ddls[0].Name != "001_init" {
+			t.Errorf("got %v, want [001_init]", ddls)
 		}
 	})
 
@@ -477,6 +513,159 @@ func TestGetStatus(t *testing.T) {
 		}
 		if len(status.Pending) != 0 {
 			t.Errorf("pending = %d, want 0", len(status.Pending))
+		}
+	})
+}
+
+// --- Latest / Drop ---
+
+func TestLatest(t *testing.T) {
+	ctx := t.Context()
+	ddls := []sqlmigrate.Script{
+		{Migration: sqlmigrate.Migration{Name: "001_init"}, Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
+		{Migration: sqlmigrate.Migration{Name: "002_users"}, Up: "CREATE TABLE b;", Down: "DROP TABLE b;"},
+	}
+	m := &mockMigrator{}
+	ran, err := sqlmigrate.Latest(ctx, m, ddls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(names(ran), []string{"001_init", "002_users"}) {
+		t.Errorf("applied = %v, want all", names(ran))
+	}
+}
+
+func TestDrop(t *testing.T) {
+	ctx := t.Context()
+	ddls := []sqlmigrate.Script{
+		{Migration: sqlmigrate.Migration{Name: "001_init"}, Up: "CREATE TABLE a;", Down: "DROP TABLE a;"},
+		{Migration: sqlmigrate.Migration{Name: "002_users"}, Up: "CREATE TABLE b;", Down: "DROP TABLE b;"},
+	}
+	m := &mockMigrator{applied: migs("001_init", "002_users")}
+	rolled, err := sqlmigrate.Drop(ctx, m, ddls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rolled) != 2 {
+		t.Fatalf("rolled %d, want 2", len(rolled))
+	}
+	if rolled[0].Name != "002_users" {
+		t.Errorf("first rollback = %q, want 002_users", rolled[0].Name)
+	}
+}
+
+// --- Applied error propagation ---
+
+func TestAppliedError(t *testing.T) {
+	ctx := t.Context()
+	ddls := []sqlmigrate.Script{
+		{Migration: sqlmigrate.Migration{Name: "001_init"}, Up: "UP", Down: "DOWN"},
+	}
+	dbErr := errors.New("connection refused")
+
+	t.Run("Up wraps with ErrQueryApplied", func(t *testing.T) {
+		m := &mockMigrator{appliedErr: dbErr}
+		_, err := sqlmigrate.Up(ctx, m, ddls, -1)
+		if !errors.Is(err, sqlmigrate.ErrQueryApplied) {
+			t.Errorf("got %v, want ErrQueryApplied", err)
+		}
+		if !errors.Is(err, dbErr) {
+			t.Errorf("got %v, want underlying %v", err, dbErr)
+		}
+	})
+
+	t.Run("Down wraps with ErrQueryApplied", func(t *testing.T) {
+		m := &mockMigrator{appliedErr: dbErr}
+		_, err := sqlmigrate.Down(ctx, m, ddls, -1)
+		if !errors.Is(err, sqlmigrate.ErrQueryApplied) {
+			t.Errorf("got %v, want ErrQueryApplied", err)
+		}
+	})
+
+	t.Run("GetStatus wraps with ErrQueryApplied", func(t *testing.T) {
+		m := &mockMigrator{appliedErr: dbErr}
+		_, err := sqlmigrate.GetStatus(ctx, m, ddls)
+		if !errors.Is(err, sqlmigrate.ErrQueryApplied) {
+			t.Errorf("got %v, want ErrQueryApplied", err)
+		}
+	})
+}
+
+// --- ErrExecFailed wrapping ---
+
+func TestExecFailedWrapping(t *testing.T) {
+	ctx := t.Context()
+	ddls := []sqlmigrate.Script{
+		{Migration: sqlmigrate.Migration{Name: "001_init"}, Up: "UP", Down: "DOWN"},
+	}
+
+	t.Run("Up wraps with ErrExecFailed", func(t *testing.T) {
+		m := &mockMigrator{execErr: errors.New("syntax error")}
+		_, err := sqlmigrate.Up(ctx, m, ddls, -1)
+		if !errors.Is(err, sqlmigrate.ErrExecFailed) {
+			t.Errorf("got %v, want ErrExecFailed", err)
+		}
+	})
+
+	t.Run("Down wraps with ErrExecFailed", func(t *testing.T) {
+		m := &mockMigrator{
+			applied: migs("001_init"),
+			execErr: errors.New("syntax error"),
+		}
+		_, err := sqlmigrate.Down(ctx, m, ddls, 1)
+		if !errors.Is(err, sqlmigrate.ErrExecFailed) {
+			t.Errorf("got %v, want ErrExecFailed", err)
+		}
+	})
+}
+
+// --- Context propagation ---
+
+func TestContextPropagation(t *testing.T) {
+	ctx := t.Context()
+	ddls := []sqlmigrate.Script{
+		{Migration: sqlmigrate.Migration{Name: "001_init"}, Up: "UP", Down: "DOWN"},
+	}
+
+	t.Run("Up passes context to Migrator", func(t *testing.T) {
+		m := &mockMigrator{}
+		_, _ = sqlmigrate.Up(ctx, m, ddls, -1)
+		if m.lastCtx != ctx {
+			t.Error("context not propagated to ExecUp")
+		}
+	})
+
+	t.Run("Down passes context to Migrator", func(t *testing.T) {
+		m := &mockMigrator{applied: migs("001_init")}
+		_, _ = sqlmigrate.Down(ctx, m, ddls, 1)
+		if m.lastCtx != ctx {
+			t.Error("context not propagated to ExecDown")
+		}
+	})
+
+	t.Run("Up stops on cancelled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		m := &mockMigrator{}
+		ran, err := sqlmigrate.Up(ctx, m, ddls, -1)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if len(ran) != 0 {
+			t.Errorf("applied %d on cancelled ctx, want 0", len(ran))
+		}
+	})
+
+	t.Run("Down stops on cancelled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		m := &mockMigrator{applied: migs("001_init")}
+		rolled, err := sqlmigrate.Down(ctx, m, ddls, 1)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if len(rolled) != 0 {
+			t.Errorf("rolled %d on cancelled ctx, want 0", len(rolled))
 		}
 	})
 }

@@ -73,21 +73,32 @@ func (r *Migrator) ExecDown(ctx context.Context, m sqlmigrate.Migration, sql str
 }
 
 func (r *Migrator) exec(name, suffix, label string) error {
-	path := shellQuote(unclean(filepath.Join(r.MigrationsDir, name+suffix)))
+	relPath := filepath.Join(r.MigrationsDir, name+suffix)
+	path := shellQuote(unclean(relPath))
 	cmd := strings.Replace(r.SqlCommand, "%s", path, 1)
 
 	syncCmd := strings.Replace(r.SqlCommand, "%s", shellQuote(unclean(r.LogQueryPath)), 1)
 	logPath := shellQuote(unclean(r.LogPath))
 
 	fmt.Fprintf(r.Writer, "# %s %s\n", label, name)
-	if _, err := os.Stat(filepath.Join(r.MigrationsDir, name+suffix)); err != nil {
-		fmt.Fprintln(r.Writer, "# ERROR: MISSING FILE")
+	if err := r.statFile(relPath); err != nil {
+		return fmt.Errorf("%w: %s%s: %w", sqlmigrate.ErrExecFailed, name, suffix, err)
 	}
 	fmt.Fprintln(r.Writer, cmd)
 	fmt.Fprintf(r.Writer, "%s > %s\n", syncCmd, logPath)
 	fmt.Fprintln(r.Writer)
 
 	return nil
+}
+
+// statFile checks if a file exists, using r.FS when set.
+func (r *Migrator) statFile(path string) error {
+	if r.FS != nil {
+		_, err := fs.Stat(r.FS, path)
+		return err
+	}
+	_, err := os.Stat(path)
+	return err
 }
 
 // Applied reads the migrations log file and returns applied migrations.

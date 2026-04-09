@@ -157,15 +157,26 @@ func NamesOnly(names []string) []Script {
 	return ddls
 }
 
-// isApplied returns true if the Script matches any applied entry by name or ID.
-func isApplied(d Script, applied []Migration) bool {
+// appliedSets builds name and ID lookup sets from applied migrations.
+func appliedSets(applied []Migration) (names map[string]bool, ids map[string]bool) {
+	names = make(map[string]bool, len(applied))
+	ids = make(map[string]bool, len(applied))
 	for _, a := range applied {
-		if a.Name == d.Name {
-			return true
+		names[a.Name] = true
+		if a.ID != "" {
+			ids[a.ID] = true
 		}
-		if d.ID != "" && a.ID != "" && a.ID == d.ID {
-			return true
-		}
+	}
+	return names, ids
+}
+
+// isApplied returns true if the Script matches any applied entry by name or ID.
+func isApplied(d Script, names map[string]bool, ids map[string]bool) bool {
+	if names[d.Name] {
+		return true
+	}
+	if d.ID != "" && ids[d.ID] {
+		return true
 	}
 	return false
 }
@@ -196,9 +207,11 @@ func Up(ctx context.Context, r Migrator, ddls []Script, n int) ([]Migration, err
 		return nil, fmt.Errorf("%w: %w", ErrQueryApplied, err)
 	}
 
+	names, ids := appliedSets(applied)
+
 	var pending []Script
 	for _, d := range ddls {
-		if !isApplied(d, applied) {
+		if !isApplied(d, names, ids) {
 			pending = append(pending, d)
 		}
 	}
@@ -216,7 +229,7 @@ func Up(ctx context.Context, r Migrator, ddls []Script, n int) ([]Migration, err
 			return ran, err
 		}
 		if err := r.ExecUp(ctx, d.Migration, d.Up); err != nil {
-			return ran, fmt.Errorf("%s (up): %w", d.Name, err)
+			return ran, fmt.Errorf("%w: %s (up): %w", ErrExecFailed, d.Name, err)
 		}
 		ran = append(ran, d.Migration)
 	}
@@ -264,7 +277,7 @@ func Down(ctx context.Context, r Migrator, ddls []Script, n int) ([]Migration, e
 			return ran, fmt.Errorf("%w: %s", ErrMissingScript, a.Name)
 		}
 		if err := r.ExecDown(ctx, a, d.Down); err != nil {
-			return ran, fmt.Errorf("%s (down): %w", a.Name, err)
+			return ran, fmt.Errorf("%w: %s (down): %w", ErrExecFailed, a.Name, err)
 		}
 		ran = append(ran, a)
 	}
@@ -279,9 +292,11 @@ func GetStatus(ctx context.Context, r Migrator, ddls []Script) (*Status, error) 
 		return nil, fmt.Errorf("%w: %w", ErrQueryApplied, err)
 	}
 
+	names, ids := appliedSets(applied)
+
 	var pending []Migration
 	for _, d := range ddls {
-		if !isApplied(d, applied) {
+		if !isApplied(d, names, ids) {
 			pending = append(pending, d.Migration)
 		}
 	}
