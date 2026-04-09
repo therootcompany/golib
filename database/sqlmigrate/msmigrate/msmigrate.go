@@ -2,6 +2,7 @@
 // using database/sql with github.com/microsoft/go-mssqldb.
 //
 //	db, err := sql.Open("sqlserver", "sqlserver://user:pass@host:1433?database=mydb")
+//	conn, err := db.Conn(ctx)
 package msmigrate
 
 import (
@@ -15,14 +16,15 @@ import (
 	"github.com/therootcompany/golib/database/sqlmigrate"
 )
 
-// Migrator implements sqlmigrate.Migrator using a *sql.DB with SQL Server.
+// Migrator implements sqlmigrate.Migrator using a *sql.Conn with SQL Server.
 type Migrator struct {
-	DB *sql.DB
+	Conn *sql.Conn
 }
 
-// New creates a Migrator from the given database handle.
-func New(db *sql.DB) *Migrator {
-	return &Migrator{DB: db}
+// New creates a Migrator from the given connection.
+// Use db.Conn(ctx) to obtain a *sql.Conn from a *sql.DB.
+func New(conn *sql.Conn) *Migrator {
+	return &Migrator{Conn: conn}
 }
 
 var _ sqlmigrate.Migrator = (*Migrator)(nil)
@@ -38,7 +40,7 @@ func (m *Migrator) ExecDown(ctx context.Context, mig sqlmigrate.Migration, sql s
 }
 
 func (m *Migrator) execInTx(ctx context.Context, sqlStr string) error {
-	tx, err := m.DB.BeginTx(ctx, nil)
+	tx, err := m.Conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("%w: begin: %w", sqlmigrate.ErrExecFailed, err)
 	}
@@ -58,7 +60,7 @@ func (m *Migrator) execInTx(ctx context.Context, sqlStr string) error {
 // Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist (SQL Server error 208).
 func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
-	rows, err := m.DB.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
+	rows, err := m.Conn.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
 		// SQL Server error 208: "Invalid object name '_migrations'"
 		if msErr, ok := errors.AsType[mssql.Error](err); ok && msErr.Number == 208 {

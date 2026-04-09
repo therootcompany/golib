@@ -4,6 +4,7 @@
 //	import _ "modernc.org/sqlite"
 //
 //	db, err := sql.Open("sqlite", "app.db?_pragma=foreign_keys(1)")
+//	conn, err := db.Conn(ctx)
 //
 // SQLite disables foreign key enforcement by default. The _pragma DSN
 // parameter enables it on every connection the pool opens.
@@ -18,14 +19,15 @@ import (
 	"github.com/therootcompany/golib/database/sqlmigrate"
 )
 
-// Migrator implements sqlmigrate.Migrator using a *sql.DB with SQLite.
+// Migrator implements sqlmigrate.Migrator using a *sql.Conn with SQLite.
 type Migrator struct {
-	DB *sql.DB
+	Conn *sql.Conn
 }
 
-// New creates a Migrator from the given database handle.
-func New(db *sql.DB) *Migrator {
-	return &Migrator{DB: db}
+// New creates a Migrator from the given connection.
+// Use db.Conn(ctx) to obtain a *sql.Conn from a *sql.DB.
+func New(conn *sql.Conn) *Migrator {
+	return &Migrator{Conn: conn}
 }
 
 var _ sqlmigrate.Migrator = (*Migrator)(nil)
@@ -41,7 +43,7 @@ func (m *Migrator) ExecDown(ctx context.Context, mig sqlmigrate.Migration, sql s
 }
 
 func (m *Migrator) execInTx(ctx context.Context, sqlStr string) error {
-	tx, err := m.DB.BeginTx(ctx, nil)
+	tx, err := m.Conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("%w: begin: %w", sqlmigrate.ErrExecFailed, err)
 	}
@@ -61,7 +63,7 @@ func (m *Migrator) execInTx(ctx context.Context, sqlStr string) error {
 // Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist.
 func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
-	rows, err := m.DB.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
+	rows, err := m.Conn.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
 		// SQLite reports "no such table: _migrations" — stable across versions
 		if strings.Contains(err.Error(), "no such table") {

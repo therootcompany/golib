@@ -1,12 +1,14 @@
 // Package mymigrate implements sqlmigrate.Migrator for MySQL and MariaDB
 // using database/sql with github.com/go-sql-driver/mysql.
 //
-// The *sql.DB must be opened with multiStatements=true in the DSN;
-// without it, multi-statement migration files will silently execute only
-// the first statement. The multiStatements requirement is validated lazily
-// on the first ExecUp or ExecDown call:
+// The *sql.Conn must originate from a *sql.DB opened with
+// multiStatements=true in the DSN; without it, multi-statement migration
+// files will silently execute only the first statement. The
+// multiStatements requirement is validated lazily on the first ExecUp or
+// ExecDown call:
 //
 //	db, err := sql.Open("mysql", "user:pass@tcp(host:3306)/dbname?multiStatements=true")
+//	conn, err := db.Conn(ctx)
 //
 // MySQL and MariaDB do not support transactional DDL. Statements like
 // CREATE TABLE and ALTER TABLE cause an implicit commit, so if a migration
@@ -25,17 +27,18 @@ import (
 	"github.com/therootcompany/golib/database/sqlmigrate"
 )
 
-// Migrator implements sqlmigrate.Migrator using a *sql.DB with MySQL/MariaDB.
+// Migrator implements sqlmigrate.Migrator using a *sql.Conn with MySQL/MariaDB.
 type Migrator struct {
-	DB        *sql.DB
+	Conn      *sql.Conn
 	validated bool
 }
 
-// New creates a Migrator from the given database handle.
+// New creates a Migrator from the given connection.
+// Use db.Conn(ctx) to obtain a *sql.Conn from a *sql.DB.
 // The multiStatements=true DSN requirement is validated lazily on the
 // first ExecUp or ExecDown call.
-func New(db *sql.DB) *Migrator {
-	return &Migrator{DB: db}
+func New(conn *sql.Conn) *Migrator {
+	return &Migrator{Conn: conn}
 }
 
 var _ sqlmigrate.Migrator = (*Migrator)(nil)
@@ -56,7 +59,7 @@ func (m *Migrator) exec(ctx context.Context, sqlStr string) error {
 	if !m.validated {
 		// Probe for multi-statement support. Without it, migration files
 		// that contain more than one statement silently execute only the first.
-		if _, err := m.DB.ExecContext(ctx, "DO 1; DO 1"); err != nil {
+		if _, err := m.Conn.ExecContext(ctx, "DO 1; DO 1"); err != nil {
 			return fmt.Errorf(
 				"%w: mymigrate: migration requires multiStatements=true in the MySQL DSN",
 				sqlmigrate.ErrExecFailed,
@@ -65,7 +68,7 @@ func (m *Migrator) exec(ctx context.Context, sqlStr string) error {
 		m.validated = true
 	}
 
-	tx, err := m.DB.BeginTx(ctx, nil)
+	tx, err := m.Conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("%w: begin: %w", sqlmigrate.ErrExecFailed, err)
 	}
@@ -85,7 +88,7 @@ func (m *Migrator) exec(ctx context.Context, sqlStr string) error {
 // Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist (MySQL error 1146).
 func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
-	rows, err := m.DB.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
+	rows, err := m.Conn.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
 		if mysqlErr, ok := errors.AsType[*mysql.MySQLError](err); ok && mysqlErr.Number == 1146 {
 			return nil, nil
