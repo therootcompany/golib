@@ -1,0 +1,8 @@
+.env
+LOCAL.md
+pg-todos
+internal/tododb/
+agents/tmp/
+TASKS.md
+REVIEW.md
+HANDOFF.md
