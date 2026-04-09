@@ -50,10 +50,15 @@ type Status struct {
 
 // Migrator executes migrations. Implementations handle the
 // database-specific or output-specific details.
+//
+// Database backends should wrap each migration in a transaction when the
+// database supports transactional DDL (e.g. PostgreSQL). For databases
+// that do not (e.g. MySQL), the transaction provides atomicity for DML
+// only — DDL statements are implicitly committed by the engine.
 type Migrator interface {
 	// ExecUp runs the up migration. For database migrators this executes
-	// m.Up in a transaction. For shell migrators this outputs a command
-	// referencing the .up.sql file.
+	// m.Up in a transaction (see package docs for DDL caveats). For shell
+	// migrators this outputs a command referencing the .up.sql file.
 	ExecUp(ctx context.Context, m Migration) error
 
 	// ExecDown runs the down migration.
