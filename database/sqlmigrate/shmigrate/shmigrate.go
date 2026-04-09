@@ -111,7 +111,7 @@ func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) 
 		}
 		return nil, fmt.Errorf("reading migrations log: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var applied []sqlmigrate.Migration
 	scanner := bufio.NewScanner(f)
