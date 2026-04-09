@@ -59,7 +59,7 @@ func (r *Migrator) execInTx(ctx context.Context, sql string) error {
 	if err != nil {
 		return fmt.Errorf("%w: begin: %w", sqlmigrate.ErrExecFailed, err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, sql); err != nil {
 		return fmt.Errorf("%w: exec: %w", sqlmigrate.ErrExecFailed, err)
