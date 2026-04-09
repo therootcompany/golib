@@ -4,7 +4,6 @@ go 1.25.0
 
 require (
 	github.com/go-chi/chi/v5 v5.2.5
-	github.com/joho/godotenv v1.5.1
 	github.com/jszwec/csvutil v1.10.0
 	github.com/simonfrey/jsonl v0.0.0-20240904112901-935399b9a740
 	github.com/therootcompany/golib/auth v1.1.1

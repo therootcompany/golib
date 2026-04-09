@@ -22,7 +22,7 @@ func Rot13(r io.Reader) *Transformer {
 		if err != nil {
 			return nil, err
 		}
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if buf[i] >= 'a' && buf[i] <= 'z' {
 				buf[i] = ((buf[i] - 'a' + 13) % 26) + 'a'
 			} else if buf[i] >= 'A' && buf[i] <= 'Z' {
@@ -46,7 +46,7 @@ func TestTransformer(t *testing.T) {
 	// random
 	rand.Seed(time.Now().UnixNano())
 	buf := make([]byte, 10000)
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		_, err := rand.Read(buf)
 		if err != nil {
 			t.Fatal(err)
@@ -70,7 +70,7 @@ func ExampleTransformer_rot13() {
 			if err != nil {
 				return nil, err
 			}
-			for i := 0; i < n; i++ {
+			for i := range n {
 				if buf[i] >= 'a' && buf[i] <= 'z' {
 					buf[i] = ((buf[i] - 'a' + 13) % 26) + 'a'
 				} else if buf[i] >= 'A' && buf[i] <= 'Z' {
