@@ -17,3 +17,8 @@ require (
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 )
+
+replace (
+	github.com/therootcompany/golib/database/sqlmigrate => ../../../../database/sqlmigrate
+	github.com/therootcompany/golib/database/sqlmigrate/msmigrate => ../../../../database/sqlmigrate/msmigrate
+)

@@ -70,8 +70,16 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 
+	// migrations require a single connection, not a pool
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: acquiring connection for migrations: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = conn.Close() }()
+
 	migrations := mustCollectMigrations()
-	runner := msmigrate.New(db)
+	runner := msmigrate.New(conn)
 
 	subcmd := args[0]
 	subArgs := args[1:]
