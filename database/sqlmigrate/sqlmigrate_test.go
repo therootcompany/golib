@@ -394,8 +394,8 @@ func TestDown(t *testing.T) {
 	t.Run("unknown migration in applied", func(t *testing.T) {
 		m := &mockMigrator{applied: migs("001_init", "999_unknown")}
 		_, err := sqlmigrate.Down(ctx, m, ddls, -1)
-		if !errors.Is(err, sqlmigrate.ErrMissingDown) {
-			t.Errorf("got %v, want ErrMissingDown", err)
+		if !errors.Is(err, sqlmigrate.ErrMissingScript) {
+			t.Errorf("got %v, want ErrMissingScript", err)
 		}
 	})
 
