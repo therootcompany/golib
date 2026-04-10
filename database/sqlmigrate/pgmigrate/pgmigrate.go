@@ -68,10 +68,14 @@ func (r *Migrator) execInTx(ctx context.Context, sql string) error {
 
 // Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist (PG error 42P01).
+//
+// Note: pgx.Conn.Query is lazy — when the table is missing, the 42P01
+// error may surface at rows.Err() rather than at Query(). Both sites
+// must check for it.
 func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
 	rows, err := r.Conn.Query(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
-		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "42P01" {
+		if isUndefinedTable(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("%w: %w", sqlmigrate.ErrQueryApplied, err)
@@ -87,8 +91,18 @@ func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) 
 		applied = append(applied, a)
 	}
 	if err := rows.Err(); err != nil {
+		if isUndefinedTable(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("%w: reading rows: %w", sqlmigrate.ErrQueryApplied, err)
 	}
 
 	return applied, nil
+}
+
+// isUndefinedTable reports whether err is PostgreSQL error 42P01
+// (undefined_table), which is what we get when _migrations doesn't exist yet.
+func isUndefinedTable(err error) bool {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == "42P01"
 }
