@@ -13,8 +13,8 @@ package litemigrate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/therootcompany/golib/database/sqlmigrate"
 )
@@ -62,16 +62,30 @@ func (m *Migrator) execInTx(ctx context.Context, sqlStr string) error {
 
 // Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist.
+//
+// We probe sqlite_master first rather than catching the SELECT error.
+// SQLite returns the generic SQLITE_ERROR code (1) for "no such table",
+// which is too coarse to distinguish from other errors via the typed
+// driver error. The probe lets us use errors.Is(sql.ErrNoRows) instead
+// of string-matching the error message.
 func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
+	var name string
+	err := m.Conn.QueryRowContext(
+		ctx,
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_migrations'",
+	).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: probing sqlite_master: %w", sqlmigrate.ErrQueryApplied, err)
+	}
+
 	rows, err := m.Conn.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
-		// SQLite reports "no such table: _migrations" — stable across versions
-		if strings.Contains(err.Error(), "no such table") {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("%w: %w", sqlmigrate.ErrQueryApplied, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var applied []sqlmigrate.Migration
 	for rows.Next() {

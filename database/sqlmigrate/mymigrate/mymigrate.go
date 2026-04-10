@@ -87,10 +87,13 @@ func (m *Migrator) exec(ctx context.Context, sqlStr string) error {
 
 // Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist (MySQL error 1146).
+//
+// The table-missing check is applied at both Query and rows.Err — some
+// drivers may surface the error lazily after iteration begins.
 func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
 	rows, err := m.Conn.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
-		if mysqlErr, ok := errors.AsType[*mysql.MySQLError](err); ok && mysqlErr.Number == 1146 {
+		if isUndefinedTable(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("%w: %w", sqlmigrate.ErrQueryApplied, err)
@@ -106,8 +109,18 @@ func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) 
 		applied = append(applied, a)
 	}
 	if err := rows.Err(); err != nil {
+		if isUndefinedTable(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("%w: reading rows: %w", sqlmigrate.ErrQueryApplied, err)
 	}
 
 	return applied, nil
+}
+
+// isUndefinedTable reports whether err is MySQL error 1146 (table doesn't exist),
+// which is what we get when _migrations doesn't exist yet.
+func isUndefinedTable(err error) bool {
+	mysqlErr, ok := errors.AsType[*mysql.MySQLError](err)
+	return ok && mysqlErr.Number == 1146
 }

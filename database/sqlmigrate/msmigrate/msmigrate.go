@@ -59,11 +59,13 @@ func (m *Migrator) execInTx(ctx context.Context, sqlStr string) error {
 
 // Applied returns all applied migrations from the _migrations table.
 // Returns an empty slice if the table does not exist (SQL Server error 208).
+//
+// The table-missing check is applied at both Query and rows.Err — some
+// drivers may surface the error lazily after iteration begins.
 func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
 	rows, err := m.Conn.QueryContext(ctx, "SELECT id, name FROM _migrations ORDER BY name")
 	if err != nil {
-		// SQL Server error 208: "Invalid object name '_migrations'"
-		if msErr, ok := errors.AsType[mssql.Error](err); ok && msErr.Number == 208 {
+		if isUndefinedTable(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("%w: %w", sqlmigrate.ErrQueryApplied, err)
@@ -79,8 +81,19 @@ func (m *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) 
 		applied = append(applied, a)
 	}
 	if err := rows.Err(); err != nil {
+		if isUndefinedTable(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("%w: reading rows: %w", sqlmigrate.ErrQueryApplied, err)
 	}
 
 	return applied, nil
+}
+
+// isUndefinedTable reports whether err is SQL Server error 208
+// ("Invalid object name '_migrations'"), which is what we get when
+// _migrations doesn't exist yet.
+func isUndefinedTable(err error) bool {
+	msErr, ok := errors.AsType[mssql.Error](err)
+	return ok && msErr.Number == 208
 }

@@ -36,3 +36,10 @@ io/transform/gsheet2csv/cmd/gsheet2tsv/gsheet2tsv
 # vendor/
 
 .DS_Store
+
+# Agent session files
+agents/TASKS.md
+agents/REVIEW.md
+agents/HANDOFF.md
+agents/issues.d/
+agents/tmp/
