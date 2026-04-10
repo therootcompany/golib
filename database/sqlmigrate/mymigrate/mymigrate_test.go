@@ -11,8 +11,12 @@ import (
 )
 
 // connect opens a *sql.Conn from MYSQL_TEST_DSN, skips the test if the
-// env var is unset, and isolates the test in its own database with
-// automatic cleanup.
+// env var is unset, and ensures _migrations does not exist on entry,
+// with cleanup on exit.
+//
+// Note: tests run against the database in the DSN (no per-test database)
+// because hosted MariaDB users typically have access to a single schema
+// only. Tests must not be run concurrently against the same DSN.
 func connect(t *testing.T) *sql.Conn {
 	t.Helper()
 	dsn := os.Getenv("MYSQL_TEST_DSN")
@@ -27,44 +31,20 @@ func connect(t *testing.T) *sql.Conn {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	// Use a per-test database so concurrent tests don't collide and
-	// _migrations is guaranteed not to exist on entry.
-	dbName := "mymigrate_test_" + sanitize(t.Name())
-	if _, err := db.ExecContext(ctx, "DROP DATABASE IF EXISTS "+dbName); err != nil {
-		t.Fatalf("drop database: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, "CREATE DATABASE "+dbName); err != nil {
-		t.Fatalf("create database: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = db.ExecContext(ctx, "DROP DATABASE IF EXISTS "+dbName)
-	})
-
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		t.Fatalf("conn: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
-	if _, err := conn.ExecContext(ctx, "USE "+dbName); err != nil {
-		t.Fatalf("use database: %v", err)
+	if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS _migrations"); err != nil {
+		t.Fatalf("pre-cleanup _migrations: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(ctx, "DROP TABLE IF EXISTS _migrations")
+	})
 
 	return conn
-}
-
-// sanitize converts a test name to a valid MySQL identifier suffix.
-func sanitize(s string) string {
-	out := make([]byte, 0, len(s))
-	for _, c := range []byte(s) {
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-			out = append(out, c)
-		default:
-			out = append(out, '_')
-		}
-	}
-	return string(out)
 }
 
 // TestAppliedNoMigrationsTable verifies Applied returns (nil, nil) when
