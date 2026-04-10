@@ -1,11 +1,15 @@
 package pgmigrate_test
 
 import (
+	"context"
+	"errors"
 	"os"
 	"testing"
+	"testing/fstest"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/therootcompany/golib/database/sqlmigrate"
 	"github.com/therootcompany/golib/database/sqlmigrate/pgmigrate"
 )
 
@@ -24,7 +28,7 @@ func connect(t *testing.T) *pgx.Conn {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	t.Cleanup(func() { _ = conn.Close(ctx) })
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 
 	// Use a per-test schema so concurrent tests don't collide and
 	// _migrations is guaranteed not to exist on entry.
@@ -35,8 +39,10 @@ func connect(t *testing.T) *pgx.Conn {
 	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
+	// Cleanup uses a fresh context because t.Context() is canceled
+	// before cleanup runs, which would silently fail the DROP SCHEMA.
 	t.Cleanup(func() {
-		_, _ = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+		_, _ = conn.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
 	})
 	if _, err := conn.Exec(ctx, "SET search_path TO "+schema); err != nil {
 		t.Fatalf("set search_path: %v", err)
@@ -156,5 +162,147 @@ func TestAppliedAfterDropTable(t *testing.T) {
 	}
 	if len(applied) != 0 {
 		t.Errorf("Applied() len = %d, want 0", len(applied))
+	}
+}
+
+// TestAppliedOrdering verifies Applied sorts by name (ascending), regardless
+// of insertion order. Guards against the ORDER BY clause being removed or
+// the underlying query returning rows in arbitrary order.
+func TestAppliedOrdering(t *testing.T) {
+	conn := connect(t)
+	ctx := t.Context()
+
+	if _, err := conn.Exec(ctx, `
+		CREATE TABLE _migrations (id TEXT, name TEXT);
+		INSERT INTO _migrations (id, name) VALUES ('ccc33333', '003_posts');
+		INSERT INTO _migrations (id, name) VALUES ('aaa11111', '001_init');
+		INSERT INTO _migrations (id, name) VALUES ('bbb22222', '002_users');
+	`); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	m := pgmigrate.New(conn)
+	applied, err := m.Applied(ctx)
+	if err != nil {
+		t.Fatalf("Applied() error = %v", err)
+	}
+	wantNames := []string{"001_init", "002_users", "003_posts"}
+	if len(applied) != len(wantNames) {
+		t.Fatalf("Applied() len = %d, want %d", len(applied), len(wantNames))
+	}
+	for i, w := range wantNames {
+		if applied[i].Name != w {
+			t.Errorf("applied[%d].Name = %q, want %q", i, applied[i].Name, w)
+		}
+	}
+}
+
+// TestEndToEndCycle runs a real Collect → Up → Applied → Down → Applied
+// cycle through the sqlmigrate orchestrator. Catches wiring bugs between
+// Migrator and the orchestrator that the in-package mockMigrator tests
+// cannot.
+func TestEndToEndCycle(t *testing.T) {
+	conn := connect(t)
+	ctx := t.Context()
+
+	fsys := fstest.MapFS{
+		"001_init.up.sql": {Data: []byte(`
+			CREATE TABLE _migrations (id TEXT, name TEXT);
+			CREATE TABLE test_widgets (n INTEGER);
+			INSERT INTO _migrations (name, id) VALUES ('001_init', 'aaaa1111');
+		`)},
+		"001_init.down.sql": {Data: []byte(`
+			DROP TABLE test_widgets;
+			DROP TABLE _migrations;
+		`)},
+		"002_gadgets.up.sql": {Data: []byte(`
+			CREATE TABLE test_gadgets (n INTEGER);
+			INSERT INTO _migrations (name, id) VALUES ('002_gadgets', 'bbbb2222');
+		`)},
+		"002_gadgets.down.sql": {Data: []byte(`
+			DROP TABLE test_gadgets;
+			DELETE FROM _migrations WHERE id = 'bbbb2222';
+		`)},
+	}
+	ddls, err := sqlmigrate.Collect(fsys, ".")
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	m := pgmigrate.New(conn)
+
+	ran, err := sqlmigrate.Up(ctx, m, ddls, -1)
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if len(ran) != 2 {
+		t.Fatalf("ran = %d, want 2", len(ran))
+	}
+
+	applied, err := m.Applied(ctx)
+	if err != nil {
+		t.Fatalf("Applied: %v", err)
+	}
+	if len(applied) != 2 {
+		t.Fatalf("applied = %d, want 2", len(applied))
+	}
+	if applied[0].ID != "aaaa1111" || applied[1].ID != "bbbb2222" {
+		t.Errorf("applied IDs = %+v, want [aaaa1111 bbbb2222]", applied)
+	}
+
+	for _, tbl := range []string{"test_widgets", "test_gadgets"} {
+		if _, err := conn.Exec(ctx, "SELECT COUNT(*) FROM "+tbl); err != nil {
+			t.Errorf("expected table %q to exist: %v", tbl, err)
+		}
+	}
+
+	rolled, err := sqlmigrate.Down(ctx, m, ddls, -1)
+	if err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	if len(rolled) != 2 {
+		t.Fatalf("rolled = %d, want 2", len(rolled))
+	}
+
+	applied, err = m.Applied(ctx)
+	if err != nil {
+		t.Fatalf("Applied after Down: %v", err)
+	}
+	if len(applied) != 0 {
+		t.Errorf("applied after Down = %d, want 0", len(applied))
+	}
+}
+
+// TestDMLRollback verifies that when a migration contains multiple DML
+// statements and one fails, earlier statements in the same migration are
+// rolled back. Uses an INSERT into a nonexistent table as the failure
+// trigger so the test is portable across backends.
+func TestDMLRollback(t *testing.T) {
+	conn := connect(t)
+	ctx := t.Context()
+
+	if _, err := conn.Exec(ctx, `CREATE TABLE test_rollback (n INTEGER)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	m := pgmigrate.New(conn)
+	err := m.ExecUp(ctx, sqlmigrate.Migration{Name: "rollback"}, `
+		INSERT INTO test_rollback (n) VALUES (1);
+		INSERT INTO test_rollback (n) VALUES (2);
+		INSERT INTO nonexistent_table (n) VALUES (3);
+	`)
+	if err == nil {
+		t.Fatal("ExecUp() = nil, want error")
+	}
+	if !errors.Is(err, sqlmigrate.ErrExecFailed) {
+		t.Errorf("err = %v, want ErrExecFailed", err)
+	}
+
+	var count int
+	if err := conn.QueryRow(ctx, "SELECT COUNT(*) FROM test_rollback").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("test_rollback count = %d, want 0 (rows should have been rolled back)", count)
 	}
 }
