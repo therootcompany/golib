@@ -35,7 +35,9 @@ io/transform/gsheet2csv/cmd/gsheet2tsv/gsheet2tsv
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+worktrees.git
 .DS_Store
+.*.sw*
 
 # Agent session files
 agents/TASKS.md
