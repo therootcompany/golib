@@ -634,6 +634,11 @@ func (state *State) parseAndFixupBatches(text string) error {
 		line := strings.TrimSpace(state.Lines[i])
 		migration := commentStartRe.ReplaceAllString(line, "")
 		migration = strings.TrimSpace(migration)
+		// Log entries are "id\tname" — strip ID prefix so state.Migrated
+		// holds just the name, matching the file-based names in ups/downs.
+		if tab := strings.IndexByte(migration, '\t'); tab >= 0 {
+			migration = strings.TrimSpace(migration[tab+1:])
+		}
 		if migration != "" {
 			up, down, warn, err := fixupMigration(state.MigrationsDir, migration)
 			if warn != nil {
