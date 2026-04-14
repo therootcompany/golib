@@ -57,9 +57,6 @@ type Credential struct {
 }
 
 func (c *Credential) ID() string {
-	if c.Purpose == PurposeToken {
-		return c.Name + hashIDSep + c.hashID
-	}
 	return c.Name
 }
 
