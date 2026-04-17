@@ -2,12 +2,10 @@
 //
 // # Multi-tenant schemas
 //
-// For schema-based multi-tenancy, set search_path on the connection
-// before creating the migrator:
+// Pass a Schema to target a specific PostgreSQL schema:
 //
-//	conn, _ := pgx.Connect(ctx, pgURL)
-//	_, _ = conn.Exec(ctx, fmt.Sprintf("SET search_path TO %s", pgx.Identifier{schema}.Sanitize()))
 //	runner := pgmigrate.New(conn)
+//	runner.Schema = "authz"
 //
 // Each schema gets its own _migrations table, so tenants are migrated
 // independently. The sql-migrate CLI supports this via TENANT_SCHEMA;
@@ -27,12 +25,22 @@ import (
 
 // Migrator implements sqlmigrate.Migrator using a single pgx.Conn.
 type Migrator struct {
-	Conn *pgx.Conn
+	Conn   *pgx.Conn
+	Schema string // optional; qualifies the _migrations table (e.g. "authz")
 }
 
 // New creates a Migrator from the given connection.
 func New(conn *pgx.Conn) *Migrator {
 	return &Migrator{Conn: conn}
+}
+
+// migrationsTable returns the (optionally schema-qualified) _migrations table
+// name, safe for direct interpolation into a query string.
+func (r *Migrator) migrationsTable() string {
+	if r.Schema == "" {
+		return "_migrations"
+	}
+	return pgx.Identifier{r.Schema, "_migrations"}.Sanitize()
 }
 
 // verify interface compliance at compile time
@@ -73,7 +81,7 @@ func (r *Migrator) execInTx(ctx context.Context, sql string) error {
 // error may surface at rows.Err() rather than at Query(). Both sites
 // must check for it.
 func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) {
-	rows, err := r.Conn.Query(ctx, "SELECT id, name FROM _migrations ORDER BY name")
+	rows, err := r.Conn.Query(ctx, "SELECT id, name FROM "+r.migrationsTable()+" ORDER BY name")
 	if err != nil {
 		if isUndefinedTable(err) {
 			return nil, nil
