@@ -107,6 +107,20 @@ func TestCollect(t *testing.T) {
 		}
 	})
 
+	t.Run("parses ID from schema-prefixed INSERT", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"001_init.up.sql":   {Data: []byte("CREATE TABLE authz._migrations (id CHAR(8) PRIMARY KEY, name VARCHAR(80));\nINSERT INTO authz._migrations (name, id) VALUES ('001_init', 'abcd1234');")},
+			"001_init.down.sql": {Data: []byte("DROP TABLE authz._migrations;")},
+		}
+		ddls, err := sqlmigrate.Collect(fsys, ".")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ddls[0].ID != "abcd1234" {
+			t.Errorf("ID = %q, want %q", ddls[0].ID, "abcd1234")
+		}
+	})
+
 	t.Run("no ID when no INSERT", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"001_init.up.sql":   {Data: []byte("CREATE TABLE a;")},

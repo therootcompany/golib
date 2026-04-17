@@ -65,9 +65,9 @@ type Migrator interface {
 }
 
 // idFromInsert extracts the hex ID from an INSERT INTO _migrations line.
-// Matches: INSERT INTO _migrations (name, id) VALUES ('...', '<hex>');
+// Matches: INSERT INTO [schema.]_migrations (name, id) VALUES ('...', '<hex>');
 var idFromInsert = regexp.MustCompile(
-	`(?i)INSERT\s+INTO\s+_migrations\s*\(\s*name\s*,\s*id\s*\)\s*VALUES\s*\(\s*'[^']*'\s*,\s*'([0-9a-fA-F]+)'\s*\)`,
+	`(?i)INSERT\s+INTO\s+(?:\w+\.)?_migrations\s*\(\s*name\s*,\s*id\s*\)\s*VALUES\s*\(\s*'[^']*'\s*,\s*'([0-9a-fA-F]+)'\s*\)`,
 )
 
 // Collect reads .up.sql and .down.sql files from fsys under subpath,
