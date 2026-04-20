@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Repo manages a shallow git clone used as a periodically-updated data source.
@@ -22,8 +23,9 @@ type Repo struct {
 	//   N           — aggressive gc after every Nth pull
 	GCInterval int
 
-	mu        sync.Mutex
-	pullCount int
+	mu          sync.Mutex
+	pullCount   int
+	lastSynced  time.Time
 }
 
 // New creates a new Repo instance.
@@ -175,15 +177,26 @@ func (r *Repo) syncGit() (updated bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// If another caller just finished a sync while we were waiting for the
+	// lock, skip the pull — the repo is already current.
+	if !r.lastSynced.IsZero() && time.Since(r.lastSynced) < time.Second {
+		return false, nil
+	}
+
 	if cloned, err := r.clone(); err != nil {
 		return false, err
 	} else if cloned {
+		r.lastSynced = time.Now()
 		return true, nil
 	}
 
 	updated, err = r.pull()
-	if err != nil || !updated {
-		return updated, err
+	if err != nil {
+		return false, err
+	}
+	r.lastSynced = time.Now()
+	if !updated {
+		return false, nil
 	}
 
 	if r.GCInterval > 0 {
