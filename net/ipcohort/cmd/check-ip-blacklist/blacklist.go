@@ -30,8 +30,8 @@ type IPFilter struct {
 	inboundPaths   []string
 	outboundPaths  []string
 
-	git         *gitshallow.Repo
-	httpInbound []*httpcache.Cacher
+	git          *gitshallow.Repo
+	httpInbound  []*httpcache.Cacher
 	httpOutbound []*httpcache.Cacher
 }
 
@@ -47,7 +47,6 @@ func NewFileFilter(whitelist, inbound, outbound []string) *IPFilter {
 // NewGitFilter clones/pulls gitURL into repoDir and loads the given relative
 // paths for each cohort on each update.
 func NewGitFilter(gitURL, repoDir string, whitelist, inboundRel, outboundRel []string) *IPFilter {
-	repo := gitshallow.New(gitURL, repoDir, 1, "")
 	abs := func(rel []string) []string {
 		out := make([]string, len(rel))
 		for i, p := range rel {
@@ -55,14 +54,12 @@ func NewGitFilter(gitURL, repoDir string, whitelist, inboundRel, outboundRel []s
 		}
 		return out
 	}
-	f := &IPFilter{
+	return &IPFilter{
 		whitelistPaths: whitelist,
 		inboundPaths:   abs(inboundRel),
 		outboundPaths:  abs(outboundRel),
-		git:            repo,
+		git:            gitshallow.New(gitURL, repoDir, 1, ""),
 	}
-	repo.Register(f.reloadAll)
-	return f
 }
 
 // NewHTTPFilter fetches inbound and outbound sources via HTTP;
@@ -83,7 +80,9 @@ func NewHTTPFilter(whitelist []string, inbound, outbound []HTTPSource) *IPFilter
 func (f *IPFilter) Init(lightGC bool) error {
 	switch {
 	case f.git != nil:
-		return f.git.Init(lightGC)
+		if _, err := f.git.Init(lightGC); err != nil {
+			return err
+		}
 	case len(f.httpInbound) > 0 || len(f.httpOutbound) > 0:
 		for _, c := range f.httpInbound {
 			if _, err := c.Fetch(); err != nil {
@@ -95,10 +94,8 @@ func (f *IPFilter) Init(lightGC bool) error {
 				return err
 			}
 		}
-		return f.reloadAll()
-	default:
-		return f.reloadAll()
 	}
+	return f.reloadAll()
 }
 
 func (f *IPFilter) Run(ctx context.Context, lightGC bool) {
@@ -124,7 +121,11 @@ func (f *IPFilter) Run(ctx context.Context, lightGC bool) {
 func (f *IPFilter) sync(lightGC bool) (bool, error) {
 	switch {
 	case f.git != nil:
-		return f.git.Sync(lightGC)
+		updated, err := f.git.Sync(lightGC)
+		if err != nil || !updated {
+			return updated, err
+		}
+		return true, f.reloadAll()
 	case len(f.httpInbound) > 0 || len(f.httpOutbound) > 0:
 		var anyUpdated bool
 		for _, c := range f.httpInbound {

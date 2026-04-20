@@ -12,16 +12,15 @@ import (
 const defaultTimeout = 30 * time.Second
 
 // Cacher fetches a URL to a local file, using ETag/Last-Modified to skip
-// unchanged responses. Calls registered callbacks when the file changes.
+// unchanged responses.
 type Cacher struct {
 	URL     string
 	Path    string
 	Timeout time.Duration // 0 uses 30s
 
-	mu        sync.Mutex
-	etag      string
-	lastMod   string
-	callbacks []func() error
+	mu      sync.Mutex
+	etag    string
+	lastMod string
 }
 
 // New creates a Cacher that fetches URL and writes it to path.
@@ -29,34 +28,8 @@ func New(url, path string) *Cacher {
 	return &Cacher{URL: url, Path: path}
 }
 
-// Register adds a callback invoked after each successful fetch.
-func (c *Cacher) Register(fn func() error) {
-	c.callbacks = append(c.callbacks, fn)
-}
-
-// Init fetches the URL unconditionally (no cached headers yet) and invokes
-// all callbacks, ensuring files are loaded on startup.
-func (c *Cacher) Init() error {
-	if _, err := c.Fetch(); err != nil {
-		return err
-	}
-	return c.invokeCallbacks()
-}
-
-// Sync sends a conditional GET, writes updated content, and invokes callbacks.
-// Returns whether the file was updated.
-func (c *Cacher) Sync() (updated bool, err error) {
-	updated, err = c.Fetch()
-	if err != nil || !updated {
-		return updated, err
-	}
-	return true, c.invokeCallbacks()
-}
-
 // Fetch sends a conditional GET and writes new content to Path if the server
-// responds with 200. Returns whether the file was updated. Does not invoke
-// callbacks — use Sync for the single-cacher case, or call Fetch across
-// multiple cachers and handle the reload yourself.
+// responds with 200. Returns whether the file was updated.
 func (c *Cacher) Fetch() (updated bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -117,13 +90,4 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 	}
 
 	return true, nil
-}
-
-func (c *Cacher) invokeCallbacks() error {
-	for _, fn := range c.callbacks {
-		if err := fn(); err != nil {
-			fmt.Fprintf(os.Stderr, "error: reload callback: %v\n", err)
-		}
-	}
-	return nil
 }

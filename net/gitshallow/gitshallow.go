@@ -16,8 +16,7 @@ type Repo struct {
 	Depth  int    // 0 defaults to 1, -1 for all
 	Branch string // Optional: specific branch to clone/pull
 
-	mu        sync.Mutex
-	callbacks []func() error
+	mu sync.Mutex
 }
 
 // New creates a new Repo instance.
@@ -33,27 +32,18 @@ func New(url, path string, depth int, branch string) *Repo {
 	}
 }
 
-// Register adds a callback invoked after each successful clone or pull.
-// Use this to reload files and update atomic pointers when the repo changes.
-func (r *Repo) Register(fn func() error) {
-	r.callbacks = append(r.callbacks, fn)
-}
-
-// Init clones the repo if missing, syncs once, then invokes all callbacks
-// regardless of whether git had new commits — ensuring files are loaded on startup.
-func (r *Repo) Init(lightGC bool) error {
+// Init clones the repo if missing, then syncs once.
+// Returns whether anything new was fetched.
+func (r *Repo) Init(lightGC bool) (bool, error) {
 	gitDir := filepath.Join(r.Path, ".git")
 	if _, err := os.Stat(gitDir); err != nil {
 		if _, err := r.Clone(); err != nil {
-			return err
+			return false, err
 		}
 	}
 
-	if _, err := r.syncGit(lightGC); err != nil {
-		return err
-	}
-
-	return r.invokeCallbacks()
+	updated, err := r.syncGit(lightGC)
+	return updated, err
 }
 
 // Clone performs a shallow clone (--depth N --single-branch --no-tags).
@@ -182,16 +172,10 @@ func (r *Repo) gc(aggressiveGC, pruneNow bool) error {
 	return err
 }
 
-// Sync clones if missing, pulls, runs GC, and invokes callbacks if HEAD changed.
-// Returns whether HEAD changed.
-// lightGC=false (zero value) runs aggressive GC with --prune=now to minimize disk use.
-func (r *Repo) Sync(lightGC bool) (updated bool, err error) {
-	updated, err = r.syncGit(lightGC)
-	if err != nil || !updated {
-		return updated, err
-	}
-
-	return true, r.invokeCallbacks()
+// Sync clones if missing, pulls, and runs GC. Returns whether HEAD changed.
+// lightGC=false runs aggressive GC with --prune=now to minimize disk use.
+func (r *Repo) Sync(lightGC bool) (bool, error) {
+	return r.syncGit(lightGC)
 }
 
 func (r *Repo) syncGit(lightGC bool) (updated bool, err error) {
@@ -210,13 +194,4 @@ func (r *Repo) syncGit(lightGC bool) (updated bool, err error) {
 	}
 
 	return true, r.gc(!lightGC, !lightGC)
-}
-
-func (r *Repo) invokeCallbacks() error {
-	for _, fn := range r.callbacks {
-		if err := fn(); err != nil {
-			fmt.Fprintf(os.Stderr, "error: reload callback: %v\n", err)
-		}
-	}
-	return nil
 }
