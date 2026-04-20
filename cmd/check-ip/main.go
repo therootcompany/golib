@@ -42,9 +42,31 @@ type IPCheck struct {
 	// the .tar.gz archives must already exist in <CacheDir>/maxmind/.
 	GeoIPBasicAuth string
 
-	inbound  *dataset.View[ipcohort.Cohort]
-	outbound *dataset.View[ipcohort.Cohort]
-	geo      atomic.Pointer[geoip.Databases]
+	inbound    *dataset.View[ipcohort.Cohort]
+	outbound   *dataset.View[ipcohort.Cohort]
+	geoFetcher dataset.Fetcher
+	geo        atomic.Pointer[geoip.Databases]
+}
+
+// Sync fetches the GeoIP archives (via httpcache when basic auth is set,
+// otherwise by polling their mtime) and, when the fetcher reports a change,
+// re-opens the databases and atomically swaps the active snapshot.
+func (c *IPCheck) Sync() (bool, error) {
+	updated, err := c.geoFetcher.Fetch()
+	if err != nil {
+		return false, err
+	}
+	if c.geo.Load() != nil && !updated {
+		return false, nil
+	}
+	db, err := geoip.Open(filepath.Join(c.CacheDir, "maxmind"))
+	if err != nil {
+		return false, err
+	}
+	if old := c.geo.Swap(db); old != nil {
+		_ = old.Close()
+	}
+	return true, nil
 }
 
 func main() {
@@ -135,10 +157,8 @@ func main() {
 	// httpcache conditional GETs. Without them, poll the existing tar.gz
 	// files in maxmindDir. geoip.Open extracts in-memory — no .mmdb files
 	// are written to disk.
-	maxmindDir := filepath.Join(cfg.CacheDir, "maxmind")
-	cityTarPath := filepath.Join(maxmindDir, "GeoLite2-City.tar.gz")
-	asnTarPath := filepath.Join(maxmindDir, "GeoLite2-ASN.tar.gz")
-	var geoFetcher dataset.Fetcher
+	cityTarPath := filepath.Join(cfg.CacheDir, "maxmind", "GeoLite2-City.tar.gz")
+	asnTarPath := filepath.Join(cfg.CacheDir, "maxmind", "GeoLite2-ASN.tar.gz")
 	if cfg.GeoIPBasicAuth != "" {
 		city := &httpcache.Cacher{
 			URL:        geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
@@ -154,7 +174,7 @@ func main() {
 			AuthHeader: "Authorization",
 			AuthValue:  cfg.GeoIPBasicAuth,
 		}
-		geoFetcher = dataset.FetcherFunc(func() (bool, error) {
+		cfg.geoFetcher = dataset.FetcherFunc(func() (bool, error) {
 			cityUpdated, err := city.Fetch()
 			if err != nil {
 				return false, fmt.Errorf("fetch GeoLite2-City: %w", err)
@@ -166,16 +186,11 @@ func main() {
 			return cityUpdated || asnUpdated, nil
 		})
 	} else {
-		geoFetcher = dataset.PollFiles(cityTarPath, asnTarPath)
+		cfg.geoFetcher = dataset.PollFiles(cityTarPath, asnTarPath)
 	}
-	if _, err := geoFetcher.Fetch(); err != nil {
+	if _, err := cfg.Sync(); err != nil {
 		log.Fatalf("geoip: %v", err)
 	}
-	geoDB, err := geoip.Open(maxmindDir)
-	if err != nil {
-		log.Fatalf("geoip: %v", err)
-	}
-	cfg.geo.Store(geoDB)
 	defer func() { _ = cfg.geo.Load().Close() }()
 
 	for _, ip := range ips {
@@ -198,21 +213,8 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				updated, err := geoFetcher.Fetch()
-				if err != nil {
+				if _, err := cfg.Sync(); err != nil {
 					log.Printf("geoip refresh: %v", err)
-					continue
-				}
-				if !updated {
-					continue
-				}
-				db, err := geoip.Open(maxmindDir)
-				if err != nil {
-					log.Printf("geoip refresh: %v", err)
-					continue
-				}
-				if old := cfg.geo.Swap(db); old != nil {
-					_ = old.Close()
 				}
 			}
 		}
