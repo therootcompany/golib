@@ -103,11 +103,9 @@ func main() {
 	}
 
 	maxmind := filepath.Join(cfg.CacheDir, "maxmind")
-	cityPath := filepath.Join(maxmind, geoip.CityEdition+".mmdb")
-	asnPath := filepath.Join(maxmind, geoip.ASNEdition+".mmdb")
-	geoGroup := dataset.NewGroup(geoFetcher(cfg.ConfPath, cityPath, asnPath))
+	geoGroup := dataset.NewGroup(geoFetcher(cfg.ConfPath, maxmind))
 	cfg.geo = dataset.Add(geoGroup, func() (*geoip.Databases, error) {
-		return geoip.Open(cityPath, asnPath)
+		return geoip.Open(maxmind)
 	})
 	if err := geoGroup.Load(context.Background()); err != nil {
 		log.Fatalf("geoip: %v", err)
@@ -135,7 +133,9 @@ func main() {
 // With a GeoIP.conf (explicit path or auto-discovered) both files are
 // downloaded via httpcache conditional GETs; otherwise the files are
 // expected to exist on disk and are polled for out-of-band changes.
-func geoFetcher(confPath, cityPath, asnPath string) dataset.Fetcher {
+func geoFetcher(confPath, dir string) dataset.Fetcher {
+	cityPath := filepath.Join(dir, geoip.CityEdition+".mmdb")
+	asnPath := filepath.Join(dir, geoip.ASNEdition+".mmdb")
 	if confPath == "" {
 		for _, p := range geoip.DefaultConfPaths() {
 			if _, err := os.Stat(p); err == nil {

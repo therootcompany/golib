@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"path/filepath"
 
 	"github.com/oschwald/geoip2-golang"
 )
@@ -14,8 +15,10 @@ type Databases struct {
 	ASN  *geoip2.Reader
 }
 
-// Open opens city and ASN .mmdb files from the given paths.
-func Open(cityPath, asnPath string) (*Databases, error) {
+// Open opens <dir>/GeoLite2-City.mmdb and <dir>/GeoLite2-ASN.mmdb.
+func Open(dir string) (*Databases, error) {
+	cityPath := filepath.Join(dir, CityEdition+".mmdb")
+	asnPath := filepath.Join(dir, ASNEdition+".mmdb")
 	city, err := geoip2.Open(cityPath)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", cityPath, err)
