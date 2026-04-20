@@ -1,17 +1,17 @@
 // Package dataset manages values that are periodically re-fetched from an
 // upstream source and hot-swapped behind atomic pointers. Consumers read via
-// View.Value (lock-free); a single Load drives any number of views off one
-// Fetcher, so shared sources (one git pull, one zip download) don't get
-// re-fetched per view.
+// View.Value (lock-free); a single Load drives any number of views off a
+// shared set of Fetchers, so upstreams (one git pull, one tar.gz download)
+// don't get re-fetched per view.
 //
 // Typical lifecycle:
 //
-//	g := dataset.NewGroup(repo) // *gitshallow.Repo satisfies Fetcher
-//	inbound  := dataset.Add(g, func() (*ipcohort.Cohort, error) { ... })
-//	outbound := dataset.Add(g, func() (*ipcohort.Cohort, error) { ... })
-//	if err := g.Load(ctx); err != nil { ... }        // initial populate
-//	go g.Tick(ctx, 47*time.Minute)                   // background refresh
-//	current := inbound.Value()                        // lock-free read
+//	s := dataset.NewSet(repo) // *gitshallow.Repo satisfies Fetcher
+//	inbound  := dataset.Add(s, func() (*ipcohort.Cohort, error) { ... })
+//	outbound := dataset.Add(s, func() (*ipcohort.Cohort, error) { ... })
+//	if err := s.Load(ctx); err != nil { ... }       // initial populate
+//	go s.Tick(ctx, 47*time.Minute, onError)         // background refresh
+//	current := inbound.Value()                      // lock-free read
 package dataset
 
 import (
@@ -34,7 +34,7 @@ type FetcherFunc func() (bool, error)
 
 func (f FetcherFunc) Fetch() (bool, error) { return f() }
 
-// NopFetcher always reports no update. Use for groups whose source never
+// NopFetcher always reports no update. Use for sets whose source never
 // changes (test fixtures, embedded data).
 type NopFetcher struct{}
 
@@ -44,8 +44,8 @@ func (NopFetcher) Fetch() (bool, error) { return false, nil }
 // "updated" whenever any file's size or modtime has changed since the last
 // call. The first call always reports updated=true.
 //
-// Use for Group's whose source is local files that may be edited out of band
-// (e.g. a user-provided --inbound list) — pair with Group.Tick to pick up
+// Use for Sets whose source is local files that may be edited out of band
+// (e.g. a user-provided --inbound list) — pair with Set.Tick to pick up
 // changes automatically.
 func PollFiles(paths ...string) Fetcher {
 	return &filePoller{paths: paths, stats: make(map[string]fileStat, len(paths))}
@@ -80,13 +80,16 @@ func (p *filePoller) Fetch() (bool, error) {
 	return changed, nil
 }
 
-// Group ties one Fetcher to one or more views. A Load call fetches once and,
-// on the first call or when the source reports a change, reloads every view
-// and atomically swaps its current value.
-type Group struct {
-	fetcher Fetcher
-	views   []reloader
-	loaded  atomic.Bool
+// Set ties one or more Fetchers to one or more views. A Load call fetches
+// each source and, on the first call or when any source reports a change,
+// reloads every view and atomically swaps its current value. Use multiple
+// fetchers when a single logical dataset is spread across several archives
+// (e.g. GeoLite2 City + ASN); a single fetcher is the common case (one git
+// repo, one tar.gz).
+type Set struct {
+	fetchers []Fetcher
+	views    []reloader
+	loaded   atomic.Bool
 }
 
 // reloader is a type-erased handle to a View's reload function.
@@ -94,22 +97,29 @@ type reloader interface {
 	reload() error
 }
 
-// NewGroup creates a Group backed by fetcher.
-func NewGroup(fetcher Fetcher) *Group {
-	return &Group{fetcher: fetcher}
+// NewSet creates a Set backed by fetchers. All fetchers are called on every
+// Load; the set reloads its views whenever any one of them reports a change.
+func NewSet(fetchers ...Fetcher) *Set {
+	return &Set{fetchers: fetchers}
 }
 
-// Load fetches upstream and, on the first call or whenever the fetcher reports
-// a change, reloads every view and atomically installs the new values.
-func (g *Group) Load(ctx context.Context) error {
-	updated, err := g.fetcher.Fetch()
-	if err != nil {
-		return err
+// Load fetches upstream and, on the first call or whenever any fetcher
+// reports a change, reloads every view and atomically installs the new values.
+func (s *Set) Load(ctx context.Context) error {
+	updated := false
+	for _, f := range s.fetchers {
+		u, err := f.Fetch()
+		if err != nil {
+			return err
+		}
+		if u {
+			updated = true
+		}
 	}
-	if g.loaded.Load() && !updated {
+	if s.loaded.Load() && !updated {
 		return nil
 	}
-	for _, v := range g.views {
+	for _, v := range s.views {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -117,14 +127,14 @@ func (g *Group) Load(ctx context.Context) error {
 			return err
 		}
 	}
-	g.loaded.Store(true)
+	s.loaded.Store(true)
 	return nil
 }
 
 // Tick calls Load every interval until ctx is done. Load errors are passed to
 // onError (if non-nil) and do not stop the loop; callers choose whether to log,
-// count, page, or ignore. Run in a goroutine: `go g.Tick(ctx, d, onError)`.
-func (g *Group) Tick(ctx context.Context, interval time.Duration, onError func(error)) {
+// count, page, or ignore. Run in a goroutine: `go s.Tick(ctx, d, onError)`.
+func (s *Set) Tick(ctx context.Context, interval time.Duration, onError func(error)) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -132,20 +142,20 @@ func (g *Group) Tick(ctx context.Context, interval time.Duration, onError func(e
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := g.Load(ctx); err != nil && onError != nil {
+			if err := s.Load(ctx); err != nil && onError != nil {
 				onError(err)
 			}
 		}
 	}
 }
 
-// View is a read-only handle to one dataset inside a Group.
+// View is a read-only handle to one dataset inside a Set.
 type View[T any] struct {
 	loader func() (*T, error)
 	ptr    atomic.Pointer[T]
 }
 
-// Value returns the current snapshot. Nil before the Group is first loaded.
+// Value returns the current snapshot. Nil before the Set is first loaded.
 func (v *View[T]) Value() *T {
 	return v.ptr.Load()
 }
@@ -159,10 +169,10 @@ func (v *View[T]) reload() error {
 	return nil
 }
 
-// Add registers a new view in g and returns it. Call after NewGroup and
-// before the first Load.
-func Add[T any](g *Group, loader func() (*T, error)) *View[T] {
+// Add registers a new view in s and returns it. Call after NewSet and before
+// the first Load.
+func Add[T any](s *Set, loader func() (*T, error)) *View[T] {
 	v := &View[T]{loader: loader}
-	g.views = append(g.views, v)
+	s.views = append(s.views, v)
 	return v
 }

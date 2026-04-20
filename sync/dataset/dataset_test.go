@@ -21,9 +21,9 @@ func (f *countFetcher) Fetch() (bool, error) {
 	return f.updated, f.err
 }
 
-func TestGroup_LoadPopulatesAllViews(t *testing.T) {
+func TestSet_LoadPopulatesAllViews(t *testing.T) {
 	f := &countFetcher{}
-	g := dataset.NewGroup(f)
+	g := dataset.NewSet(f)
 
 	var aCalls, bCalls int
 	a := dataset.Add(g, func() (*string, error) {
@@ -54,9 +54,9 @@ func TestGroup_LoadPopulatesAllViews(t *testing.T) {
 	}
 }
 
-func TestGroup_SecondLoadSkipsUnchanged(t *testing.T) {
+func TestSet_SecondLoadSkipsUnchanged(t *testing.T) {
 	f := &countFetcher{updated: false}
-	g := dataset.NewGroup(f)
+	g := dataset.NewSet(f)
 	calls := 0
 	dataset.Add(g, func() (*string, error) {
 		calls++
@@ -77,9 +77,9 @@ func TestGroup_SecondLoadSkipsUnchanged(t *testing.T) {
 	}
 }
 
-func TestGroup_LoadOnUpdateSwaps(t *testing.T) {
+func TestSet_LoadOnUpdateSwaps(t *testing.T) {
 	f := &countFetcher{updated: true}
-	g := dataset.NewGroup(f)
+	g := dataset.NewSet(f)
 	n := 0
 	v := dataset.Add(g, func() (*int, error) {
 		n++
@@ -96,8 +96,8 @@ func TestGroup_LoadOnUpdateSwaps(t *testing.T) {
 	}
 }
 
-func TestGroup_ValueBeforeLoad(t *testing.T) {
-	g := dataset.NewGroup(dataset.NopFetcher{})
+func TestSet_ValueBeforeLoad(t *testing.T) {
+	g := dataset.NewSet(dataset.NopFetcher{})
 	v := dataset.Add(g, func() (*string, error) {
 		s := "x"
 		return &s, nil
@@ -107,9 +107,9 @@ func TestGroup_ValueBeforeLoad(t *testing.T) {
 	}
 }
 
-func TestGroup_FetchError(t *testing.T) {
+func TestSet_FetchError(t *testing.T) {
 	f := &countFetcher{err: errors.New("offline")}
-	g := dataset.NewGroup(f)
+	g := dataset.NewSet(f)
 	dataset.Add(g, func() (*string, error) {
 		s := "x"
 		return &s, nil
@@ -119,8 +119,8 @@ func TestGroup_FetchError(t *testing.T) {
 	}
 }
 
-func TestGroup_LoaderError(t *testing.T) {
-	g := dataset.NewGroup(dataset.NopFetcher{})
+func TestSet_LoaderError(t *testing.T) {
+	g := dataset.NewSet(dataset.NopFetcher{})
 	dataset.Add(g, func() (*string, error) {
 		return nil, errors.New("parse fail")
 	})

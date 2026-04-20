@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -44,7 +43,7 @@ type IPCheck struct {
 
 	inbound  *dataset.View[ipcohort.Cohort]
 	outbound *dataset.View[ipcohort.Cohort]
-	geo      atomic.Pointer[geoip.Databases]
+	geo      *dataset.View[geoip.Databases]
 }
 
 func main() {
@@ -114,20 +113,20 @@ func main() {
 
 	// Blocklists: git repo with inbound + outbound IP cohort files.
 	repo := gitshallow.New(cfg.RepoURL, filepath.Join(cfg.CacheDir, "bitwire-it"), 1, "")
-	group := dataset.NewGroup(repo)
-	cfg.inbound = dataset.Add(group, func() (*ipcohort.Cohort, error) {
+	blocklists := dataset.NewSet(repo)
+	cfg.inbound = dataset.Add(blocklists, func() (*ipcohort.Cohort, error) {
 		return ipcohort.LoadFiles(
 			repo.FilePath("tables/inbound/single_ips.txt"),
 			repo.FilePath("tables/inbound/networks.txt"),
 		)
 	})
-	cfg.outbound = dataset.Add(group, func() (*ipcohort.Cohort, error) {
+	cfg.outbound = dataset.Add(blocklists, func() (*ipcohort.Cohort, error) {
 		return ipcohort.LoadFiles(
 			repo.FilePath("tables/outbound/single_ips.txt"),
 			repo.FilePath("tables/outbound/networks.txt"),
 		)
 	})
-	if err := group.Load(context.Background()); err != nil {
+	if err := blocklists.Load(context.Background()); err != nil {
 		log.Fatalf("blocklists: %v", err)
 	}
 
@@ -138,45 +137,34 @@ func main() {
 	maxmindDir := filepath.Join(cfg.CacheDir, "maxmind")
 	cityTarPath := filepath.Join(maxmindDir, "GeoLite2-City.tar.gz")
 	asnTarPath := filepath.Join(maxmindDir, "GeoLite2-ASN.tar.gz")
-	var geoFetcher dataset.Fetcher
+	var geoSet *dataset.Set
 	if cfg.GeoIPBasicAuth != "" {
-		city := &httpcache.Cacher{
-			URL:        geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
-			Path:       cityTarPath,
-			MaxAge:     3 * 24 * time.Hour,
-			AuthHeader: "Authorization",
-			AuthValue:  cfg.GeoIPBasicAuth,
-		}
-		asn := &httpcache.Cacher{
-			URL:        geoip.DownloadBase + "/GeoLite2-ASN/download?suffix=tar.gz",
-			Path:       asnTarPath,
-			MaxAge:     3 * 24 * time.Hour,
-			AuthHeader: "Authorization",
-			AuthValue:  cfg.GeoIPBasicAuth,
-		}
-		geoFetcher = dataset.FetcherFunc(func() (bool, error) {
-			cityUpdated, err := city.Fetch()
-			if err != nil {
-				return false, fmt.Errorf("fetch GeoLite2-City: %w", err)
-			}
-			asnUpdated, err := asn.Fetch()
-			if err != nil {
-				return false, fmt.Errorf("fetch GeoLite2-ASN: %w", err)
-			}
-			return cityUpdated || asnUpdated, nil
-		})
+		geoSet = dataset.NewSet(
+			&httpcache.Cacher{
+				URL:        geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
+				Path:       cityTarPath,
+				MaxAge:     3 * 24 * time.Hour,
+				AuthHeader: "Authorization",
+				AuthValue:  cfg.GeoIPBasicAuth,
+			},
+			&httpcache.Cacher{
+				URL:        geoip.DownloadBase + "/GeoLite2-ASN/download?suffix=tar.gz",
+				Path:       asnTarPath,
+				MaxAge:     3 * 24 * time.Hour,
+				AuthHeader: "Authorization",
+				AuthValue:  cfg.GeoIPBasicAuth,
+			},
+		)
 	} else {
-		geoFetcher = dataset.PollFiles(cityTarPath, asnTarPath)
+		geoSet = dataset.NewSet(dataset.PollFiles(cityTarPath, asnTarPath))
 	}
-	if _, err := geoFetcher.Fetch(); err != nil {
+	cfg.geo = dataset.Add(geoSet, func() (*geoip.Databases, error) {
+		return geoip.Open(maxmindDir)
+	})
+	if err := geoSet.Load(context.Background()); err != nil {
 		log.Fatalf("geoip: %v", err)
 	}
-	geoDB, err := geoip.Open(maxmindDir)
-	if err != nil {
-		log.Fatalf("geoip: %v", err)
-	}
-	cfg.geo.Store(geoDB)
-	defer func() { _ = cfg.geo.Load().Close() }()
+	defer func() { _ = cfg.geo.Value().Close() }()
 
 	for _, ip := range ips {
 		cfg.writeText(os.Stdout, cfg.lookup(ip))
@@ -187,36 +175,12 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go group.Tick(ctx, refreshInterval, func(err error) {
+	go blocklists.Tick(ctx, refreshInterval, func(err error) {
 		log.Printf("blocklists refresh: %v", err)
 	})
-	go func() {
-		t := time.NewTicker(refreshInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				updated, err := geoFetcher.Fetch()
-				if err != nil {
-					log.Printf("geoip refresh: %v", err)
-					continue
-				}
-				if !updated {
-					continue
-				}
-				db, err := geoip.Open(maxmindDir)
-				if err != nil {
-					log.Printf("geoip refresh: %v", err)
-					continue
-				}
-				if old := cfg.geo.Swap(db); old != nil {
-					_ = old.Close()
-				}
-			}
-		}
-	}()
+	go geoSet.Tick(ctx, refreshInterval, func(err error) {
+		log.Printf("geoip refresh: %v", err)
+	})
 	if err := cfg.serve(ctx); err != nil {
 		log.Fatalf("serve: %v", err)
 	}

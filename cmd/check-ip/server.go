@@ -34,7 +34,7 @@ func (c *IPCheck) lookup(ip string) Result {
 		Blocked:         in || out,
 		BlockedInbound:  in,
 		BlockedOutbound: out,
-		Geo:             c.geo.Load().Lookup(ip),
+		Geo:             c.geo.Value().Lookup(ip),
 	}
 }
 
