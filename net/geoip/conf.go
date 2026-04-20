@@ -2,8 +2,7 @@ package geoip
 
 import (
 	"bufio"
-	"fmt"
-	"os"
+	"errors"
 	"strings"
 )
 
@@ -15,18 +14,16 @@ type Conf struct {
 	DatabaseDirectory string
 }
 
-// ParseConf reads a geoipupdate-style config file (whitespace-separated
-// key/value pairs, # comments). Compatible with GeoIP.conf files used by
-// the official geoipupdate tool.
-func ParseConf(path string) (*Conf, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+// ErrMissingCredentials is returned by ParseConf when AccountID or LicenseKey
+// is absent from the input.
+var ErrMissingCredentials = errors.New("AccountID and LicenseKey are required")
 
+// ParseConf parses a geoipupdate-style config (whitespace-separated key/value
+// pairs, # comments). Compatible with GeoIP.conf files used by the official
+// geoipupdate tool.
+func ParseConf(s string) (*Conf, error) {
 	kv := make(map[string]string)
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(strings.NewReader(s))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -45,7 +42,7 @@ func ParseConf(path string) (*Conf, error) {
 		DatabaseDirectory: kv["DatabaseDirectory"],
 	}
 	if c.AccountID == "" || c.LicenseKey == "" {
-		return nil, fmt.Errorf("AccountID and LicenseKey are required in %s", path)
+		return nil, ErrMissingCredentials
 	}
 	if ids := kv["EditionIDs"]; ids != "" {
 		c.EditionIDs = strings.Fields(ids)

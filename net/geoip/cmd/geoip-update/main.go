@@ -17,7 +17,12 @@ func main() {
 	freshDays := flag.Int("fresh-days", 3, "skip download if file is younger than N days")
 	flag.Parse()
 
-	cfg, err := geoip.ParseConf(*configPath)
+	data, err := os.ReadFile(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	cfg, err := geoip.ParseConf(string(data))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

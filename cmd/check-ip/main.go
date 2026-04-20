@@ -104,7 +104,11 @@ func main() {
 		}
 	}
 	if cfg.GeoIPConfPath != "" {
-		conf, err := geoip.ParseConf(cfg.GeoIPConfPath)
+		data, err := os.ReadFile(cfg.GeoIPConfPath)
+		if err != nil {
+			log.Fatalf("geoip-conf: %v", err)
+		}
+		conf, err := geoip.ParseConf(string(data))
 		if err != nil {
 			log.Fatalf("geoip-conf: %v", err)
 		}

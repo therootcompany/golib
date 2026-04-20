@@ -31,8 +31,8 @@ func geoipConf(t *testing.T) *geoip.Conf {
 	dir, _ := filepath.Abs(".")
 	for {
 		p := filepath.Join(dir, "GeoIP.conf")
-		if _, err := os.Stat(p); err == nil {
-			cfg, err := geoip.ParseConf(p)
+		if data, err := os.ReadFile(p); err == nil {
+			cfg, err := geoip.ParseConf(string(data))
 			if err != nil {
 				t.Fatalf("GeoIP.conf: %v", err)
 			}
