@@ -84,9 +84,6 @@ func main() {
 		cfg.CacheDir = d
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	repo := gitshallow.New(cfg.RepoURL, filepath.Join(cfg.CacheDir, "bitwire-it"), 1, "")
 	group := dataset.NewGroup(repo)
 	cfg.inbound = dataset.Add(group, func() (*ipcohort.Cohort, error) {
@@ -101,12 +98,9 @@ func main() {
 			repo.FilePath("tables/outbound/networks.txt"),
 		)
 	})
-	if err := group.Load(ctx); err != nil {
+	if err := group.Load(context.Background()); err != nil {
 		log.Fatalf("blocklists: %v", err)
 	}
-	go group.Tick(ctx, refreshInterval, func(err error) {
-		log.Printf("refresh: %v", err)
-	})
 
 	maxmind := filepath.Join(cfg.CacheDir, "maxmind")
 	geo, err := geoip.OpenDatabases(
@@ -123,6 +117,12 @@ func main() {
 	if cfg.Bind == "" {
 		return
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go group.Tick(ctx, refreshInterval, func(err error) {
+		log.Printf("refresh: %v", err)
+	})
 	if err := cfg.serve(ctx); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
