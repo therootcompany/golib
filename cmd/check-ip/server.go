@@ -12,8 +12,6 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/net/geoip"
-	"github.com/therootcompany/golib/net/ipcohort"
-	"github.com/therootcompany/golib/sync/dataset"
 )
 
 // Result is the JSON verdict for a single IP.
@@ -25,71 +23,73 @@ type Result struct {
 	Geo             geoip.Info `json:"geo,omitzero"`
 }
 
-func serve(
-	ctx context.Context,
-	bind string,
-	inbound, outbound *dataset.View[ipcohort.Cohort],
-	geo *geoip.Databases,
-) error {
-	handle := func(w http.ResponseWriter, r *http.Request) {
-		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
-		if ip == "" {
-			ip = clientIP(r)
-		}
-		in := inbound.Value().Contains(ip)
-		out := outbound.Value().Contains(ip)
-		res := Result{
-			IP:              ip,
-			Blocked:         in || out,
-			BlockedInbound:  in,
-			BlockedOutbound: out,
-			Geo:             geo.Lookup(ip),
-		}
-
-		if r.URL.Query().Get("format") == "json" ||
-			strings.Contains(r.Header.Get("Accept"), "application/json") {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			enc := json.NewEncoder(w)
-			enc.SetIndent("", "  ")
-			_ = enc.Encode(res)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		switch {
-		case in && out:
-			fmt.Fprintf(w, "%s is BLOCKED (inbound + outbound)\n", ip)
-		case in:
-			fmt.Fprintf(w, "%s is BLOCKED (inbound)\n", ip)
-		case out:
-			fmt.Fprintf(w, "%s is BLOCKED (outbound)\n", ip)
-		default:
-			fmt.Fprintf(w, "%s is allowed\n", ip)
-		}
-		var parts []string
-		if res.Geo.City != "" {
-			parts = append(parts, res.Geo.City)
-		}
-		if res.Geo.Region != "" {
-			parts = append(parts, res.Geo.Region)
-		}
-		if res.Geo.Country != "" {
-			parts = append(parts, fmt.Sprintf("%s (%s)", res.Geo.Country, res.Geo.CountryISO))
-		}
-		if len(parts) > 0 {
-			fmt.Fprintf(w, "  Location: %s\n", strings.Join(parts, ", "))
-		}
-		if res.Geo.ASN != 0 {
-			fmt.Fprintf(w, "  ASN:      AS%d %s\n", res.Geo.ASN, res.Geo.ASNOrg)
+func (c *IPCheck) handle(w http.ResponseWriter, r *http.Request) {
+	ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+	if ip == "" {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			first, _, _ := strings.Cut(xff, ",")
+			ip = strings.TrimSpace(first)
+		} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			ip = host
+		} else {
+			ip = r.RemoteAddr
 		}
 	}
+	in := c.inbound.Value().Contains(ip)
+	out := c.outbound.Value().Contains(ip)
+	res := Result{
+		IP:              ip,
+		Blocked:         in || out,
+		BlockedInbound:  in,
+		BlockedOutbound: out,
+		Geo:             c.geo.Lookup(ip),
+	}
 
+	if r.URL.Query().Get("format") == "json" ||
+		strings.Contains(r.Header.Get("Accept"), "application/json") {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(res)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	switch {
+	case in && out:
+		fmt.Fprintf(w, "%s is BLOCKED (inbound + outbound)\n", ip)
+	case in:
+		fmt.Fprintf(w, "%s is BLOCKED (inbound)\n", ip)
+	case out:
+		fmt.Fprintf(w, "%s is BLOCKED (outbound)\n", ip)
+	default:
+		fmt.Fprintf(w, "%s is allowed\n", ip)
+	}
+	var parts []string
+	if res.Geo.City != "" {
+		parts = append(parts, res.Geo.City)
+	}
+	if res.Geo.Region != "" {
+		parts = append(parts, res.Geo.Region)
+	}
+	if res.Geo.Country != "" {
+		parts = append(parts, fmt.Sprintf("%s (%s)", res.Geo.Country, res.Geo.CountryISO))
+	}
+	if len(parts) > 0 {
+		fmt.Fprintf(w, "  Location: %s\n", strings.Join(parts, ", "))
+	}
+	if res.Geo.ASN != 0 {
+		fmt.Fprintf(w, "  ASN:      AS%d %s\n", res.Geo.ASN, res.Geo.ASNOrg)
+	}
+}
+
+func (c *IPCheck) serve(ctx context.Context) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /check", handle)
-	mux.HandleFunc("GET /{$}", handle)
+	mux.HandleFunc("GET /check", c.handle)
+	mux.HandleFunc("GET /{$}", c.handle)
 
 	srv := &http.Server{
-		Addr:        bind,
+		Addr:        c.Bind,
 		Handler:     mux,
 		BaseContext: func(_ net.Listener) context.Context { return ctx },
 	}
@@ -100,22 +100,9 @@ func serve(
 		_ = srv.Shutdown(shutCtx)
 	}()
 
-	log.Printf("listening on %s", bind)
+	log.Printf("listening on %s", c.Bind)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
-}
-
-// clientIP extracts the caller's IP, honoring X-Forwarded-For when present.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		first, _, _ := strings.Cut(xff, ",")
-		return strings.TrimSpace(first)
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
