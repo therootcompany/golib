@@ -5,102 +5,65 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 	"time"
-
 )
 
-// inbound blocklist
+// Default HTTP sources for the bitwire-it blocklist.
 const (
 	inboundSingleURL  = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/inbound/single_ips.txt"
 	inboundNetworkURL = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/inbound/networks.txt"
-)
-
-// outbound blocklist
-const (
 	outboundSingleURL  = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/outbound/single_ips.txt"
 	outboundNetworkURL = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/outbound/networks.txt"
 )
 
-func defaultBlocklistDir() string {
+func defaultCacheDir(sub string) string {
 	base, err := os.UserCacheDir()
 	if err != nil {
-		return os.Getenv("HOME") + "/.cache/bitwire-it"
+		base = filepath.Join(os.Getenv("HOME"), ".cache")
 	}
-	return base + "/bitwire-it"
+	return filepath.Join(base, sub)
 }
 
 func main() {
-	dataDir := flag.String("data-dir", "", "blocklist cache dir (default ~/.cache/bitwire-it)")
-	cityDBPath := flag.String("city-db", "", "path to GeoLite2-City.mmdb (overrides -geoip-conf)")
-	asnDBPath := flag.String("asn-db", "", "path to GeoLite2-ASN.mmdb (overrides -geoip-conf)")
-	geoipConf := flag.String("geoip-conf", "", "path to GeoIP.conf; auto-downloads City+ASN into data-dir")
-	gitURL := flag.String("git", "", "clone/pull blocklist from this git URL into data-dir")
+	// Blocklist source flags — all optional; defaults pull from bitwire-it via HTTP.
+	dataDir   := flag.String("data-dir", "", "blocklist cache dir (default ~/.cache/bitwire-it)")
+	gitURL    := flag.String("git", "", "git URL to clone/pull blocklist from (alternative to HTTP)")
+	whitelist := flag.String("whitelist", "", "path to whitelist file (overrides block)")
+	inbound   := flag.String("inbound", "", "comma-separated paths to inbound blocklist files")
+	outbound  := flag.String("outbound", "", "comma-separated paths to outbound blocklist files")
+
+	// GeoIP flags — auto-discovered from ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf.
+	geoipConf := flag.String("geoip-conf", "", "path to GeoIP.conf (auto-discovered if absent)")
+	cityDB    := flag.String("city-db", "", "path to GeoLite2-City.mmdb (skips auto-download)")
+	asnDB     := flag.String("asn-db", "", "path to GeoLite2-ASN.mmdb (skips auto-download)")
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <ip-address>\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  Blocklists are fetched via HTTP by default (use -git for git source).\n")
-		fmt.Fprintf(os.Stderr, "  Pass a .txt/.csv path as the first arg to load a single local file.\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
-	if flag.NArg() < 1 {
+	if flag.NArg() != 1 {
 		flag.Usage()
 		os.Exit(1)
 	}
-
-	// First arg is either a local file or the IP to check.
-	var dataPath, ipStr string
-	if flag.NArg() >= 2 || strings.HasSuffix(flag.Arg(0), ".txt") || strings.HasSuffix(flag.Arg(0), ".csv") {
-		dataPath = flag.Arg(0)
-		ipStr = flag.Arg(1)
-	} else {
-		ipStr = flag.Arg(0)
-	}
-	if *dataDir != "" {
-		dataPath = *dataDir
-	}
-	if dataPath == "" {
-		dataPath = defaultBlocklistDir()
-	}
+	ipStr := flag.Arg(0)
 
 	// -- Blocklist ----------------------------------------------------------
 
-	var src *Sources
-	switch {
-	case *gitURL != "":
-		src = newGitSources(*gitURL, dataPath,
-			nil,
-			[]string{"tables/inbound/single_ips.txt", "tables/inbound/networks.txt"},
-			[]string{"tables/outbound/single_ips.txt", "tables/outbound/networks.txt"},
-		)
-	case strings.HasSuffix(dataPath, ".txt") || strings.HasSuffix(dataPath, ".csv"):
-		src = newFileSources(nil, []string{dataPath}, nil)
-	default:
-		src = newHTTPSources(
-			nil,
-			[]HTTPSource{
-				{inboundSingleURL, dataPath + "/inbound_single_ips.txt"},
-				{inboundNetworkURL, dataPath + "/inbound_networks.txt"},
-			},
-			[]HTTPSource{
-				{outboundSingleURL, dataPath + "/outbound_single_ips.txt"},
-				{outboundNetworkURL, dataPath + "/outbound_networks.txt"},
-			},
-		)
-	}
-
-	blGroup, whitelist, inbound, outbound := src.Datasets()
+	src := buildSources(*gitURL, *dataDir, *whitelist, *inbound, *outbound)
+	blGroup, whitelistDS, inboundDS, outboundDS := src.Datasets()
 	if err := blGroup.Init(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: blocklist: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Loaded inbound=%d outbound=%d\n",
-		cohortSize(inbound), cohortSize(outbound))
+		cohortSize(inboundDS), cohortSize(outboundDS))
 
 	// -- GeoIP (optional) --------------------------------------------------
 
-	geo, err := setupGeo(*geoipConf, *cityDBPath, *asnDBPath)
+	geo, err := setupGeo(*geoipConf, *cityDB, *asnDB)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -119,8 +82,8 @@ func main() {
 
 	// -- Check and report --------------------------------------------------
 
-	blockedIn := isBlocked(ipStr, whitelist, inbound)
-	blockedOut := isBlocked(ipStr, whitelist, outbound)
+	blockedIn  := isBlocked(ipStr, whitelistDS, inboundDS)
+	blockedOut := isBlocked(ipStr, whitelistDS, outboundDS)
 
 	switch {
 	case blockedIn && blockedOut:

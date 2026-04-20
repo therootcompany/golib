@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 
 	"github.com/therootcompany/golib/net/dataset"
 	"github.com/therootcompany/golib/net/gitshallow"
@@ -9,62 +10,76 @@ import (
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
-// HTTPSource pairs a remote URL with a local cache path.
-type HTTPSource struct {
-	URL  string
-	Path string
-}
-
-// Sources holds fetch configuration for the three blocklist cohorts.
-// It knows how to pull data from git or HTTP, but owns no atomic state.
+// Sources holds fetch configuration for the blocklist cohorts.
 type Sources struct {
 	whitelistPaths []string
 	inboundPaths   []string
 	outboundPaths  []string
-
-	syncs []dataset.Syncer // all syncable sources
+	syncs          []dataset.Syncer
 }
 
-func newFileSources(whitelist, inbound, outbound []string) *Sources {
-	return &Sources{
-		whitelistPaths: whitelist,
-		inboundPaths:   inbound,
-		outboundPaths:  outbound,
-	}
-}
-
-func newGitSources(gitURL, repoDir string, whitelist, inboundRel, outboundRel []string) *Sources {
-	abs := func(rel []string) []string {
-		out := make([]string, len(rel))
-		for i, p := range rel {
-			out[i] = filepath.Join(repoDir, p)
+// buildSources constructs the right Sources from CLI flags.
+//
+//   - gitURL set  → clone/pull the bitwire-it repo; inbound/outbound from known relative paths
+//   - inbound/outbound set → use those explicit file paths, no network sync
+//   - neither set → HTTP-fetch the bitwire-it files into dataDir (or default cache dir)
+func buildSources(gitURL, dataDir, whitelistFlag, inboundFlag, outboundFlag string) *Sources {
+	// Explicit file paths always win.
+	if inboundFlag != "" || outboundFlag != "" {
+		return &Sources{
+			whitelistPaths: splitPaths(whitelistFlag),
+			inboundPaths:   splitPaths(inboundFlag),
+			outboundPaths:  splitPaths(outboundFlag),
 		}
-		return out
 	}
-	repo := gitshallow.New(gitURL, repoDir, 1, "")
+
+	cacheDir := dataDir
+	if cacheDir == "" {
+		cacheDir = defaultCacheDir("bitwire-it")
+	}
+
+	if gitURL != "" {
+		repo := gitshallow.New(gitURL, cacheDir, 1, "")
+		return &Sources{
+			whitelistPaths: splitPaths(whitelistFlag),
+			inboundPaths: []string{
+				filepath.Join(cacheDir, "tables/inbound/single_ips.txt"),
+				filepath.Join(cacheDir, "tables/inbound/networks.txt"),
+			},
+			outboundPaths: []string{
+				filepath.Join(cacheDir, "tables/outbound/single_ips.txt"),
+				filepath.Join(cacheDir, "tables/outbound/networks.txt"),
+			},
+			syncs: []dataset.Syncer{repo},
+		}
+	}
+
+	// Default: HTTP fetch from bitwire-it into cacheDir.
+	inboundSingle  := filepath.Join(cacheDir, "inbound_single_ips.txt")
+	inboundNetwork := filepath.Join(cacheDir, "inbound_networks.txt")
+	outboundSingle  := filepath.Join(cacheDir, "outbound_single_ips.txt")
+	outboundNetwork := filepath.Join(cacheDir, "outbound_networks.txt")
 	return &Sources{
-		whitelistPaths: whitelist,
-		inboundPaths:   abs(inboundRel),
-		outboundPaths:  abs(outboundRel),
-		syncs:          []dataset.Syncer{repo},
+		whitelistPaths: splitPaths(whitelistFlag),
+		inboundPaths:   []string{inboundSingle, inboundNetwork},
+		outboundPaths:  []string{outboundSingle, outboundNetwork},
+		syncs: []dataset.Syncer{
+			httpcache.New(inboundSingleURL, inboundSingle),
+			httpcache.New(inboundNetworkURL, inboundNetwork),
+			httpcache.New(outboundSingleURL, outboundSingle),
+			httpcache.New(outboundNetworkURL, outboundNetwork),
+		},
 	}
 }
 
-func newHTTPSources(whitelist []string, inbound, outbound []HTTPSource) *Sources {
-	s := &Sources{whitelistPaths: whitelist}
-	for _, src := range inbound {
-		s.inboundPaths = append(s.inboundPaths, src.Path)
-		s.syncs = append(s.syncs, httpcache.New(src.URL, src.Path))
+func splitPaths(s string) []string {
+	if s == "" {
+		return nil
 	}
-	for _, src := range outbound {
-		s.outboundPaths = append(s.outboundPaths, src.Path)
-		s.syncs = append(s.syncs, httpcache.New(src.URL, src.Path))
-	}
-	return s
+	return strings.Split(s, ",")
 }
 
-// Fetch pulls updates from all sources. Returns whether any new data arrived.
-// Satisfies dataset.Syncer.
+// Fetch pulls updates from all sources. Satisfies dataset.Syncer.
 func (s *Sources) Fetch() (bool, error) {
 	var anyUpdated bool
 	for _, syn := range s.syncs {
@@ -77,9 +92,7 @@ func (s *Sources) Fetch() (bool, error) {
 	return anyUpdated, nil
 }
 
-// Datasets builds a dataset.Group backed by this Sources and returns typed
-// datasets for whitelist, inbound, and outbound cohorts. Either whitelist or
-// outbound may be nil if no paths were configured.
+// Datasets builds a dataset.Group and returns typed views for each cohort.
 func (s *Sources) Datasets() (
 	g *dataset.Group,
 	whitelist *dataset.View[ipcohort.Cohort],
