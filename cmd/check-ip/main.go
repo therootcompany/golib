@@ -123,12 +123,9 @@ func run(cfg Config, ipStr string) (blocked bool, err error) {
 
 	geo, err := geoip.OpenDatabases(cfg.GeoIPConf, cfg.CityDB, cfg.ASNDB)
 	if err != nil {
-		return false, err
-	}
-	if err := geo.Init(); err != nil {
 		return false, fmt.Errorf("geoip: %w", err)
 	}
-	geo.Run(ctx, refreshInterval)
+	defer func() { _ = geo.Close() }()
 
 	blockedIn := isBlocked(ipStr, whitelist, inbound.Load())
 	blockedOut := isBlocked(ipStr, whitelist, outbound.Load())

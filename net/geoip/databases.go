@@ -1,82 +1,125 @@
 package geoip
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/oschwald/geoip2-golang"
-	"github.com/therootcompany/golib/net/dataset"
 )
 
-// Databases pairs city and ASN datasets. All methods are nil-safe no-ops so
-// callers need not check whether geoip was configured.
+// Databases holds open GeoLite2 readers. A nil field means that edition
+// wasn't configured. A nil *Databases means geoip is disabled; all methods
+// are nil-safe no-ops so callers need not branch.
 type Databases struct {
-	City *dataset.Dataset[geoip2.Reader]
-	ASN  *dataset.Dataset[geoip2.Reader]
+	City *geoip2.Reader
+	ASN  *geoip2.Reader
 }
 
-// NewDatabases creates Databases for the given paths without a Downloader
-// (uses whatever is already on disk).
-func NewDatabases(cityPath, asnPath string) *Databases {
-	return &Databases{
-		City: newDataset(nil, CityEdition, cityPath),
-		ASN:  newDataset(nil, ASNEdition, asnPath),
+// OpenDatabases resolves configuration, downloads stale .mmdb files (when a
+// GeoIP.conf with credentials is available), and opens the readers.
+//
+//   - confPath=""  → auto-discover from DefaultConfPaths
+//   - conf found   → auto-download; cityPath/asnPath override default locations
+//   - no conf      → cityPath and asnPath must point to existing .mmdb files
+//   - no conf and no paths → returns nil, nil (geoip disabled)
+func OpenDatabases(confPath, cityPath, asnPath string) (*Databases, error) {
+	if confPath == "" {
+		for _, p := range DefaultConfPaths() {
+			if _, err := os.Stat(p); err == nil {
+				confPath = p
+				break
+			}
+		}
 	}
-}
 
-// NewDatabases creates Databases backed by this Downloader.
-func (d *Downloader) NewDatabases(cityPath, asnPath string) *Databases {
-	return &Databases{
-		City: newDataset(d, CityEdition, cityPath),
-		ASN:  newDataset(d, ASNEdition, asnPath),
+	if confPath != "" {
+		cfg, err := ParseConf(confPath)
+		if err != nil {
+			return nil, fmt.Errorf("geoip-conf: %w", err)
+		}
+		dbDir := cfg.DatabaseDirectory
+		if dbDir == "" {
+			if dbDir, err = DefaultCacheDir(); err != nil {
+				return nil, fmt.Errorf("geoip cache dir: %w", err)
+			}
+		}
+		if err := os.MkdirAll(dbDir, 0o755); err != nil {
+			return nil, fmt.Errorf("mkdir %s: %w", dbDir, err)
+		}
+		if cityPath == "" {
+			cityPath = filepath.Join(dbDir, CityEdition+".mmdb")
+		}
+		if asnPath == "" {
+			asnPath = filepath.Join(dbDir, ASNEdition+".mmdb")
+		}
+		dl := New(cfg.AccountID, cfg.LicenseKey)
+		if _, err := dl.NewCacher(CityEdition, cityPath).Fetch(); err != nil {
+			return nil, fmt.Errorf("fetch %s: %w", CityEdition, err)
+		}
+		if _, err := dl.NewCacher(ASNEdition, asnPath).Fetch(); err != nil {
+			return nil, fmt.Errorf("fetch %s: %w", ASNEdition, err)
+		}
+		return Open(cityPath, asnPath)
 	}
-}
 
-func newDataset(d *Downloader, edition, path string) *dataset.Dataset[geoip2.Reader] {
-	var syncer dataset.Syncer
-	if d != nil {
-		syncer = d.NewCacher(edition, path)
-	} else {
-		syncer = dataset.NopSyncer{}
+	if cityPath == "" && asnPath == "" {
+		return nil, nil
 	}
-	ds := dataset.New(syncer, func() (*geoip2.Reader, error) {
-		return geoip2.Open(path)
-	})
-	ds.Name = edition
-	ds.Close = func(r *geoip2.Reader) { r.Close() }
-	return ds
+	return Open(cityPath, asnPath)
 }
 
-// Init downloads (if needed) and opens both databases. Returns the first error.
-// No-op on nil receiver.
-func (dbs *Databases) Init() error {
-	if dbs == nil {
+// Open opens city and ASN .mmdb files from the given paths. Empty paths are
+// treated as unconfigured (the corresponding field stays nil).
+func Open(cityPath, asnPath string) (*Databases, error) {
+	d := &Databases{}
+	if cityPath != "" {
+		r, err := geoip2.Open(cityPath)
+		if err != nil {
+			return nil, fmt.Errorf("open %s: %w", cityPath, err)
+		}
+		d.City = r
+	}
+	if asnPath != "" {
+		r, err := geoip2.Open(asnPath)
+		if err != nil {
+			if d.City != nil {
+				_ = d.City.Close()
+			}
+			return nil, fmt.Errorf("open %s: %w", asnPath, err)
+		}
+		d.ASN = r
+	}
+	return d, nil
+}
+
+// Close closes any open readers. No-op on nil receiver.
+func (d *Databases) Close() error {
+	if d == nil {
 		return nil
 	}
-	if err := dbs.City.Init(); err != nil {
-		return err
+	var errs []error
+	if d.City != nil {
+		if err := d.City.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return dbs.ASN.Init()
+	if d.ASN != nil {
+		if err := d.ASN.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
-// Run starts background refresh goroutines for both databases.
-// No-op on nil receiver.
-func (dbs *Databases) Run(ctx context.Context, interval time.Duration) {
-	if dbs == nil {
-		return
-	}
-	go dbs.City.Run(ctx, interval)
-	go dbs.ASN.Run(ctx, interval)
-}
-
-// PrintInfo writes city and ASN info for ip to w.
-// No-op on nil receiver or unparseable IP.
-func (dbs *Databases) PrintInfo(w io.Writer, ip string) {
-	if dbs == nil {
+// PrintInfo writes city and ASN info for ip to w. No-op on nil receiver or
+// unparseable IP; missing readers are skipped silently.
+func (d *Databases) PrintInfo(w io.Writer, ip string) {
+	if d == nil {
 		return
 	}
 	addr, err := netip.ParseAddr(ip)
@@ -85,29 +128,33 @@ func (dbs *Databases) PrintInfo(w io.Writer, ip string) {
 	}
 	stdIP := addr.AsSlice()
 
-	if rec, err := dbs.City.Load().City(stdIP); err == nil {
-		city := rec.City.Names["en"]
-		country := rec.Country.Names["en"]
-		iso := rec.Country.IsoCode
-		var parts []string
-		if city != "" {
-			parts = append(parts, city)
-		}
-		if len(rec.Subdivisions) > 0 {
-			if sub := rec.Subdivisions[0].Names["en"]; sub != "" && sub != city {
-				parts = append(parts, sub)
+	if d.City != nil {
+		if rec, err := d.City.City(stdIP); err == nil {
+			city := rec.City.Names["en"]
+			country := rec.Country.Names["en"]
+			iso := rec.Country.IsoCode
+			var parts []string
+			if city != "" {
+				parts = append(parts, city)
 			}
-		}
-		if country != "" {
-			parts = append(parts, fmt.Sprintf("%s (%s)", country, iso))
-		}
-		if len(parts) > 0 {
-			fmt.Fprintf(w, "  Location: %s\n", strings.Join(parts, ", "))
+			if len(rec.Subdivisions) > 0 {
+				if sub := rec.Subdivisions[0].Names["en"]; sub != "" && sub != city {
+					parts = append(parts, sub)
+				}
+			}
+			if country != "" {
+				parts = append(parts, fmt.Sprintf("%s (%s)", country, iso))
+			}
+			if len(parts) > 0 {
+				fmt.Fprintf(w, "  Location: %s\n", strings.Join(parts, ", "))
+			}
 		}
 	}
 
-	if rec, err := dbs.ASN.Load().ASN(stdIP); err == nil && rec.AutonomousSystemNumber != 0 {
-		fmt.Fprintf(w, "  ASN:      AS%d %s\n",
-			rec.AutonomousSystemNumber, rec.AutonomousSystemOrganization)
+	if d.ASN != nil {
+		if rec, err := d.ASN.ASN(stdIP); err == nil && rec.AutonomousSystemNumber != 0 {
+			fmt.Fprintf(w, "  ASN:      AS%d %s\n",
+				rec.AutonomousSystemNumber, rec.AutonomousSystemOrganization)
+		}
 	}
 }
