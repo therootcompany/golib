@@ -120,6 +120,7 @@ func main() {
 
 	// Blocklists: git repo with inbound + outbound IP cohort files.
 	repo := gitshallow.New(cfg.RepoURL, filepath.Join(cfg.CacheDir, "bitwire-it"), 1, "")
+	repo.MaxAge = refreshInterval
 	blocklists := dataset.NewSet(repo)
 	cfg.inbound = dataset.Add(blocklists, func() (*ipcohort.Cohort, error) {
 		return ipcohort.LoadFiles(

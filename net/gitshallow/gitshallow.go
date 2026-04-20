@@ -17,15 +17,21 @@ type Repo struct {
 	Depth  int    // 0 defaults to 1, -1 for all
 	Branch string // Optional: specific branch to clone/pull
 
+	// MaxAge skips the git fetch when .git/FETCH_HEAD is younger than this
+	// duration. Persists across process restarts (unlike the in-memory
+	// lastSynced debounce) — so repeated short-lived CLI invocations don't
+	// hammer the remote. 0 disables.
+	MaxAge time.Duration
+
 	// GCInterval controls explicit aggressive GC after pulls.
 	//   0 (default) — no explicit gc; git runs gc.auto on its own schedule
 	//   1           — aggressive gc after every pull
 	//   N           — aggressive gc after every Nth pull
 	GCInterval int
 
-	mu          sync.Mutex
-	pullCount   int
-	lastSynced  time.Time
+	mu         sync.Mutex
+	pullCount  int
+	lastSynced time.Time
 }
 
 // New creates a new Repo instance.
@@ -238,6 +244,17 @@ func (f *File) Fetch() (bool, error) {
 }
 
 func (r *Repo) syncGit() (updated bool, err error) {
+	// MaxAge: file-mtime gate (FETCH_HEAD is rewritten on every successful
+	// fetch, so its mtime is "last time we talked to the remote"). Checked
+	// outside the lock — just a stat.
+	if r.MaxAge > 0 {
+		if info, err := os.Stat(filepath.Join(r.Path, ".git", "FETCH_HEAD")); err == nil {
+			if time.Since(info.ModTime()) < r.MaxAge {
+				return false, nil
+			}
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
