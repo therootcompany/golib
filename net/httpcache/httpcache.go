@@ -37,23 +37,27 @@ func (c *Cacher) Register(fn func() error) {
 // Init fetches the URL unconditionally (no cached headers yet) and invokes
 // all callbacks, ensuring files are loaded on startup.
 func (c *Cacher) Init() error {
-	if _, err := c.fetch(); err != nil {
+	if _, err := c.Fetch(); err != nil {
 		return err
 	}
 	return c.invokeCallbacks()
 }
 
-// Sync sends a conditional GET. If the server returns new content, writes it
-// to Path and invokes callbacks. Returns whether the file was updated.
+// Sync sends a conditional GET, writes updated content, and invokes callbacks.
+// Returns whether the file was updated.
 func (c *Cacher) Sync() (updated bool, err error) {
-	updated, err = c.fetch()
+	updated, err = c.Fetch()
 	if err != nil || !updated {
 		return updated, err
 	}
 	return true, c.invokeCallbacks()
 }
 
-func (c *Cacher) fetch() (updated bool, err error) {
+// Fetch sends a conditional GET and writes new content to Path if the server
+// responds with 200. Returns whether the file was updated. Does not invoke
+// callbacks — use Sync for the single-cacher case, or call Fetch across
+// multiple cachers and handle the reload yourself.
+func (c *Cacher) Fetch() (updated bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
