@@ -82,7 +82,7 @@ func (s *Sources) Fetch() (bool, error) {
 // For HTTP: fetches each cacher unconditionally on first run.
 func (s *Sources) Init() error {
 	if s.gitRepo != nil {
-		_, err := s.gitRepo.Init(s.gitRepo.LightGC)
+		_, err := s.gitRepo.Init()
 		return err
 	}
 	for _, syn := range s.syncs {

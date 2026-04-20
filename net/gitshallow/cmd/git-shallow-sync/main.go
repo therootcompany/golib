@@ -57,7 +57,7 @@ func main() {
 
 	repo := gitshallow.New(url, absPath, defaultDepth, defaultBranch)
 
-	updated, err := repo.Sync(false)
+	updated, err := repo.Sync()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Sync failed: %v\n", err)
 		os.Exit(1)
