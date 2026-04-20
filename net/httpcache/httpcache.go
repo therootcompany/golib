@@ -121,6 +121,15 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 	}
 
 	client := &http.Client{Timeout: timeout, Transport: transport}
+	if c.AuthHeader != "" {
+		// Strip auth before following any redirect — redirect targets (e.g.
+		// presigned S3/R2 URLs) must not receive our credentials.
+		authHeader := c.AuthHeader
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			req.Header.Del(authHeader)
+			return nil
+		}
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
