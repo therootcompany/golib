@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
-	"github.com/therootcompany/golib/fs/dataset"
+	"github.com/therootcompany/golib/net/gitshallow"
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
@@ -22,28 +23,35 @@ func main() {
 		gitURL = os.Args[3]
 	}
 
-	var blacklist *dataset.File[ipcohort.Cohort]
+	var cohort atomic.Pointer[ipcohort.Cohort]
+
+	load := func() error {
+		c, err := ipcohort.LoadFile(dataPath)
+		if err != nil {
+			return err
+		}
+		cohort.Store(c)
+		return nil
+	}
 
 	if gitURL != "" {
 		repoDir := filepath.Dir(dataPath)
-		relPath := filepath.Base(dataPath)
-		repo := dataset.NewRepo(gitURL, repoDir)
-		blacklist = dataset.AddFile(repo, relPath, ipcohort.LoadFile)
+		repo := gitshallow.New(gitURL, repoDir, 1, "")
+		repo.Register(load)
 		fmt.Fprintf(os.Stderr, "Syncing %q ...\n", repoDir)
-		if err := repo.Init(); err != nil {
+		if err := repo.Init(false); err != nil {
 			fmt.Fprintf(os.Stderr, "error: git sync: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
-		blacklist = dataset.NewFile(dataPath, ipcohort.LoadFile)
 		fmt.Fprintf(os.Stderr, "Loading %q ...\n", dataPath)
-		if err := blacklist.Reload(); err != nil {
+		if err := load(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: load: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
-	c := blacklist.Load()
+	c := cohort.Load()
 	fmt.Fprintf(os.Stderr, "Loaded %d entries\n", c.Size())
 
 	if c.Contains(ipStr) {
