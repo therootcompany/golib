@@ -5,10 +5,11 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/therootcompany/golib/net/httpcache"
 )
 
 const (
@@ -22,11 +23,8 @@ const (
 )
 
 // Downloader fetches MaxMind GeoLite2 .mmdb files from the download API.
-// It checks file mtime before downloading to stay within the 30/day rate limit.
-//
-// MaxMind preserves the database release date as the mtime of the .mmdb entry
-// inside the tar archive. After extraction, mtime reflects data age — not
-// download time — so it is reliable for freshness checks across restarts.
+// For one-shot use call Fetch; for polling loops call NewCacher and reuse
+// the Cacher so ETag state is preserved across calls.
 type Downloader struct {
 	AccountID  string
 	LicenseKey string
@@ -39,62 +37,39 @@ func New(accountID, licenseKey string) *Downloader {
 	return &Downloader{AccountID: accountID, LicenseKey: licenseKey}
 }
 
-// Fetch downloads the named edition to path if the file is stale (mtime older
-// than FreshDays). Returns whether the file was updated.
-func (d *Downloader) Fetch(edition, path string) (bool, error) {
+// NewCacher returns an httpcache.Cacher pre-configured for this edition and
+// path. Hold the Cacher and call Fetch() on it periodically — ETag state is
+// preserved across calls, enabling conditional GETs that skip the download
+// count on unchanged releases.
+func (d *Downloader) NewCacher(edition, path string) *httpcache.Cacher {
 	freshDays := d.FreshDays
 	if freshDays == 0 {
 		freshDays = defaultFreshDays
 	}
-
-	if info, err := os.Stat(path); err == nil {
-		if time.Since(info.ModTime()) < time.Duration(freshDays)*24*time.Hour {
-			return false, nil
-		}
-	}
-
 	timeout := d.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
-
-	url := fmt.Sprintf("%s/%s/download?suffix=tar.gz", downloadBase, edition)
-
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return false, err
+	return &httpcache.Cacher{
+		URL:       fmt.Sprintf("%s/%s/download?suffix=tar.gz", downloadBase, edition),
+		Path:      path,
+		MaxAge:    time.Duration(freshDays) * 24 * time.Hour,
+		Timeout:   timeout,
+		Username:  d.AccountID,
+		Password:  d.LicenseKey,
+		Transform: ExtractMMDB,
 	}
-	req.SetBasicAuth(d.AccountID, d.LicenseKey)
-
-	// Strip auth on redirects: MaxMind issues a 302 to a Cloudflare R2 presigned
-	// URL that must not receive our credentials.
-	client := &http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			req.Header.Del("Authorization")
-			return nil
-		},
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("unexpected status %d fetching %s", resp.StatusCode, url)
-	}
-
-	if err := extractMMDB(resp.Body, path); err != nil {
-		return false, fmt.Errorf("%s: %w", edition, err)
-	}
-	return true, nil
 }
 
-// extractMMDB reads a MaxMind tar.gz archive, writes the .mmdb entry to path
+// Fetch downloads edition to path if the file is stale. Convenience wrapper
+// around NewCacher for one-shot use; ETag state is not retained.
+func (d *Downloader) Fetch(edition, path string) (bool, error) {
+	return d.NewCacher(edition, path).Fetch()
+}
+
+// ExtractMMDB reads a MaxMind tar.gz archive, writes the .mmdb entry to path
 // atomically (via tmp+rename), and sets its mtime to MaxMind's release date.
-func extractMMDB(r io.Reader, path string) error {
+func ExtractMMDB(r io.Reader, path string) error {
 	gr, err := gzip.NewReader(r)
 	if err != nil {
 		return err
