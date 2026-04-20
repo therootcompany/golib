@@ -1,4 +1,6 @@
 credentials.tsv
+GeoIP.conf
+*.mmdb
 
 .env
 *.env
