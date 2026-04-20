@@ -7,6 +7,14 @@ import (
 )
 
 // Conf holds the fields parsed from a geoipupdate-style config file.
+//
+// GeoLite2 is free: sign up at https://www.maxmind.com/en/geolite2/signup
+// to get an AccountID and generate a LicenseKey, then write them to
+// GeoIP.conf alongside the desired EditionIDs:
+//
+//	AccountID   123456
+//	LicenseKey  xxxxxxxxxxxxxxxx
+//	EditionIDs  GeoLite2-City GeoLite2-ASN
 type Conf struct {
 	AccountID         string
 	LicenseKey        string

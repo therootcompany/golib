@@ -52,7 +52,7 @@ func main() {
 	cfg := IPCheck{}
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	fs.StringVar(&cfg.Bind, "serve", "", "bind address for the HTTP API, e.g. :8080")
-	fs.StringVar(&cfg.GeoIPConfPath, "geoip-conf", "", "path to GeoIP.conf (default: ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf)")
+	fs.StringVar(&cfg.GeoIPConfPath, "geoip-conf", "", "path to GeoIP.conf with MaxMind AccountID + LicenseKey\n(free signup at https://www.maxmind.com/en/geolite2/signup)\n(default: ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf)")
 	fs.StringVar(&cfg.RepoURL, "blocklist-repo", defaultBlocklistRepo, "git URL of the blocklist repo (must match bitwire-it layout)")
 	fs.StringVar(&cfg.CacheDir, "cache-dir", "", "cache parent dir, holds bitwire-it/ and maxmind/ subdirs (default: OS user cache)")
 	fs.StringVar(&cfg.WhitelistPath, "whitelist", "", "path to a file of IPs and/or CIDRs (one per line) that override block decisions")
@@ -141,7 +141,14 @@ func main() {
 	// conditional GETs. geoip.Open extracts in-memory — no .mmdb files
 	// are written to disk.
 	if cfg.GeoIPBasicAuth == "" {
-		log.Fatalf("geoip-conf: not found; set --geoip-conf or place GeoIP.conf in a default location")
+		log.Fatalf("geoip-conf: not found; set --geoip-conf or place GeoIP.conf in a default location.\n"+
+			"GeoLite2 registration and the AccountID/LicenseKey needed for GeoIP.conf are free at:\n"+
+			"  https://www.maxmind.com/en/geolite2/signup\n"+
+			"Then create a license key and write ./GeoIP.conf (or ~/.config/maxmind/GeoIP.conf):\n"+
+			"  AccountID   <your-account-id>\n"+
+			"  LicenseKey  <your-license-key>\n"+
+			"  EditionIDs  GeoLite2-City GeoLite2-ASN\n"+
+			"Default search paths: %v", geoip.DefaultConfPaths())
 	}
 	maxmindDir := filepath.Join(cfg.CacheDir, "maxmind")
 	authHeader := http.Header{"Authorization": []string{cfg.GeoIPBasicAuth}}
