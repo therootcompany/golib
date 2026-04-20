@@ -107,3 +107,21 @@ func (s *Sources) Datasets() (
 	}
 	return g, whitelist, inbound, outbound
 }
+
+// isBlocked returns true if ip is in cohort and not in whitelist.
+func isBlocked(ip string, whitelist, cohort *dataset.View[ipcohort.Cohort]) bool {
+	if cohort == nil {
+		return false
+	}
+	if whitelist != nil && whitelist.Load().Contains(ip) {
+		return false
+	}
+	return cohort.Load().Contains(ip)
+}
+
+func cohortSize(ds *dataset.View[ipcohort.Cohort]) int {
+	if ds == nil {
+		return 0
+	}
+	return ds.Load().Size()
+}
