@@ -27,29 +27,31 @@ func testdataDir(t *testing.T) string {
 	}
 }
 
+func repoDir(t *testing.T) string {
+	return filepath.Join(testdataDir(t), "gitshallow_ipblocklist")
+}
+
 func TestRepo_Clone(t *testing.T) {
-	repoDir := filepath.Join(testdataDir(t), "gitshallow_ipblocklist")
-	os.RemoveAll(repoDir) // start fresh
+	dir := repoDir(t)
+	os.RemoveAll(dir)
 
-	repo := gitshallow.New(testRepoURL, repoDir, 1, "")
-
+	repo := gitshallow.New(testRepoURL, dir, 1, "")
 	updated, err := repo.Fetch()
 	if err != nil {
 		t.Fatalf("Fetch (clone): %v", err)
 	}
 	if !updated {
-		t.Error("first Fetch: expected updated=true after fresh clone")
+		t.Error("fresh clone: expected updated=true")
 	}
 
-	// Verify expected files are present.
 	for _, rel := range []string{
 		"tables/inbound/single_ips.txt",
 		"tables/inbound/networks.txt",
 		"tables/outbound/single_ips.txt",
 		"tables/outbound/networks.txt",
 	} {
-		p := filepath.Join(repoDir, rel)
-		if info, err := os.Stat(p); err != nil {
+		info, err := os.Stat(filepath.Join(dir, rel))
+		if err != nil {
 			t.Errorf("expected file missing: %s", rel)
 		} else {
 			t.Logf("%s: %d bytes", rel, info.Size())
@@ -57,20 +59,43 @@ func TestRepo_Clone(t *testing.T) {
 	}
 }
 
-func TestRepo_Pull(t *testing.T) {
-	repoDir := filepath.Join(testdataDir(t), "gitshallow_ipblocklist")
+func TestRepo_Pull_SameInstance(t *testing.T) {
+	dir := repoDir(t)
 
-	repo := gitshallow.New(testRepoURL, repoDir, 1, "")
-
-	// Ensure cloned first.
+	repo := gitshallow.New(testRepoURL, dir, 1, "")
+	// Ensure cloned.
 	if _, err := repo.Fetch(); err != nil {
 		t.Fatalf("initial Fetch: %v", err)
 	}
 
-	// Pull again — already up to date, updated may be true or false.
-	_, err := repo.Fetch()
+	// Second pull on the same instance — already at HEAD, should not advance.
+	updated, err := repo.Fetch()
 	if err != nil {
-		t.Fatalf("second Fetch (pull): %v", err)
+		t.Fatalf("second Fetch: %v", err)
 	}
-	t.Log("pull completed without error")
+	if updated {
+		t.Error("same-instance second pull: expected updated=false (already at HEAD)")
+	}
+	t.Log("same-instance pull correctly reported no update")
+}
+
+func TestRepo_Pull_FreshInstance(t *testing.T) {
+	dir := repoDir(t)
+
+	// Ensure cloned via a first instance.
+	first := gitshallow.New(testRepoURL, dir, 1, "")
+	if _, err := first.Fetch(); err != nil {
+		t.Fatalf("initial Fetch: %v", err)
+	}
+
+	// Fresh instance with no in-memory state — git HEAD on disk drives the check.
+	fresh := gitshallow.New(testRepoURL, dir, 1, "")
+	updated, err := fresh.Fetch()
+	if err != nil {
+		t.Fatalf("fresh-instance Fetch: %v", err)
+	}
+	if updated {
+		t.Error("fresh-instance pull: expected updated=false (HEAD unchanged on disk)")
+	}
+	t.Log("fresh-instance pull correctly reported no update")
 }
