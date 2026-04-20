@@ -104,6 +104,17 @@ func TestContains_FailClosed(t *testing.T) {
 	}
 }
 
+func TestContains_IPv6NeverBlocked(t *testing.T) {
+	c, _ := ipcohort.Parse([]string{"1.2.3.4", "10.0.0.0/8"})
+	// IPv6 addresses are not stored; should return false, not panic.
+	if c.Contains("::1") {
+		t.Error("IPv6 address should not be in an IPv4-only cohort")
+	}
+	if c.Contains("2001:db8::1") {
+		t.Error("IPv6 address should not be in an IPv4-only cohort")
+	}
+}
+
 func TestContains_Empty(t *testing.T) {
 	c, err := ipcohort.Parse(nil)
 	if err != nil {

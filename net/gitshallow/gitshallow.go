@@ -28,15 +28,21 @@ type Repo struct {
 
 // New creates a new Repo instance.
 func New(url, path string, depth int, branch string) *Repo {
-	if depth == 0 {
-		depth = 1
-	}
 	return &Repo{
 		URL:    url,
 		Path:   path,
 		Depth:  depth,
 		Branch: strings.TrimSpace(branch),
 	}
+}
+
+// effectiveDepth returns the depth to use for clone/pull.
+// 0 means unset — defaults to 1. -1 means full history.
+func (r *Repo) effectiveDepth() int {
+	if r.Depth == 0 {
+		return 1
+	}
+	return r.Depth
 }
 
 // Init clones the repo if missing, then syncs once.
@@ -70,11 +76,8 @@ func (r *Repo) clone() (bool, error) {
 	}
 
 	args := []string{"clone", "--no-tags"}
-	if r.Depth == 0 {
-		r.Depth = 1
-	}
-	if r.Depth >= 0 {
-		args = append(args, "--depth", fmt.Sprintf("%d", r.Depth))
+	if depth := r.effectiveDepth(); depth >= 0 {
+		args = append(args, "--depth", fmt.Sprintf("%d", depth))
 	}
 	args = append(args, "--single-branch")
 	if r.Branch != "" {
@@ -125,11 +128,8 @@ func (r *Repo) pull() (updated bool, err error) {
 	}
 
 	pullArgs := []string{"pull", "--ff-only", "--no-tags"}
-	if r.Depth == 0 {
-		r.Depth = 1
-	}
-	if r.Depth >= 0 {
-		pullArgs = append(pullArgs, "--depth", fmt.Sprintf("%d", r.Depth))
+	if depth := r.effectiveDepth(); depth >= 0 {
+		pullArgs = append(pullArgs, "--depth", fmt.Sprintf("%d", depth))
 	}
 	if r.Branch != "" {
 		pullArgs = append(pullArgs, "origin", r.Branch)

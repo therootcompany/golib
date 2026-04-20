@@ -1,6 +1,7 @@
 package ipcohort
 
 import (
+	"cmp"
 	"encoding/binary"
 	"encoding/csv"
 	"fmt"
@@ -47,26 +48,41 @@ func New() *Cohort {
 	return &Cohort{}
 }
 
+func sortNets(nets []IPv4Net) {
+	slices.SortFunc(nets, func(a, b IPv4Net) int {
+		return cmp.Compare(a.networkBE, b.networkBE)
+	})
+}
+
 // Size returns the total number of entries (hosts + nets).
 func (c *Cohort) Size() int {
 	return len(c.hosts) + len(c.nets)
 }
 
 // Contains reports whether ipStr falls within any host or subnet in the cohort.
-// Returns true on parse error (fail-closed).
+// Returns true on parse error (fail-closed): unparseable input is treated as
+// blocked so that garbage strings never accidentally bypass a blocklist check.
+// IPv6 addresses are not stored and always return false.
 func (c *Cohort) Contains(ipStr string) bool {
 	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
-		return true
+		return true // fail-closed
+	}
+	return c.ContainsAddr(ip)
+}
+
+// ContainsAddr reports whether ip falls within any host or subnet in the cohort.
+// IPv6 addresses always return false (cohort is IPv4-only).
+func (c *Cohort) ContainsAddr(ip netip.Addr) bool {
+	if !ip.Is4() {
+		return false
 	}
 	ip4 := ip.As4()
 	ipU32 := binary.BigEndian.Uint32(ip4[:])
 
-	_, found := slices.BinarySearch(c.hosts, ipU32)
-	if found {
+	if _, found := slices.BinarySearch(c.hosts, ipU32); found {
 		return true
 	}
-
 	for _, net := range c.nets {
 		if net.Contains(ipU32) {
 			return true
@@ -93,15 +109,7 @@ func Parse(prefixList []string) (*Cohort, error) {
 	}
 
 	slices.Sort(hosts)
-	slices.SortFunc(nets, func(a, b IPv4Net) int {
-		if a.networkBE < b.networkBE {
-			return -1
-		}
-		if a.networkBE > b.networkBE {
-			return 1
-		}
-		return 0
-	})
+	sortNets(nets)
 
 	return &Cohort{hosts: hosts, nets: nets}, nil
 }
@@ -160,15 +168,7 @@ func LoadFiles(paths ...string) (*Cohort, error) {
 	}
 
 	slices.Sort(hosts)
-	slices.SortFunc(nets, func(a, b IPv4Net) int {
-		if a.networkBE < b.networkBE {
-			return -1
-		}
-		if a.networkBE > b.networkBE {
-			return 1
-		}
-		return 0
-	})
+	sortNets(nets)
 
 	return &Cohort{hosts: hosts, nets: nets}, nil
 }
@@ -222,15 +222,7 @@ func ReadAll(r *csv.Reader) (*Cohort, error) {
 	}
 
 	slices.Sort(hosts)
-	slices.SortFunc(nets, func(a, b IPv4Net) int {
-		if a.networkBE < b.networkBE {
-			return -1
-		}
-		if a.networkBE > b.networkBE {
-			return 1
-		}
-		return 0
-	})
+	sortNets(nets)
 
 	return &Cohort{hosts: hosts, nets: nets}, nil
 }

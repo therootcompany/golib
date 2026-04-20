@@ -124,11 +124,11 @@ func NewGroup(syncer httpcache.Syncer) *Group {
 	return &Group{syncer: syncer}
 }
 
-// Add registers a new dataset in g and returns it. Call Init or Run on g —
-// not on the returned dataset — to drive updates.
+// Add registers a new dataset in g and returns it. Fetch and reload are driven
+// by the Group — call Init/Run/Sync on g, not on the returned Dataset.
 // load is a closure capturing whatever paths or config it needs.
 func Add[T any](g *Group, load func() (*T, error)) *Dataset[T] {
-	d := &Dataset[T]{load: load}
+	d := &Dataset[T]{syncer: httpcache.NopSyncer{}, load: load}
 	g.members = append(g.members, d)
 	return d
 }
