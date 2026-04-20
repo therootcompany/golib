@@ -134,11 +134,13 @@ func main() {
 			repo.FilePath("tables/outbound/networks.txt"),
 		)
 	})
+	fmt.Fprint(os.Stderr, "Loading blocklists... ")
 	t := time.Now()
 	if err := blocklists.Load(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr)
 		log.Fatalf("blocklists: %v", err)
 	}
-	fmt.Fprintf(os.Stderr, "Loading blocklists... %s (inbound=%d, outbound=%d)\n",
+	fmt.Fprintf(os.Stderr, "%s (inbound=%d, outbound=%d)\n",
 		time.Since(t).Round(time.Millisecond),
 		cfg.inbound.Value().Size(),
 		cfg.outbound.Value().Size(),
@@ -176,11 +178,13 @@ func main() {
 	cfg.geo = dataset.Add(geoSet, func() (*geoip.Databases, error) {
 		return geoip.Open(maxmindDir)
 	})
+	fmt.Fprint(os.Stderr, "Loading geoip... ")
 	t = time.Now()
 	if err := geoSet.Load(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr)
 		log.Fatalf("geoip: %v", err)
 	}
-	fmt.Fprintf(os.Stderr, "Loading geoip... %s\n", time.Since(t).Round(time.Millisecond))
+	fmt.Fprintf(os.Stderr, "%s\n", time.Since(t).Round(time.Millisecond))
 	defer func() { _ = cfg.geo.Value().Close() }()
 
 	// Whitelist: combined IPs + CIDRs in one file, polled for mtime changes.
@@ -191,11 +195,13 @@ func main() {
 		cfg.whitelist = dataset.Add(whitelistSet, func() (*ipcohort.Cohort, error) {
 			return ipcohort.LoadFile(cfg.WhitelistPath)
 		})
+		fmt.Fprint(os.Stderr, "Loading whitelist... ")
 		t = time.Now()
 		if err := whitelistSet.Load(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr)
 			log.Fatalf("whitelist: %v", err)
 		}
-		fmt.Fprintf(os.Stderr, "Loading whitelist... %s (entries=%d)\n",
+		fmt.Fprintf(os.Stderr, "%s (entries=%d)\n",
 			time.Since(t).Round(time.Millisecond),
 			cfg.whitelist.Value().Size(),
 		)
