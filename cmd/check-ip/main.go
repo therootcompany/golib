@@ -207,6 +207,11 @@ func main() {
 		)
 	}
 
+	// Blank line separates the stderr "Loading ..." block from the real
+	// output (stdout results for CLI mode, or the stderr "listening on"
+	// log for serve mode).
+	fmt.Fprintln(os.Stderr)
+
 	for _, ip := range ips {
 		cfg.writeText(os.Stdout, cfg.lookup(ip))
 	}
