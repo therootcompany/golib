@@ -11,13 +11,14 @@
 //	go ds.Run(ctx, 47*time.Minute)
 //	val := ds.Load() // *MyType, lock-free
 //
-// Group (one syncer, multiple values):
+// Group (one syncer, multiple datasets):
 //
 //	g := dataset.NewGroup(repo)
 //	inbound  := dataset.Add(g, func() (*ipcohort.Cohort, error) { ... })
 //	outbound := dataset.Add(g, func() (*ipcohort.Cohort, error) { ... })
 //	if err := g.Init(); err != nil { ... }
 //	go g.Run(ctx, 47*time.Minute)
+//	val := inbound.Load() // lock-free; Init/Run belong to the Group
 package dataset
 
 import (
@@ -56,6 +57,9 @@ func (NopSyncer) Fetch() (bool, error) { return false, nil }
 
 // Dataset couples a Syncer, a load function, and an atomic.Pointer[T].
 // Load is safe for concurrent use without locks.
+//
+// When a Dataset is added to a Group via Add, Init and Run belong to the
+// Group; call Load on the Dataset to read the current value.
 type Dataset[T any] struct {
 	// Name is used in error messages.
 	Name string
@@ -140,6 +144,9 @@ type member interface {
 
 // Group ties one Syncer to multiple datasets so a single Fetch drives all
 // swaps — no redundant network calls when datasets share a source.
+//
+// Datasets added via Add are owned by the Group; call Init and Run on the
+// Group, not on individual datasets.
 type Group struct {
 	syncer  Syncer
 	members []member
@@ -197,20 +204,10 @@ func (g *Group) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// View is the read-only handle returned by Add. Sync is driven by the owning
-// Group.
-type View[T any] struct {
-	d *Dataset[T]
-}
-
-// Load returns the current value. Returns nil before the Group is initialised.
-func (v *View[T]) Load() *T { return v.d.ptr.Load() }
-
-func (v *View[T]) swap() error { return v.d.swap() }
-
-// Add registers a new dataset in g and returns a View for reading.
-func Add[T any](g *Group, load func() (*T, error)) *View[T] {
-	v := &View[T]{d: &Dataset[T]{load: load}}
-	g.members = append(g.members, v)
-	return v
+// Add registers a new dataset in g and returns it for reading via Load.
+// Init and Run are driven by the Group; do not call them on the returned Dataset.
+func Add[T any](g *Group, load func() (*T, error)) *Dataset[T] {
+	d := &Dataset[T]{load: load}
+	g.members = append(g.members, d)
+	return d
 }

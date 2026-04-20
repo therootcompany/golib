@@ -102,7 +102,7 @@ type FormMailer struct {
 	ContentType string // inferred from SuccessBody if empty
 
 	// Blacklist — if set, matching IPs are rejected before any other processing.
-	Blacklist *dataset.View[ipcohort.Cohort]
+	Blacklist *dataset.Dataset[ipcohort.Cohort]
 
 	// AllowedCountries — if non-nil, only requests from listed ISO codes are
 	// accepted. Unknown country ("") is always allowed.

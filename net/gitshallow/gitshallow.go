@@ -173,6 +173,11 @@ func (r *Repo) Fetch() (bool, error) {
 	return r.syncGit()
 }
 
+// FilePath returns the absolute path to relPath within this repo.
+func (r *Repo) FilePath(rel string) string {
+	return filepath.Join(r.Path, rel)
+}
+
 // File returns a handle to relPath within this repo.
 // The handle's Path and Open methods give access to the file; its Fetch method
 // syncs the repo and reports whether this specific file changed (by mtime).

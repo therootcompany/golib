@@ -45,50 +45,55 @@ func main() {
 
 	// -- Blacklist ----------------------------------------------------------
 
-	var inboundDS, outboundDS *dataset.Dataset[ipcohort.Cohort]
+	var (
+		syncer       dataset.Syncer
+		inboundPaths []string
+		outboundPaths []string
+	)
 
 	switch {
 	case *inbound != "" || *outbound != "":
-		inboundDS  = cohortDataset(dataset.NopSyncer{}, splitPaths(*inbound)...)
-		outboundDS = cohortDataset(dataset.NopSyncer{}, splitPaths(*outbound)...)
+		syncer         = dataset.NopSyncer{}
+		inboundPaths   = splitPaths(*inbound)
+		outboundPaths  = splitPaths(*outbound)
 
 	case *gitURL != "":
 		dir := cacheDir(*dataDir, "bitwire-it")
 		gr  := gitshallow.New(*gitURL, dir, 1, "")
-		inSingle  := gr.File("tables/inbound/single_ips.txt")
-		inNetwork := gr.File("tables/inbound/networks.txt")
-		outSingle := gr.File("tables/outbound/single_ips.txt")
-		outNetwork:= gr.File("tables/outbound/networks.txt")
-		// Each File.Fetch deduplicates the git pull via the shared Repo.
-		inboundDS  = cohortDataset(dataset.MultiSyncer{inSingle, inNetwork},  inSingle.Path(), inNetwork.Path())
-		outboundDS = cohortDataset(dataset.MultiSyncer{outSingle, outNetwork}, outSingle.Path(), outNetwork.Path())
+		syncer         = gr
+		inboundPaths   = []string{gr.FilePath("tables/inbound/single_ips.txt"), gr.FilePath("tables/inbound/networks.txt")}
+		outboundPaths  = []string{gr.FilePath("tables/outbound/single_ips.txt"), gr.FilePath("tables/outbound/networks.txt")}
 
 	default:
-		dir := cacheDir(*dataDir, "bitwire-it")
-		inSingle  := httpcache.New(inboundSingleURL,   filepath.Join(dir, "inbound_single_ips.txt"))
-		inNetwork := httpcache.New(inboundNetworkURL,  filepath.Join(dir, "inbound_networks.txt"))
-		outSingle := httpcache.New(outboundSingleURL,  filepath.Join(dir, "outbound_single_ips.txt"))
-		outNetwork:= httpcache.New(outboundNetworkURL, filepath.Join(dir, "outbound_networks.txt"))
-		inboundDS  = cohortDataset(dataset.MultiSyncer{inSingle, inNetwork},   inSingle.Path, inNetwork.Path)
-		outboundDS = cohortDataset(dataset.MultiSyncer{outSingle, outNetwork}, outSingle.Path, outNetwork.Path)
+		dir        := cacheDir(*dataDir, "bitwire-it")
+		inSingle   := httpcache.New(inboundSingleURL,   filepath.Join(dir, "inbound_single_ips.txt"))
+		inNetwork  := httpcache.New(inboundNetworkURL,  filepath.Join(dir, "inbound_networks.txt"))
+		outSingle  := httpcache.New(outboundSingleURL,  filepath.Join(dir, "outbound_single_ips.txt"))
+		outNetwork := httpcache.New(outboundNetworkURL, filepath.Join(dir, "outbound_networks.txt"))
+		syncer        = dataset.MultiSyncer{inSingle, inNetwork, outSingle, outNetwork}
+		inboundPaths  = []string{inSingle.Path, inNetwork.Path}
+		outboundPaths = []string{outSingle.Path, outNetwork.Path}
 	}
 
-	var whitelistDS *dataset.Dataset[ipcohort.Cohort]
-	if *whitelist != "" {
-		whitelistDS = cohortDataset(dataset.NopSyncer{}, splitPaths(*whitelist)...)
-	}
+	g          := dataset.NewGroup(syncer)
+	inboundDS  := dataset.Add(g, loadCohort(inboundPaths...))
+	outboundDS := dataset.Add(g, loadCohort(outboundPaths...))
 
-	for _, ds := range []*dataset.Dataset[ipcohort.Cohort]{whitelistDS, inboundDS, outboundDS} {
-		if ds == nil {
-			continue
-		}
-		if err := ds.Init(); err != nil {
-			fmt.Fprintf(os.Stderr, "error: blacklist: %v\n", err)
-			os.Exit(1)
-		}
+	if err := g.Init(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: blacklist: %v\n", err)
+		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Loaded inbound=%d outbound=%d\n",
 		inboundDS.Load().Size(), outboundDS.Load().Size())
+
+	var whitelistDS *dataset.Dataset[ipcohort.Cohort]
+	if *whitelist != "" {
+		whitelistDS = dataset.New(dataset.NopSyncer{}, loadCohort(splitPaths(*whitelist)...))
+		if err := whitelistDS.Init(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: whitelist: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	// -- GeoIP (optional) --------------------------------------------------
 
@@ -106,11 +111,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	for _, ds := range []*dataset.Dataset[ipcohort.Cohort]{whitelistDS, inboundDS, outboundDS} {
-		if ds != nil {
-			go ds.Run(ctx, 47*time.Minute)
-		}
-	}
+	go g.Run(ctx, 47*time.Minute)
 	geo.Run(ctx, 47*time.Minute)
 
 	// -- Check and report --------------------------------------------------
@@ -135,11 +136,10 @@ func main() {
 	}
 }
 
-// cohortDataset creates a Dataset that fetches via syncer and loads paths as a Cohort.
-func cohortDataset(syncer dataset.Syncer, paths ...string) *dataset.Dataset[ipcohort.Cohort] {
-	return dataset.New(syncer, func() (*ipcohort.Cohort, error) {
+func loadCohort(paths ...string) func() (*ipcohort.Cohort, error) {
+	return func() (*ipcohort.Cohort, error) {
 		return ipcohort.LoadFiles(paths...)
-	})
+	}
 }
 
 func isBlocked(ip string, whitelist, cohort *dataset.Dataset[ipcohort.Cohort]) bool {
