@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/therootcompany/golib/net/geoip"
 )
@@ -17,7 +15,7 @@ func main() {
 	freshDays := flag.Int("fresh-days", 0, "skip download if file is younger than N days (default 3)")
 	flag.Parse()
 
-	cfg, err := parseConf(*configPath)
+	cfg, err := geoip.ParseConf(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -25,7 +23,7 @@ func main() {
 
 	outDir := *dir
 	if outDir == "" {
-		outDir = cfg["DatabaseDirectory"]
+		outDir = cfg.DatabaseDirectory
 	}
 	if outDir == "" {
 		outDir = "."
@@ -36,24 +34,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	accountID := cfg["AccountID"]
-	licenseKey := cfg["LicenseKey"]
-	if accountID == "" || licenseKey == "" {
-		fmt.Fprintf(os.Stderr, "error: AccountID and LicenseKey are required in %s\n", *configPath)
-		os.Exit(1)
-	}
-
-	editions := strings.Fields(cfg["EditionIDs"])
-	if len(editions) == 0 {
+	if len(cfg.EditionIDs) == 0 {
 		fmt.Fprintf(os.Stderr, "error: no EditionIDs found in %s\n", *configPath)
 		os.Exit(1)
 	}
 
-	d := geoip.New(accountID, licenseKey)
+	d := geoip.New(cfg.AccountID, cfg.LicenseKey)
 	d.FreshDays = *freshDays
 
 	exitCode := 0
-	for _, edition := range editions {
+	for _, edition := range cfg.EditionIDs {
 		path := filepath.Join(outDir, edition+".mmdb")
 		updated, err := d.Fetch(edition, path)
 		if err != nil {
@@ -70,25 +60,4 @@ func main() {
 		}
 	}
 	os.Exit(exitCode)
-}
-
-// parseConf reads a geoipupdate-style config file (key value pairs, # comments).
-func parseConf(path string) (map[string]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	cfg := make(map[string]string)
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, value, _ := strings.Cut(line, " ")
-		cfg[strings.TrimSpace(key)] = strings.TrimSpace(value)
-	}
-	return cfg, scanner.Err()
 }
