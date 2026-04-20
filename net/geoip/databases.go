@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/oschwald/geoip2-golang"
@@ -20,20 +21,50 @@ type Databases struct {
 	ASN  *geoip2.Reader
 }
 
-// Open reads <dir>/<edition>_LATEST.tar.gz for City and ASN editions,
-// extracts the .mmdb entry from each archive in memory, and returns open
-// readers. No .mmdb files are written to disk.
+// Open loads the City and ASN editions from dir. For each edition it
+// prefers <edition>_LATEST.tar.gz and falls back to the
+// lexicographically greatest <edition>_*.tar.gz match (MaxMind's
+// Content-Disposition names sort chronologically by release date).
+// Archives are extracted in memory — no .mmdb files are written to disk.
 func Open(dir string) (*Databases, error) {
-	city, err := openMMDBTarGz(filepath.Join(dir, TarGzName(CityEdition)))
+	cityPath, err := FindTarGz(dir, CityEdition)
 	if err != nil {
 		return nil, fmt.Errorf("city: %w", err)
 	}
-	asn, err := openMMDBTarGz(filepath.Join(dir, TarGzName(ASNEdition)))
+	city, err := openMMDBTarGz(cityPath)
+	if err != nil {
+		return nil, fmt.Errorf("city: %w", err)
+	}
+	asnPath, err := FindTarGz(dir, ASNEdition)
+	if err != nil {
+		_ = city.Close()
+		return nil, fmt.Errorf("asn: %w", err)
+	}
+	asn, err := openMMDBTarGz(asnPath)
 	if err != nil {
 		_ = city.Close()
 		return nil, fmt.Errorf("asn: %w", err)
 	}
 	return &Databases{City: city, ASN: asn}, nil
+}
+
+// FindTarGz resolves the cached tarball path for edition inside dir,
+// preferring <edition>_LATEST.tar.gz and falling back to the
+// lexicographically greatest <edition>_*.tar.gz match.
+func FindTarGz(dir, edition string) (string, error) {
+	preferred := filepath.Join(dir, TarGzName(edition))
+	if _, err := os.Stat(preferred); err == nil {
+		return preferred, nil
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, edition+"_*.tar.gz"))
+	if err != nil {
+		return "", err
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("no %s_*.tar.gz in %s", edition, dir)
+	}
+	slices.Sort(matches)
+	return matches[len(matches)-1], nil
 }
 
 func openMMDBTarGz(path string) (*geoip2.Reader, error) {
