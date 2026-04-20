@@ -155,13 +155,13 @@ func main() {
 	geoSet := dataset.NewSet(
 		&httpcache.Cacher{
 			URL:    geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
-			Path:   filepath.Join(maxmindDir, "GeoLite2-City.tar.gz"),
+			Path:   filepath.Join(maxmindDir, geoip.TarGzName(geoip.CityEdition)),
 			MaxAge: 3 * 24 * time.Hour,
 			Header: authHeader,
 		},
 		&httpcache.Cacher{
 			URL:    geoip.DownloadBase + "/GeoLite2-ASN/download?suffix=tar.gz",
-			Path:   filepath.Join(maxmindDir, "GeoLite2-ASN.tar.gz"),
+			Path:   filepath.Join(maxmindDir, geoip.TarGzName(geoip.ASNEdition)),
 			MaxAge: 3 * 24 * time.Hour,
 			Header: authHeader,
 		},

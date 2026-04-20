@@ -51,7 +51,7 @@ func main() {
 
 	exitCode := 0
 	for _, edition := range cfg.EditionIDs {
-		path := filepath.Join(outDir, edition+".tar.gz")
+		path := filepath.Join(outDir, geoip.TarGzName(edition))
 		cacher := &httpcache.Cacher{
 			URL:    geoip.DownloadBase + "/" + edition + "/download?suffix=tar.gz",
 			Path:   path,

@@ -15,6 +15,14 @@ const (
 	DownloadBase = "https://download.maxmind.com/geoip/databases"
 )
 
+// TarGzName returns the cache filename for edition's tar.gz archive.
+// MaxMind's Content-Disposition names include a release date
+// (e.g. GeoLite2-ASN_20260101.tar.gz); we use _LATEST so httpcache's
+// ETag sidecar stays tied to a stable path across releases.
+func TarGzName(edition string) string {
+	return edition + "_LATEST.tar.gz"
+}
+
 // DefaultConfPaths returns the standard locations where GeoIP.conf is looked
 // up: ./GeoIP.conf, then ~/.config/maxmind/GeoIP.conf.
 func DefaultConfPaths() []string {

@@ -64,7 +64,7 @@ func TestDownload_CityAndASN(t *testing.T) {
 	td := testdataDir(t)
 
 	for _, edition := range []string{geoip.CityEdition, geoip.ASNEdition} {
-		path := filepath.Join(td, edition+".tar.gz")
+		path := filepath.Join(td, geoip.TarGzName(edition))
 		os.Remove(path)
 		os.Remove(path + ".meta")
 
@@ -96,7 +96,7 @@ func TestDownload_ConditionalGet_FreshCacher(t *testing.T) {
 	td := testdataDir(t)
 
 	for _, edition := range []string{geoip.CityEdition, geoip.ASNEdition} {
-		path := filepath.Join(td, edition+".tar.gz")
+		path := filepath.Join(td, geoip.TarGzName(edition))
 
 		if _, err := newCacher(cfg, edition, path).Fetch(); err != nil {
 			t.Fatalf("%s initial Fetch: %v", edition, err)

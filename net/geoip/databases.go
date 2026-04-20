@@ -20,15 +20,15 @@ type Databases struct {
 	ASN  *geoip2.Reader
 }
 
-// Open reads <dir>/GeoLite2-City.tar.gz and <dir>/GeoLite2-ASN.tar.gz,
+// Open reads <dir>/<edition>_LATEST.tar.gz for City and ASN editions,
 // extracts the .mmdb entry from each archive in memory, and returns open
 // readers. No .mmdb files are written to disk.
 func Open(dir string) (*Databases, error) {
-	city, err := openMMDBTarGz(filepath.Join(dir, "GeoLite2-City.tar.gz"))
+	city, err := openMMDBTarGz(filepath.Join(dir, TarGzName(CityEdition)))
 	if err != nil {
 		return nil, fmt.Errorf("city: %w", err)
 	}
-	asn, err := openMMDBTarGz(filepath.Join(dir, "GeoLite2-ASN.tar.gz"))
+	asn, err := openMMDBTarGz(filepath.Join(dir, TarGzName(ASNEdition)))
 	if err != nil {
 		_ = city.Close()
 		return nil, fmt.Errorf("asn: %w", err)
