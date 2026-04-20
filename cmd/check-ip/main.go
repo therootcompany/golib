@@ -54,7 +54,7 @@ func main() {
 	fs.StringVar(&cfg.Bind, "serve", "", "bind address for the HTTP API, e.g. :8080")
 	fs.StringVar(&cfg.GeoIPConfPath, "geoip-conf", "", "path to GeoIP.conf (default: ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf)")
 	fs.StringVar(&cfg.RepoURL, "blocklist-repo", defaultBlocklistRepo, "git URL of the blocklist repo (must match bitwire-it layout)")
-	fs.StringVar(&cfg.CacheDir, "cache-dir", "", "cache parent dir, holds bitwire-it/ and maxmind/ subdirs (default: OS user cache)")
+	fs.StringVar(&cfg.CacheDir, "cache-dir", "", "cache parent dir, holds bitwire-it/ and maxmind/ subdirs (default: ~/.cache)")
 	fs.StringVar(&cfg.WhitelistPath, "whitelist", "", "path to a file of IPs and/or CIDRs (one per line) that override block decisions")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <ip> [ip...]\n", os.Args[0])
@@ -88,11 +88,11 @@ func main() {
 		os.Exit(1)
 	}
 	if cfg.CacheDir == "" {
-		d, err := os.UserCacheDir()
+		home, err := os.UserHomeDir()
 		if err != nil {
 			log.Fatalf("cache-dir: %v", err)
 		}
-		cfg.CacheDir = d
+		cfg.CacheDir = filepath.Join(home, ".cache")
 	}
 
 	// GeoIP config discovery: explicit --geoip-conf wins; otherwise check the

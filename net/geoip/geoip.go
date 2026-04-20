@@ -33,12 +33,14 @@ func DefaultConfPaths() []string {
 	return paths
 }
 
-// DefaultCacheDir returns the OS cache directory for MaxMind databases,
-// e.g. ~/.cache/maxmind on Linux or ~/Library/Caches/maxmind on macOS.
+// DefaultCacheDir returns ~/.cache/maxmind. CLI tools use the XDG
+// convention on all platforms — os.UserCacheDir's macOS default
+// (~/Library/Caches) is meant for bundled desktop apps and hides the
+// files from anyone looking under ~/.cache.
 func DefaultCacheDir() (string, error) {
-	base, err := os.UserCacheDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "maxmind"), nil
+	return filepath.Join(home, ".cache", "maxmind"), nil
 }
