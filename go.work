@@ -8,6 +8,7 @@ use (
 	./net/gitshallow
 	./net/httpcache
 	./net/ipcohort
+	./sync/dataset
 )
 
 replace (
@@ -16,4 +17,5 @@ replace (
 	github.com/therootcompany/golib/net/gitshallow v0.0.0 => ./net/gitshallow
 	github.com/therootcompany/golib/net/httpcache v0.0.0 => ./net/httpcache
 	github.com/therootcompany/golib/net/ipcohort v0.0.0 => ./net/ipcohort
+	github.com/therootcompany/golib/sync/dataset v0.0.0 => ./sync/dataset
 )

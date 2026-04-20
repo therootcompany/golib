@@ -7,8 +7,8 @@
 //   - --git URL                shallow-clone a git repo of blocklists
 //   - (default)                fetch raw blocklist files over HTTP with caching
 //
-// Cohorts are held in atomic.Pointers and hot-swapped on refresh so callers
-// never see a partial view. A single goroutine reloads on a ticker.
+// Each mode builds a sync/dataset.Group: one Fetcher shared by the inbound
+// and outbound views, so a single git pull (or HTTP-304 cycle) drives both.
 package main
 
 import (
@@ -19,13 +19,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/therootcompany/golib/net/geoip"
 	"github.com/therootcompany/golib/net/gitshallow"
 	"github.com/therootcompany/golib/net/httpcache"
 	"github.com/therootcompany/golib/net/ipcohort"
+	"github.com/therootcompany/golib/sync/dataset"
 )
 
 const (
@@ -102,19 +102,16 @@ func run(cfg Config, ipStr string) (blocked bool, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var inbound, outbound atomic.Pointer[ipcohort.Cohort]
-
-	refresh, err := buildRefresher(cfg, &inbound, &outbound)
+	group, inbound, outbound, err := newBlocklistGroup(cfg)
 	if err != nil {
 		return false, err
 	}
-	if err := refresh(); err != nil {
+	if err := group.Load(ctx); err != nil {
 		return false, fmt.Errorf("blacklist: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Loaded inbound=%d outbound=%d\n",
-		inbound.Load().Size(), outbound.Load().Size())
-
-	go tick(ctx, refreshInterval, "blacklist", refresh)
+		inbound.Value().Size(), outbound.Value().Size())
+	go group.Tick(ctx, refreshInterval)
 
 	whitelist, err := loadWhitelist(cfg.Whitelist)
 	if err != nil {
@@ -127,8 +124,8 @@ func run(cfg Config, ipStr string) (blocked bool, err error) {
 	}
 	defer func() { _ = geo.Close() }()
 
-	blockedIn := isBlocked(ipStr, whitelist, inbound.Load())
-	blockedOut := isBlocked(ipStr, whitelist, outbound.Load())
+	blockedIn := isBlocked(ipStr, whitelist, inbound.Value())
+	blockedOut := isBlocked(ipStr, whitelist, outbound.Value())
 
 	switch {
 	case blockedIn && blockedOut:
@@ -145,71 +142,51 @@ func run(cfg Config, ipStr string) (blocked bool, err error) {
 	return blockedIn || blockedOut, nil
 }
 
-// buildRefresher wires the chosen source (files/git/http) to the inbound and
-// outbound atomic pointers, and returns a function that performs one refresh
-// cycle: fetch upstream, and if anything changed (or on the first call),
-// reload both cohorts and atomically swap them in.
-func buildRefresher(
-	cfg Config,
-	inbound, outbound *atomic.Pointer[ipcohort.Cohort],
-) (func() error, error) {
-	loadAndSwap := func(inPaths, outPaths []string) error {
-		in, err := ipcohort.LoadFiles(inPaths...)
-		if err != nil {
-			return fmt.Errorf("inbound: %w", err)
-		}
-		out, err := ipcohort.LoadFiles(outPaths...)
-		if err != nil {
-			return fmt.Errorf("outbound: %w", err)
-		}
-		inbound.Store(in)
-		outbound.Store(out)
-		return nil
+// newBlocklistGroup wires a dataset.Group to the configured source (local
+// files, git, or HTTP-cached raw files) and registers inbound/outbound views.
+func newBlocklistGroup(cfg Config) (
+	_ *dataset.Group,
+	inbound, outbound *dataset.View[ipcohort.Cohort],
+	err error,
+) {
+	fetcher, inPaths, outPaths, err := newFetcher(cfg)
+	if err != nil {
+		return nil, nil, nil, err
 	}
+	g := dataset.NewGroup(fetcher)
+	inbound = dataset.Add(g, loadCohort(inPaths))
+	outbound = dataset.Add(g, loadCohort(outPaths))
+	return g, inbound, outbound, nil
+}
 
+// newFetcher picks a Fetcher based on cfg and returns the on-disk file paths
+// each view should parse after a sync.
+func newFetcher(cfg Config) (fetcher dataset.Fetcher, inPaths, outPaths []string, err error) {
 	switch {
 	case cfg.Inbound != "" || cfg.Outbound != "":
-		inPaths, outPaths := splitCSV(cfg.Inbound), splitCSV(cfg.Outbound)
-		loaded := false
-		return func() error {
-			if loaded {
-				return nil
-			}
-			loaded = true
-			return loadAndSwap(inPaths, outPaths)
-		}, nil
+		return dataset.NopFetcher{}, splitCSV(cfg.Inbound), splitCSV(cfg.Outbound), nil
 
 	case cfg.GitURL != "":
 		dir, err := cacheDir(cfg.DataDir)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		repo := gitshallow.New(cfg.GitURL, dir, 1, "")
-		inPaths := []string{
-			repo.FilePath("tables/inbound/single_ips.txt"),
-			repo.FilePath("tables/inbound/networks.txt"),
-		}
-		outPaths := []string{
-			repo.FilePath("tables/outbound/single_ips.txt"),
-			repo.FilePath("tables/outbound/networks.txt"),
-		}
-		first := true
-		return func() error {
-			updated, err := repo.Sync()
-			if err != nil {
-				return err
-			}
-			if !first && !updated {
-				return nil
-			}
-			first = false
-			return loadAndSwap(inPaths, outPaths)
-		}, nil
+		return repo,
+			[]string{
+				repo.FilePath("tables/inbound/single_ips.txt"),
+				repo.FilePath("tables/inbound/networks.txt"),
+			},
+			[]string{
+				repo.FilePath("tables/outbound/single_ips.txt"),
+				repo.FilePath("tables/outbound/networks.txt"),
+			},
+			nil
 
 	default:
 		dir, err := cacheDir(cfg.DataDir)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		cachers := []*httpcache.Cacher{
 			httpcache.New(bitwireRawBase+"/inbound/single_ips.txt", filepath.Join(dir, "inbound_single_ips.txt")),
@@ -217,40 +194,26 @@ func buildRefresher(
 			httpcache.New(bitwireRawBase+"/outbound/single_ips.txt", filepath.Join(dir, "outbound_single_ips.txt")),
 			httpcache.New(bitwireRawBase+"/outbound/networks.txt", filepath.Join(dir, "outbound_networks.txt")),
 		}
-		inPaths := []string{cachers[0].Path, cachers[1].Path}
-		outPaths := []string{cachers[2].Path, cachers[3].Path}
-		first := true
-		return func() error {
-			var anyUpdated bool
-			for _, c := range cachers {
-				u, err := c.Fetch()
-				if err != nil {
-					return err
+		return dataset.FetcherFunc(func() (bool, error) {
+				var any bool
+				for _, c := range cachers {
+					u, err := c.Fetch()
+					if err != nil {
+						return false, err
+					}
+					any = any || u
 				}
-				anyUpdated = anyUpdated || u
-			}
-			if !first && !anyUpdated {
-				return nil
-			}
-			first = false
-			return loadAndSwap(inPaths, outPaths)
-		}, nil
+				return any, nil
+			}),
+			[]string{cachers[0].Path, cachers[1].Path},
+			[]string{cachers[2].Path, cachers[3].Path},
+			nil
 	}
 }
 
-// tick calls fn every interval until ctx is done. Errors are logged, not fatal.
-func tick(ctx context.Context, interval time.Duration, name string, fn func() error) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			if err := fn(); err != nil {
-				fmt.Fprintf(os.Stderr, "%s: refresh error: %v\n", name, err)
-			}
-		}
+func loadCohort(paths []string) func() (*ipcohort.Cohort, error) {
+	return func() (*ipcohort.Cohort, error) {
+		return ipcohort.LoadFiles(paths...)
 	}
 }
 
