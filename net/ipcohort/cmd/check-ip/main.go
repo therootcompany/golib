@@ -13,6 +13,7 @@ import (
 	"github.com/oschwald/geoip2-golang"
 	"github.com/therootcompany/golib/net/dataset"
 	"github.com/therootcompany/golib/net/geoip"
+	"github.com/therootcompany/golib/net/httpcache"
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
@@ -75,10 +76,7 @@ func main() {
 	}
 
 	// Build typed datasets from the source.
-	if err := src.Init(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+	// blGroup.Init() calls src.Fetch() which handles initial git clone and HTTP download.
 	blGroup, whitelistDS, inboundDS, outboundDS := src.Datasets()
 	if err := blGroup.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -172,11 +170,11 @@ func main() {
 // newGeoIPDataset creates a Dataset[geoip2.Reader]. If d is nil, only
 // opens the existing file (no download). Close is wired to Reader.Close.
 func newGeoIPDataset(d *geoip.Downloader, edition, path string) *dataset.Dataset[geoip2.Reader] {
-	var syncer interface{ Fetch() (bool, error) }
+	var syncer httpcache.Syncer
 	if d != nil {
 		syncer = d.NewCacher(edition, path)
 	} else {
-		syncer = &nopSyncer{}
+		syncer = httpcache.NopSyncer{}
 	}
 	ds := dataset.New(syncer, func() (*geoip2.Reader, error) {
 		return geoip2.Open(path)
@@ -185,11 +183,6 @@ func newGeoIPDataset(d *geoip.Downloader, edition, path string) *dataset.Dataset
 	ds.Close = func(r *geoip2.Reader) { r.Close() }
 	return ds
 }
-
-// nopSyncer satisfies httpcache.Syncer for file-only datasets (no download).
-type nopSyncer struct{}
-
-func (n *nopSyncer) Fetch() (bool, error) { return false, nil }
 
 func containsInbound(ip string,
 	whitelist, inbound *dataset.Dataset[ipcohort.Cohort],

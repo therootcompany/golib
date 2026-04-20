@@ -22,8 +22,7 @@ type Sources struct {
 	inboundPaths   []string
 	outboundPaths  []string
 
-	gitRepo *gitshallow.Repo   // non-nil for git source; used by Init for clone-if-missing
-	syncs   []httpcache.Syncer // all syncable sources
+	syncs []httpcache.Syncer // all syncable sources
 }
 
 func newFileSources(whitelist, inbound, outbound []string) *Sources {
@@ -47,7 +46,6 @@ func newGitSources(gitURL, repoDir string, whitelist, inboundRel, outboundRel []
 		whitelistPaths: whitelist,
 		inboundPaths:   abs(inboundRel),
 		outboundPaths:  abs(outboundRel),
-		gitRepo:        repo,
 		syncs:          []httpcache.Syncer{repo},
 	}
 }
@@ -77,20 +75,6 @@ func (s *Sources) Fetch() (bool, error) {
 		anyUpdated = anyUpdated || updated
 	}
 	return anyUpdated, nil
-}
-
-// Init ensures remotes are ready: clones git if missing, or fetches HTTP files.
-func (s *Sources) Init() error {
-	if s.gitRepo != nil {
-		_, err := s.gitRepo.Init()
-		return err
-	}
-	for _, syn := range s.syncs {
-		if _, err := syn.Fetch(); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Datasets builds a dataset.Group backed by this Sources and returns typed
