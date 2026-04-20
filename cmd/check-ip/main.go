@@ -334,14 +334,18 @@ func loadWhitelist(paths string) (*ipcohort.Cohort, error) {
 }
 
 func cacheDir(override string) (string, error) {
-	if override != "" {
-		return override, nil
+	dir := override
+	if dir == "" {
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(base, "bitwire-it")
 	}
-	base, err := os.UserCacheDir()
-	if err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "bitwire-it"), nil
+	return dir, nil
 }
 
 func splitCSV(s string) []string {
