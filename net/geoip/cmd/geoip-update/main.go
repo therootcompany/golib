@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -45,18 +46,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	auth := httpcache.BasicAuth(cfg.AccountID, cfg.LicenseKey)
+	authHeader := http.Header{"Authorization": []string{httpcache.BasicAuth(cfg.AccountID, cfg.LicenseKey)}}
 	maxAge := time.Duration(*freshDays) * 24 * time.Hour
 
 	exitCode := 0
 	for _, edition := range cfg.EditionIDs {
 		path := filepath.Join(outDir, edition+".tar.gz")
 		cacher := &httpcache.Cacher{
-			URL:        geoip.DownloadBase + "/" + edition + "/download?suffix=tar.gz",
-			Path:       path,
-			MaxAge:     maxAge,
-			AuthHeader: "Authorization",
-			AuthValue:  auth,
+			URL:    geoip.DownloadBase + "/" + edition + "/download?suffix=tar.gz",
+			Path:   path,
+			MaxAge: maxAge,
+			Header: authHeader,
 		}
 		updated, err := cacher.Fetch()
 		if err != nil {

@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -143,20 +144,19 @@ func main() {
 	asnTarPath := filepath.Join(maxmindDir, "GeoLite2-ASN.tar.gz")
 	var geoSet *dataset.Set
 	if cfg.GeoIPBasicAuth != "" {
+		authHeader := http.Header{"Authorization": []string{cfg.GeoIPBasicAuth}}
 		geoSet = dataset.NewSet(
 			&httpcache.Cacher{
-				URL:        geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
-				Path:       cityTarPath,
-				MaxAge:     3 * 24 * time.Hour,
-				AuthHeader: "Authorization",
-				AuthValue:  cfg.GeoIPBasicAuth,
+				URL:    geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
+				Path:   cityTarPath,
+				MaxAge: 3 * 24 * time.Hour,
+				Header: authHeader,
 			},
 			&httpcache.Cacher{
-				URL:        geoip.DownloadBase + "/GeoLite2-ASN/download?suffix=tar.gz",
-				Path:       asnTarPath,
-				MaxAge:     3 * 24 * time.Hour,
-				AuthHeader: "Authorization",
-				AuthValue:  cfg.GeoIPBasicAuth,
+				URL:    geoip.DownloadBase + "/GeoLite2-ASN/download?suffix=tar.gz",
+				Path:   asnTarPath,
+				MaxAge: 3 * 24 * time.Hour,
+				Header: authHeader,
 			},
 		)
 	} else {

@@ -14,14 +14,14 @@ import (
 )
 
 // BasicAuth returns an HTTP Basic Authorization header value:
-// "Basic " + base64(user:pass). Assign to Cacher.AuthValue with
-// AuthHeader "Authorization".
+// "Basic " + base64(user:pass). Pair with the "Authorization" header in
+// Cacher.Header.
 func BasicAuth(user, pass string) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
 }
 
 // Bearer returns a Bearer Authorization header value: "Bearer " + token.
-// Assign to Cacher.AuthValue with AuthHeader "Authorization".
+// Pair with the "Authorization" header in Cacher.Header.
 func Bearer(token string) string {
 	return "Bearer " + token
 }
@@ -45,12 +45,10 @@ const (
 // Caching — ETag and Last-Modified values are persisted to a <path>.meta
 // sidecar file so conditional GETs survive process restarts.
 //
-// Auth — AuthHeader/AuthValue set a request header on every attempt. Auth is
-// stripped before following redirects so presigned targets (e.g. S3/R2 URLs)
-// never receive credentials. Use any scheme: "Authorization"/"Bearer token",
-// "X-API-Key"/"secret", "Authorization"/"Basic base64(user:pass)", etc. The
-// BasicAuth and Bearer helpers produce the right AuthValue for the common
-// cases.
+// Header — any values in Header are sent on every request. Authorization
+// headers are stripped before following redirects so presigned targets
+// (e.g. S3/R2 URLs) never receive credentials. The BasicAuth and Bearer
+// helpers produce Authorization values for the common cases.
 type Cacher struct {
 	URL         string
 	Path        string
@@ -58,8 +56,7 @@ type Cacher struct {
 	Timeout     time.Duration // 0 uses 5m;  caps overall request including body read
 	MaxAge      time.Duration // 0 disables; skip HTTP if file mtime is within this
 	MinInterval time.Duration // 0 disables; skip HTTP if last Fetch attempt was within this
-	AuthHeader  string        // e.g. "Authorization" or "X-API-Key"
-	AuthValue   string        // e.g. "Bearer token" or "Basic base64(user:pass)"
+	Header      http.Header   // headers sent on every request (Authorization is stripped on redirect)
 
 	mu          sync.Mutex
 	etag        string
@@ -166,19 +163,18 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 		TLSHandshakeTimeout: connTimeout,
 	}
 
-	if c.AuthHeader != "" {
-		req.Header.Set(c.AuthHeader, c.AuthValue)
+	for k, vs := range c.Header {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
 
 	client := &http.Client{Timeout: timeout, Transport: transport}
-	if c.AuthHeader != "" {
-		// Strip auth before following any redirect — redirect targets (e.g.
-		// presigned S3/R2 URLs) must not receive our credentials.
-		authHeader := c.AuthHeader
-		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			req.Header.Del(authHeader)
-			return nil
-		}
+	// Strip Authorization before following any redirect — redirect targets
+	// (e.g. presigned S3/R2 URLs) must not receive our credentials.
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		req.Header.Del("Authorization")
+		return nil
 	}
 
 	resp, err := client.Do(req)

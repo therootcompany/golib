@@ -3,6 +3,7 @@
 package geoip_test
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,10 +51,11 @@ func geoipConf(t *testing.T) *geoip.Conf {
 
 func newCacher(cfg *geoip.Conf, edition, path string) *httpcache.Cacher {
 	return &httpcache.Cacher{
-		URL:        geoip.DownloadBase + "/" + edition + "/download?suffix=tar.gz",
-		Path:       path,
-		AuthHeader: "Authorization",
-		AuthValue:  httpcache.BasicAuth(cfg.AccountID, cfg.LicenseKey),
+		URL:  geoip.DownloadBase + "/" + edition + "/download?suffix=tar.gz",
+		Path: path,
+		Header: http.Header{
+			"Authorization": []string{httpcache.BasicAuth(cfg.AccountID, cfg.LicenseKey)},
+		},
 	}
 }
 
