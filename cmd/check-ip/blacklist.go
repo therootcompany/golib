@@ -22,7 +22,7 @@ type Sources struct {
 	inboundPaths   []string
 	outboundPaths  []string
 
-	syncs []httpcache.Syncer // all syncable sources
+	syncs []dataset.Syncer // all syncable sources
 }
 
 func newFileSources(whitelist, inbound, outbound []string) *Sources {
@@ -46,7 +46,7 @@ func newGitSources(gitURL, repoDir string, whitelist, inboundRel, outboundRel []
 		whitelistPaths: whitelist,
 		inboundPaths:   abs(inboundRel),
 		outboundPaths:  abs(outboundRel),
-		syncs:          []httpcache.Syncer{repo},
+		syncs:          []dataset.Syncer{repo},
 	}
 }
 
@@ -64,7 +64,7 @@ func newHTTPSources(whitelist []string, inbound, outbound []HTTPSource) *Sources
 }
 
 // Fetch pulls updates from all sources. Returns whether any new data arrived.
-// Satisfies httpcache.Syncer.
+// Satisfies dataset.Syncer.
 func (s *Sources) Fetch() (bool, error) {
 	var anyUpdated bool
 	for _, syn := range s.syncs {

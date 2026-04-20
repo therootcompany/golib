@@ -16,17 +16,6 @@ const (
 	defaultTimeout     = 5 * time.Minute // overall including body read
 )
 
-// Syncer is implemented by any value that can fetch a remote resource and
-// report whether it changed. Both *Cacher and *gitshallow.Repo satisfy this.
-type Syncer interface {
-	Fetch() (updated bool, err error)
-}
-
-// NopSyncer is a Syncer that always reports no update and no error.
-// Use for datasets backed by local files managed externally (no download).
-type NopSyncer struct{}
-
-func (NopSyncer) Fetch() (bool, error) { return false, nil }
 
 // Cacher fetches a URL to a local file, using ETag/Last-Modified to skip
 // unchanged responses.

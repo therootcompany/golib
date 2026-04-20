@@ -1,6 +1,7 @@
 credentials.tsv
 GeoIP.conf
 *.mmdb
+testdata
 
 .env
 *.env
@@ -9,6 +10,8 @@ env.*
 
 # Project binaries
 dist/
+check-ip
+cmd/check-ip/check-ip
 auth/csvauth/cmd/csvauth/csvauth
 cmd/auth-proxy/auth-proxy
 cmd/httplog/httplog

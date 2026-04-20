@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/net/dataset"
-	"github.com/therootcompany/golib/net/httpcache"
 )
 
 // countSyncer counts Fetch calls and optionally reports updated.
@@ -47,7 +46,7 @@ func TestDataset_Init(t *testing.T) {
 }
 
 func TestDataset_LoadBeforeInit(t *testing.T) {
-	syn := httpcache.NopSyncer{}
+	syn := dataset.NopSyncer{}
 	ds := dataset.New(syn, func() (*string, error) {
 		v := "x"
 		return &v, nil
@@ -120,7 +119,7 @@ func TestDataset_InitError(t *testing.T) {
 }
 
 func TestDataset_LoaderError(t *testing.T) {
-	syn := httpcache.NopSyncer{}
+	syn := dataset.NopSyncer{}
 	ds := dataset.New(syn, func() (*string, error) {
 		return nil, errors.New("load failed")
 	})
@@ -273,7 +272,7 @@ func TestGroup_FetchError(t *testing.T) {
 }
 
 func TestGroup_LoaderError(t *testing.T) {
-	syn := httpcache.NopSyncer{}
+	syn := dataset.NopSyncer{}
 	g := dataset.NewGroup(syn)
 	dataset.Add(g, func() (*string, error) {
 		return nil, errors.New("parse error")

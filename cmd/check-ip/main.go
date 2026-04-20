@@ -13,7 +13,6 @@ import (
 	"github.com/oschwald/geoip2-golang"
 	"github.com/therootcompany/golib/net/dataset"
 	"github.com/therootcompany/golib/net/geoip"
-	"github.com/therootcompany/golib/net/httpcache"
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
@@ -194,11 +193,11 @@ func main() {
 // newGeoIPDataset creates a Dataset[geoip2.Reader]. If d is nil, only
 // opens the existing file (no download). Close is wired to Reader.Close.
 func newGeoIPDataset(d *geoip.Downloader, edition, path string) *dataset.Dataset[geoip2.Reader] {
-	var syncer httpcache.Syncer
+	var syncer dataset.Syncer
 	if d != nil {
 		syncer = d.NewCacher(edition, path)
 	} else {
-		syncer = httpcache.NopSyncer{}
+		syncer = dataset.NopSyncer{}
 	}
 	ds := dataset.New(syncer, func() (*geoip2.Reader, error) {
 		return geoip2.Open(path)

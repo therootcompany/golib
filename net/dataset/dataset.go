@@ -26,9 +26,19 @@ import (
 	"os"
 	"sync/atomic"
 	"time"
-
-	"github.com/therootcompany/golib/net/httpcache"
 )
+
+// Syncer is implemented by any value that can fetch a remote resource and
+// report whether it changed.
+type Syncer interface {
+	Fetch() (updated bool, err error)
+}
+
+// NopSyncer is a Syncer that always reports no update and no error.
+// Use for datasets backed by local files with no remote source.
+type NopSyncer struct{}
+
+func (NopSyncer) Fetch() (bool, error) { return false, nil }
 
 // Dataset couples a Syncer, a load function, and an atomic.Pointer[T].
 // Load is safe for concurrent use without locks.
@@ -39,14 +49,14 @@ type Dataset[T any] struct {
 	// Use this for values that hold resources, e.g. func(r *geoip2.Reader) { r.Close() }.
 	Close func(*T)
 
-	syncer httpcache.Syncer
+	syncer Syncer
 	load   func() (*T, error)
 	ptr    atomic.Pointer[T]
 }
 
 // New creates a Dataset. The syncer fetches updates; load produces the value.
 // load is a closure — it captures whatever paths or config it needs.
-func New[T any](syncer httpcache.Syncer, load func() (*T, error)) *Dataset[T] {
+func New[T any](syncer Syncer, load func() (*T, error)) *Dataset[T] {
 	return &Dataset[T]{syncer: syncer, load: load}
 }
 
@@ -115,12 +125,12 @@ type member interface {
 // Group ties one Syncer to multiple datasets so a single Fetch drives all
 // reloads — no redundant network calls when datasets share a source.
 type Group struct {
-	syncer  httpcache.Syncer
+	syncer  Syncer
 	members []member
 }
 
 // NewGroup creates a Group backed by syncer.
-func NewGroup(syncer httpcache.Syncer) *Group {
+func NewGroup(syncer Syncer) *Group {
 	return &Group{syncer: syncer}
 }
 
