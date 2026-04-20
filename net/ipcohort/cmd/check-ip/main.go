@@ -29,26 +29,48 @@ const (
 	outboundNetworkURL = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/outbound/networks.txt"
 )
 
+func defaultBlocklistDir() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return filepath.Join(os.Getenv("HOME"), ".cache", "bitwire-it")
+	}
+	return filepath.Join(base, "bitwire-it")
+}
+
 func main() {
+	dataDir := flag.String("data-dir", "", "blocklist cache dir (default ~/.cache/bitwire-it)")
 	cityDBPath := flag.String("city-db", "", "path to GeoLite2-City.mmdb (overrides -geoip-conf)")
 	asnDBPath := flag.String("asn-db", "", "path to GeoLite2-ASN.mmdb (overrides -geoip-conf)")
 	geoipConf := flag.String("geoip-conf", "", "path to GeoIP.conf; auto-downloads City+ASN into data-dir")
 	gitURL := flag.String("git", "", "clone/pull blocklist from this git URL into data-dir")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <data-dir|blacklist.txt> <ip-address>\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  data-dir:      fetch blocklists via HTTP (or git with -git)\n")
-		fmt.Fprintf(os.Stderr, "  blacklist.txt: load single local file as inbound list\n")
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <ip-address>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  Blocklists are fetched via HTTP by default (use -git for git source).\n")
+		fmt.Fprintf(os.Stderr, "  Pass a .txt/.csv path as the first arg to load a single local file.\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
-	if flag.NArg() < 2 {
+	if flag.NArg() < 1 {
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	dataPath := flag.Arg(0)
-	ipStr := flag.Arg(1)
+	// First arg is either a local file or the IP to check.
+	// If it looks like a file, treat it as the inbound list; otherwise use default cache dir.
+	var dataPath, ipStr string
+	if flag.NArg() >= 2 || strings.HasSuffix(flag.Arg(0), ".txt") || strings.HasSuffix(flag.Arg(0), ".csv") {
+		dataPath = flag.Arg(0)
+		ipStr = flag.Arg(1)
+	} else {
+		ipStr = flag.Arg(0)
+	}
+	if *dataDir != "" {
+		dataPath = *dataDir
+	}
+	if dataPath == "" {
+		dataPath = defaultBlocklistDir()
+	}
 
 	// Blocklist source.
 	var src *Sources
@@ -98,7 +120,9 @@ func main() {
 		} else {
 			dbDir := cfg.DatabaseDirectory
 			if dbDir == "" {
-				dbDir = dataPath
+				if d, err := geoip.DefaultCacheDir(); err == nil {
+					dbDir = d
+				}
 			}
 			if err := os.MkdirAll(dbDir, 0o755); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: mkdir %s: %v\n", dbDir, err)

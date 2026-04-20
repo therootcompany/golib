@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,6 +32,16 @@ type Downloader struct {
 	LicenseKey string
 	FreshDays  int           // 0 uses 3
 	Timeout    time.Duration // 0 uses 5m
+}
+
+// DefaultCacheDir returns the OS cache directory for MaxMind databases,
+// e.g. ~/.cache/maxmind on Linux or ~/Library/Caches/maxmind on macOS.
+func DefaultCacheDir() (string, error) {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "maxmind"), nil
 }
 
 // New returns a Downloader configured with the given credentials.
