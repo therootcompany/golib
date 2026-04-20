@@ -3,13 +3,17 @@ package httpcache
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sync"
 	"time"
 )
 
-const defaultTimeout = 30 * time.Second
+const (
+	defaultConnTimeout = 5 * time.Second  // TCP connect + TLS handshake
+	defaultTimeout     = 5 * time.Minute  // overall including body read
+)
 
 // Syncer is implemented by any value that can fetch a remote resource and
 // report whether it changed. Both *Cacher and *gitshallow.Repo satisfy this.
@@ -43,7 +47,8 @@ func (NopSyncer) Fetch() (bool, error) { return false, nil }
 type Cacher struct {
 	URL         string
 	Path        string
-	Timeout     time.Duration // 0 uses 30s
+	ConnTimeout time.Duration // 0 uses 5s;  caps TCP connect + TLS handshake
+	Timeout     time.Duration // 0 uses 5m;  caps overall request including body read
 	MaxAge      time.Duration // 0 disables; skip HTTP if file mtime is within this
 	MinInterval time.Duration // 0 disables; skip HTTP if last Fetch attempt was within this
 	Username    string        // Basic Auth — not forwarded on redirects
@@ -86,6 +91,10 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 	}
 	c.lastChecked = time.Now()
 
+	connTimeout := c.ConnTimeout
+	if connTimeout == 0 {
+		connTimeout = defaultConnTimeout
+	}
 	timeout := c.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
@@ -102,20 +111,26 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 		req.Header.Set("If-Modified-Since", c.lastMod)
 	}
 
+	transport := &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: connTimeout}).DialContext,
+		TLSHandshakeTimeout: connTimeout,
+	}
+
 	var client *http.Client
 	if c.Username != "" {
 		req.SetBasicAuth(c.Username, c.Password)
 		// Strip auth before following any redirect — presigned URLs (e.g. R2)
 		// must not receive our credentials.
 		client = &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				req.Header.Del("Authorization")
 				return nil
 			},
 		}
 	} else {
-		client = &http.Client{Timeout: timeout}
+		client = &http.Client{Timeout: timeout, Transport: transport}
 	}
 
 	resp, err := client.Do(req)
