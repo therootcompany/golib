@@ -13,28 +13,45 @@ import (
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
+// HTTPSource pairs a remote URL with a local cache path.
+type HTTPSource struct {
+	URL  string
+	Path string
+}
+
 type Blacklist struct {
 	atomic.Pointer[ipcohort.Cohort]
-	path string
-	git  *gitshallow.Repo
-	http *httpcache.Cacher
+	paths []string
+	git   *gitshallow.Repo
+	http  []*httpcache.Cacher
 }
 
-func NewBlacklist(path string) *Blacklist {
-	return &Blacklist{path: path}
+// NewBlacklist loads from one or more local files.
+func NewBlacklist(paths ...string) *Blacklist {
+	return &Blacklist{paths: paths}
 }
 
-func NewGitBlacklist(gitURL, path string) *Blacklist {
-	repo := gitshallow.New(gitURL, filepath.Dir(path), 1, "")
-	b := &Blacklist{path: path, git: repo}
+// NewGitBlacklist clones/pulls gitURL into repoDir and loads relPaths on each update.
+func NewGitBlacklist(gitURL, repoDir string, relPaths ...string) *Blacklist {
+	repo := gitshallow.New(gitURL, repoDir, 1, "")
+	paths := make([]string, len(relPaths))
+	for i, p := range relPaths {
+		paths[i] = filepath.Join(repoDir, p)
+	}
+	b := &Blacklist{paths: paths, git: repo}
 	repo.Register(b.reload)
 	return b
 }
 
-func NewHTTPBlacklist(url, path string) *Blacklist {
-	cacher := httpcache.New(url, path)
-	b := &Blacklist{path: path, http: cacher}
-	cacher.Register(b.reload)
+// NewHTTPBlacklist fetches each source URL to its local path, reloading on any change.
+func NewHTTPBlacklist(sources ...HTTPSource) *Blacklist {
+	b := &Blacklist{}
+	for _, src := range sources {
+		b.paths = append(b.paths, src.Path)
+		c := httpcache.New(src.URL, src.Path)
+		c.Register(b.reload)
+		b.http = append(b.http, c)
+	}
 	return b
 }
 
@@ -42,8 +59,13 @@ func (b *Blacklist) Init(lightGC bool) error {
 	switch {
 	case b.git != nil:
 		return b.git.Init(lightGC)
-	case b.http != nil:
-		return b.http.Init()
+	case len(b.http) > 0:
+		for _, c := range b.http {
+			if err := c.Init(); err != nil {
+				return err
+			}
+		}
+		return nil
 	default:
 		return b.reload()
 	}
@@ -72,8 +94,16 @@ func (b *Blacklist) sync(lightGC bool) (bool, error) {
 	switch {
 	case b.git != nil:
 		return b.git.Sync(lightGC)
-	case b.http != nil:
-		return b.http.Sync()
+	case len(b.http) > 0:
+		var anyUpdated bool
+		for _, c := range b.http {
+			updated, err := c.Sync()
+			if err != nil {
+				return anyUpdated, err
+			}
+			anyUpdated = anyUpdated || updated
+		}
+		return anyUpdated, nil
 	default:
 		return false, nil
 	}
@@ -88,7 +118,7 @@ func (b *Blacklist) Size() int {
 }
 
 func (b *Blacklist) reload() error {
-	c, err := ipcohort.LoadFile(b.path)
+	c, err := ipcohort.LoadFiles(b.paths...)
 	if err != nil {
 		return err
 	}

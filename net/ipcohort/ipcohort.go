@@ -140,6 +140,35 @@ func LoadFile(path string) (*Cohort, error) {
 	return ParseCSV(f)
 }
 
+// LoadFiles loads and merges multiple files into one Cohort.
+// Useful when hosts and networks are stored in separate files.
+func LoadFiles(paths ...string) (*Cohort, error) {
+	var hosts []uint32
+	var nets []IPv4Net
+
+	for _, path := range paths {
+		c, err := LoadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, c.hosts...)
+		nets = append(nets, c.nets...)
+	}
+
+	slices.Sort(hosts)
+	slices.SortFunc(nets, func(a, b IPv4Net) int {
+		if a.networkBE < b.networkBE {
+			return -1
+		}
+		if a.networkBE > b.networkBE {
+			return 1
+		}
+		return 0
+	})
+
+	return &Cohort{hosts: hosts, nets: nets}, nil
+}
+
 func ParseCSV(f io.Reader) (*Cohort, error) {
 	r := csv.NewReader(f)
 	r.FieldsPerRecord = -1
