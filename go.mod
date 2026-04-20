@@ -5,5 +5,7 @@ go 1.26.0
 require (
 	github.com/oschwald/geoip2-golang v1.13.0 // indirect
 	github.com/oschwald/maxminddb-golang v1.13.0 // indirect
+	github.com/phuslu/iploc v1.0.20260415 // indirect
 	golang.org/x/sys v0.20.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )
