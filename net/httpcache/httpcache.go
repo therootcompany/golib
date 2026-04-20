@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -182,6 +183,9 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 		return false, fmt.Errorf("unexpected status %d fetching %s", resp.StatusCode, c.URL)
 	}
 
+	if err := os.MkdirAll(filepath.Dir(c.Path), 0o755); err != nil {
+		return false, err
+	}
 	if c.Transform != nil {
 		if err := c.Transform(resp.Body, c.Path); err != nil {
 			return false, err

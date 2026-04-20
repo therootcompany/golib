@@ -76,6 +76,9 @@ func (r *Repo) clone() (bool, error) {
 	if r.Path == "" {
 		return false, fmt.Errorf("local path is required")
 	}
+	if err := os.MkdirAll(filepath.Dir(r.Path), 0o755); err != nil {
+		return false, err
+	}
 
 	args := []string{"clone", "--no-tags"}
 	if depth := r.effectiveDepth(); depth >= 0 {
