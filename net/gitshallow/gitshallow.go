@@ -14,11 +14,9 @@ type ShallowRepo struct {
 	URL    string
 	Path   string
 	Depth  int    // 0 defaults to 1, -1 for all
-	Branch string // Optional: specific branch to clone/fetch
-	//WithBranches bool
-	//WithTags bool
+	Branch string // Optional: specific branch to clone/pull
 
-	mu sync.Mutex // Mutex for in-process locking
+	mu sync.Mutex
 }
 
 // New creates a new ShallowRepo instance.
@@ -30,11 +28,11 @@ func New(url, path string, depth int, branch string) *ShallowRepo {
 		URL:    url,
 		Path:   path,
 		Depth:  depth,
-		Branch: strings.TrimSpace(branch), // clean up accidental whitespace
+		Branch: strings.TrimSpace(branch),
 	}
 }
 
-// Clone performs a shallow clone (default --depth 0 --single-branch, --no-tags, etc).
+// Clone performs a shallow clone (--depth N --single-branch --no-tags).
 func (r *ShallowRepo) Clone() (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -77,8 +75,7 @@ func (r *ShallowRepo) exists() bool {
 	return err == nil
 }
 
-// runGit executes a git command.
-// For clone it runs in the parent directory; otherwise inside the repo.
+// runGit executes a git command in the repo directory (or parent for clone).
 func (r *ShallowRepo) runGit(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 
@@ -96,51 +93,39 @@ func (r *ShallowRepo) runGit(args ...string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// Fetch performs a shallow fetch and updates the working branch.
-// Returns true if HEAD changed (i.e. meaningful update occurred).
-// Uses --depth on fetch; branch filtering only when Branch is set.
-func (r *ShallowRepo) Fetch() (updated bool, err error) {
+// Pull performs a shallow pull (--ff-only) and reports whether HEAD changed.
+func (r *ShallowRepo) Pull() (updated bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return r.fetch()
+	return r.pull()
 }
 
-func (r *ShallowRepo) fetch() (updated bool, err error) {
+func (r *ShallowRepo) pull() (updated bool, err error) {
 	if !r.exists() {
 		return false, fmt.Errorf("repository does not exist at %s", r.Path)
 	}
 
-	// Remember current HEAD
-	oldHead, err := r.runGit("-C", r.Path, "rev-parse", "HEAD")
+	oldHead, err := r.runGit("rev-parse", "HEAD")
 	if err != nil {
 		return false, err
 	}
 
-	// Update local branch (git pull --ff-only is safer in shallow context)
-	pullArgs := []string{"-C", r.Path, "pull", "--ff-only"}
-	if r.Branch != "" {
-		pullArgs = append(pullArgs, "origin", r.Branch)
-	}
-	_, err = r.runGit(pullArgs...)
-	if err != nil {
-		return false, err
-	}
-
-	// Fetch
-	fetchArgs := []string{"-C", r.Path, "fetch", "--no-tags"}
+	pullArgs := []string{"pull", "--ff-only", "--no-tags"}
 	if r.Depth == 0 {
 		r.Depth = 1
 	}
 	if r.Depth >= 0 {
-		fetchArgs = append(fetchArgs, "--depth", fmt.Sprintf("%d", r.Depth))
+		pullArgs = append(pullArgs, "--depth", fmt.Sprintf("%d", r.Depth))
 	}
-	_, err = r.runGit(fetchArgs...)
-	if err != nil {
+	if r.Branch != "" {
+		pullArgs = append(pullArgs, "origin", r.Branch)
+	}
+	if _, err = r.runGit(pullArgs...); err != nil {
 		return false, err
 	}
 
-	newHead, err := r.runGit("-C", r.Path, "rev-parse", "HEAD")
+	newHead, err := r.runGit("rev-parse", "HEAD")
 	if err != nil {
 		return false, err
 	}
@@ -148,24 +133,24 @@ func (r *ShallowRepo) fetch() (updated bool, err error) {
 	return oldHead != newHead, nil
 }
 
-// GC runs git gc, defaulting to pruning immediately and aggressively
-func (r *ShallowRepo) GC(lax, lazy bool) error {
+// GC runs git gc. aggressiveGC adds --aggressive; pruneNow adds --prune=now.
+func (r *ShallowRepo) GC(aggressiveGC, pruneNow bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return r.gc(lax, lazy)
+	return r.gc(aggressiveGC, pruneNow)
 }
 
-func (r *ShallowRepo) gc(lax, lazy bool) error {
+func (r *ShallowRepo) gc(aggressiveGC, pruneNow bool) error {
 	if !r.exists() {
 		return fmt.Errorf("repository does not exist at %s", r.Path)
 	}
 
-	args := []string{"-C", r.Path, "gc"}
-	if !lax {
+	args := []string{"gc"}
+	if aggressiveGC {
 		args = append(args, "--aggressive")
 	}
-	if !lazy {
+	if pruneNow {
 		args = append(args, "--prune=now")
 	}
 
@@ -173,27 +158,30 @@ func (r *ShallowRepo) gc(lax, lazy bool) error {
 	return err
 }
 
-// Sync clones if missing, fetches, and runs GC.
-// Returns whether fetch caused an update.
-func (r *ShallowRepo) Sync(laxGC, lazyPrune bool) (updated bool, err error) {
+// Sync clones if missing, pulls, and runs GC.
+// lightGC=false (zero value) runs --aggressive GC with --prune=now to minimize disk use.
+// Pass true to skip both when speed matters more than footprint.
+func (r *ShallowRepo) Sync(lightGC bool) (updated bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if updated, err := r.clone(); err != nil {
+	if cloned, err := r.clone(); err != nil {
 		return false, err
-	} else if updated {
-		return updated, nil
+	} else if cloned {
+		return true, nil
 	}
 
-	if updated, err := r.fetch(); err != nil {
-		return updated, err
-	} else if !updated {
+	updated, err = r.pull()
+	if err != nil {
+		return false, err
+	}
+	if !updated {
 		return false, nil
 	}
 
-	if err := r.gc(laxGC, lazyPrune); err != nil {
-		return updated, fmt.Errorf("gc failed but fetch succeeded: %w", err)
+	if err := r.gc(!lightGC, !lightGC); err != nil {
+		return true, fmt.Errorf("gc failed but pull succeeded: %w", err)
 	}
 
-	return updated, nil
+	return true, nil
 }

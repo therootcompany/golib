@@ -3,14 +3,15 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
-	"github.com/therootcompany/golib/net/gitdataset"
+	"github.com/therootcompany/golib/fs/dataset"
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: %s <blacklist.csv> <ip-address>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s <blacklist.csv> <ip-address> [git-url]\n", os.Args[0])
 		os.Exit(1)
 	}
 
@@ -21,28 +22,31 @@ func main() {
 		gitURL = os.Args[3]
 	}
 
-	fmt.Fprintf(os.Stderr, "Loading %q ...\n", dataPath)
+	var blacklist *dataset.File[ipcohort.Cohort]
 
-	var b *ipcohort.Cohort
-	loadFile := func(path string) (*ipcohort.Cohort, error) {
-		return ipcohort.LoadFile(path, false)
-	}
-	blacklist := gitdataset.New(gitURL, dataPath, loadFile)
-	fmt.Fprintf(os.Stderr, "Syncing git repo ...\n")
-	if updated, err := blacklist.Init(false); err != nil {
-		fmt.Fprintf(os.Stderr, "error: ip cohort: %v\n", err)
+	if gitURL != "" {
+		repoDir := filepath.Dir(dataPath)
+		relPath := filepath.Base(dataPath)
+		repo := dataset.NewRepo(gitURL, repoDir)
+		blacklist = dataset.AddFile(repo, relPath, ipcohort.LoadFile)
+		fmt.Fprintf(os.Stderr, "Syncing %q ...\n", repoDir)
+		if err := repo.Init(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: git sync: %v\n", err)
+			os.Exit(1)
+		}
 	} else {
-		b = blacklist.Load()
-		if updated {
-			n := b.Size()
-			if n > 0 {
-				fmt.Fprintf(os.Stderr, "ip cohort: loaded %d blacklist entries\n", n)
-			}
+		blacklist = dataset.NewFile(dataPath, ipcohort.LoadFile)
+		fmt.Fprintf(os.Stderr, "Loading %q ...\n", dataPath)
+		if err := blacklist.Reload(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: load: %v\n", err)
+			os.Exit(1)
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Checking blacklist ...\n")
-	if blacklist.Load().Contains(ipStr) {
+	c := blacklist.Load()
+	fmt.Fprintf(os.Stderr, "Loaded %d entries\n", c.Size())
+
+	if c.Contains(ipStr) {
 		fmt.Printf("%s is BLOCKED\n", ipStr)
 		os.Exit(1)
 	}

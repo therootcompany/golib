@@ -9,11 +9,11 @@ import (
 	"net/netip"
 	"os"
 	"slices"
-	"sort"
 	"strings"
 )
 
-// Either a subnet or single address (subnet with /32 CIDR prefix)
+// IPv4Net represents a subnet or single address (/32).
+// 6 bytes: networkBE uint32 + prefix uint8 + shift uint8.
 type IPv4Net struct {
 	networkBE uint32
 	prefix    uint8
@@ -29,32 +29,81 @@ func NewIPv4Net(ip4be uint32, prefix uint8) IPv4Net {
 }
 
 func (r IPv4Net) Contains(ip uint32) bool {
-	mask := uint32(0xFFFFFFFF << (r.shift))
+	mask := uint32(0xFFFFFFFF << r.shift)
 	return (ip & mask) == r.networkBE
 }
 
+// Cohort is an immutable, read-only set of IPv4 addresses and subnets.
+// Contains is safe for concurrent use without locks.
+//
+// hosts holds sorted /32 addresses for O(log n) binary search.
+// nets holds CIDR ranges (prefix < 32) for O(k) linear scan — typically small.
+type Cohort struct {
+	hosts []uint32
+	nets  []IPv4Net
+}
+
 func New() *Cohort {
-	cohort := &Cohort{ranges: []IPv4Net{}}
-	return cohort
+	return &Cohort{}
+}
+
+// Size returns the total number of entries (hosts + nets).
+func (c *Cohort) Size() int {
+	return len(c.hosts) + len(c.nets)
+}
+
+// Contains reports whether ipStr falls within any host or subnet in the cohort.
+// Returns true on parse error (fail-closed).
+func (c *Cohort) Contains(ipStr string) bool {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return true
+	}
+	ip4 := ip.As4()
+	ipU32 := binary.BigEndian.Uint32(ip4[:])
+
+	_, found := slices.BinarySearch(c.hosts, ipU32)
+	if found {
+		return true
+	}
+
+	for _, net := range c.nets {
+		if net.Contains(ipU32) {
+			return true
+		}
+	}
+	return false
 }
 
 func Parse(prefixList []string) (*Cohort, error) {
-	var ranges []IPv4Net
+	var hosts []uint32
+	var nets []IPv4Net
+
 	for _, raw := range prefixList {
 		ipv4net, err := ParseIPv4(raw)
 		if err != nil {
 			log.Printf("skipping invalid entry: %q", raw)
 			continue
 		}
-		ranges = append(ranges, ipv4net)
+		if ipv4net.prefix == 32 {
+			hosts = append(hosts, ipv4net.networkBE)
+		} else {
+			nets = append(nets, ipv4net)
+		}
 	}
 
-	sizedList := make([]IPv4Net, len(ranges))
-	copy(sizedList, ranges)
-	sortRanges(ranges)
+	slices.Sort(hosts)
+	slices.SortFunc(nets, func(a, b IPv4Net) int {
+		if a.networkBE < b.networkBE {
+			return -1
+		}
+		if a.networkBE > b.networkBE {
+			return 1
+		}
+		return 0
+	})
 
-	cohort := &Cohort{ranges: sizedList}
-	return cohort, nil
+	return &Cohort{hosts: hosts, nets: nets}, nil
 }
 
 func ParseIPv4(raw string) (ipv4net IPv4Net, err error) {
@@ -74,32 +123,34 @@ func ParseIPv4(raw string) (ipv4net IPv4Net, err error) {
 	}
 
 	ip4 := ippre.Addr().As4()
-	prefix := uint8(ippre.Bits()) // 0-32
+	prefix := uint8(ippre.Bits()) // 0–32
 	return NewIPv4Net(
 		binary.BigEndian.Uint32(ip4[:]),
 		prefix,
 	), nil
 }
 
-func LoadFile(path string, unsorted bool) (*Cohort, error) {
+func LoadFile(path string) (*Cohort, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("could not load %q: %v", path, err)
 	}
 	defer f.Close()
 
-	return ParseCSV(f, unsorted)
+	return ParseCSV(f)
 }
 
-func ParseCSV(f io.Reader, unsorted bool) (*Cohort, error) {
+func ParseCSV(f io.Reader) (*Cohort, error) {
 	r := csv.NewReader(f)
 	r.FieldsPerRecord = -1
 
-	return ReadAll(r, unsorted)
+	return ReadAll(r)
 }
 
-func ReadAll(r *csv.Reader, unsorted bool) (*Cohort, error) {
-	var ranges []IPv4Net
+func ReadAll(r *csv.Reader) (*Cohort, error) {
+	var hosts []uint32
+	var nets []IPv4Net
+
 	for {
 		record, err := r.Read()
 		if err == io.EOF {
@@ -115,7 +166,6 @@ func ReadAll(r *csv.Reader, unsorted bool) (*Cohort, error) {
 
 		raw := strings.TrimSpace(record[0])
 
-		// Skip comments/empty
 		if raw == "" || strings.HasPrefix(raw, "#") {
 			continue
 		}
@@ -130,65 +180,24 @@ func ReadAll(r *csv.Reader, unsorted bool) (*Cohort, error) {
 			log.Printf("skipping invalid entry: %q", raw)
 			continue
 		}
-		ranges = append(ranges, ipv4net)
+
+		if ipv4net.prefix == 32 {
+			hosts = append(hosts, ipv4net.networkBE)
+		} else {
+			nets = append(nets, ipv4net)
+		}
 	}
 
-	if unsorted {
-		sortRanges(ranges)
-	}
-
-	sizedList := make([]IPv4Net, len(ranges))
-	copy(sizedList, ranges)
-
-	cohort := &Cohort{ranges: sizedList}
-	return cohort, nil
-}
-
-func sortRanges(ranges []IPv4Net) {
-	// Sort by network address (required for binary search)
-	sort.Slice(ranges, func(i, j int) bool {
-		// Note: we could also sort by prefix (largest first)
-		return ranges[i].networkBE < ranges[j].networkBE
-	})
-
-	// Note: we could also merge ranges here
-}
-
-type Cohort struct {
-	ranges []IPv4Net
-}
-
-func (c *Cohort) Size() int {
-	return len(c.ranges)
-}
-
-func (c *Cohort) Contains(ipStr string) bool {
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		return true
-	}
-	ip4 := ip.As4()
-	ipU32 := binary.BigEndian.Uint32(ip4[:])
-
-	idx, found := slices.BinarySearchFunc(c.ranges, ipU32, func(r IPv4Net, target uint32) int {
-		if r.networkBE < target {
+	slices.Sort(hosts)
+	slices.SortFunc(nets, func(a, b IPv4Net) int {
+		if a.networkBE < b.networkBE {
 			return -1
 		}
-		if r.networkBE > target {
+		if a.networkBE > b.networkBE {
 			return 1
 		}
 		return 0
 	})
-	if found {
-		return true
-	}
 
-	// Check the range immediately before the insertion point
-	if idx > 0 {
-		if c.ranges[idx-1].Contains(ipU32) {
-			return true
-		}
-	}
-
-	return false
+	return &Cohort{hosts: hosts, nets: nets}, nil
 }

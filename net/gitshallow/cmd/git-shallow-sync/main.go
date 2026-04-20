@@ -19,10 +19,8 @@ import (
 )
 
 const (
-	defaultDepth  = 1     // shallow by default
-	defaultBranch = ""    // empty = default branch + --single-branch
-	laxGC         = false // false = --aggressive
-	lazyPrune     = false // false = --prune=now
+	defaultDepth  = 1  // shallow by default
+	defaultBranch = "" // empty = default branch + --single-branch
 )
 
 func main() {
@@ -37,7 +35,7 @@ func main() {
 	url := os.Args[1]
 	path := os.Args[2]
 
-	// Expand ~ to home directory for Windows
+	// Expand ~ to home directory
 	if path[0] == '~' {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -47,7 +45,6 @@ func main() {
 		path = filepath.Join(home, path[1:])
 	}
 
-	// Make path absolute
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid path: %v\n", err)
@@ -60,14 +57,14 @@ func main() {
 
 	repo := gitshallow.New(url, absPath, defaultDepth, defaultBranch)
 
-	updated, err := repo.Sync(laxGC, lazyPrune)
+	updated, err := repo.Sync(false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Sync failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	if updated {
-		fmt.Println("Repository was updated (new commits fetched).")
+		fmt.Println("Repository was updated (new commits pulled).")
 	} else {
 		fmt.Println("Repository is already up to date.")
 	}
