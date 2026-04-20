@@ -42,7 +42,7 @@ func (c *IPCheck) handle(w http.ResponseWriter, r *http.Request) {
 		Blocked:         in || out,
 		BlockedInbound:  in,
 		BlockedOutbound: out,
-		Geo:             c.geo.Lookup(ip),
+		Geo:             c.geo.Value().Lookup(ip),
 	}
 
 	if r.URL.Query().Get("format") == "json" ||

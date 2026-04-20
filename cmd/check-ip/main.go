@@ -43,7 +43,7 @@ type IPCheck struct {
 
 	inbound  *dataset.View[ipcohort.Cohort]
 	outbound *dataset.View[ipcohort.Cohort]
-	geo      *geoip.Databases
+	geo      *dataset.View[geoip.Databases]
 }
 
 func main() {
@@ -124,38 +124,50 @@ func main() {
 	}
 
 	// GeoIP: with credentials, download the City + ASN tar.gz archives via
-	// httpcache conditional GETs. Without them, expect the tar.gz files to
-	// already be in maxmindDir. geoip.Open extracts in-memory — no .mmdb
-	// files are written to disk.
+	// httpcache conditional GETs. Without them, poll the existing tar.gz
+	// files in maxmindDir. geoip.Open extracts in-memory — no .mmdb files
+	// are written to disk.
 	maxmindDir := filepath.Join(cfg.CacheDir, "maxmind")
+	cityTarPath := filepath.Join(maxmindDir, "GeoLite2-City.tar.gz")
+	asnTarPath := filepath.Join(maxmindDir, "GeoLite2-ASN.tar.gz")
+	var geoFetcher dataset.Fetcher
 	if cfg.GeoIPBasicAuth != "" {
 		city := &httpcache.Cacher{
 			URL:        geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
-			Path:       filepath.Join(maxmindDir, "GeoLite2-City.tar.gz"),
+			Path:       cityTarPath,
 			MaxAge:     3 * 24 * time.Hour,
 			AuthHeader: "Authorization",
 			AuthValue:  cfg.GeoIPBasicAuth,
 		}
 		asn := &httpcache.Cacher{
 			URL:        geoip.DownloadBase + "/GeoLite2-ASN/download?suffix=tar.gz",
-			Path:       filepath.Join(maxmindDir, "GeoLite2-ASN.tar.gz"),
+			Path:       asnTarPath,
 			MaxAge:     3 * 24 * time.Hour,
 			AuthHeader: "Authorization",
 			AuthValue:  cfg.GeoIPBasicAuth,
 		}
-		if _, err := city.Fetch(); err != nil {
-			log.Fatalf("fetch GeoLite2-City: %v", err)
-		}
-		if _, err := asn.Fetch(); err != nil {
-			log.Fatalf("fetch GeoLite2-ASN: %v", err)
-		}
+		geoFetcher = dataset.FetcherFunc(func() (bool, error) {
+			cityUpdated, err := city.Fetch()
+			if err != nil {
+				return false, fmt.Errorf("fetch GeoLite2-City: %w", err)
+			}
+			asnUpdated, err := asn.Fetch()
+			if err != nil {
+				return false, fmt.Errorf("fetch GeoLite2-ASN: %w", err)
+			}
+			return cityUpdated || asnUpdated, nil
+		})
+	} else {
+		geoFetcher = dataset.PollFiles(cityTarPath, asnTarPath)
 	}
-	geo, err := geoip.Open(maxmindDir)
-	if err != nil {
+	geoGroup := dataset.NewGroup(geoFetcher)
+	cfg.geo = dataset.Add(geoGroup, func() (*geoip.Databases, error) {
+		return geoip.Open(maxmindDir)
+	})
+	if err := geoGroup.Load(context.Background()); err != nil {
 		log.Fatalf("geoip: %v", err)
 	}
-	defer func() { _ = geo.Close() }()
-	cfg.geo = geo
+	defer func() { _ = cfg.geo.Value().Close() }()
 
 	if cfg.Bind == "" {
 		return
@@ -165,6 +177,9 @@ func main() {
 	defer stop()
 	go group.Tick(ctx, refreshInterval, func(err error) {
 		log.Printf("blocklists refresh: %v", err)
+	})
+	go geoGroup.Tick(ctx, refreshInterval, func(err error) {
+		log.Printf("geoip refresh: %v", err)
 	})
 	if err := cfg.serve(ctx); err != nil {
 		log.Fatalf("serve: %v", err)
