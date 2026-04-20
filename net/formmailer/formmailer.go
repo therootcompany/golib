@@ -67,13 +67,13 @@ var (
 )
 
 // FormFields maps logical field names to the HTML form field names.
-// Zero values fall back to the field name itself ("name", "email", etc.).
+// Zero values use GravityForms-compatible defaults (input_1, input_3, etc.).
 type FormFields struct {
-	Name    string // default "name"
-	Email   string // default "email"
-	Phone   string // default "phone"
-	Company string // default "company"
-	Message string // default "message"
+	Name    string // default "input_1"
+	Email   string // default "input_3"
+	Phone   string // default "input_4"
+	Company string // default "input_5"
+	Message string // default "input_7"
 }
 
 func (f FormFields) get(r *http.Request, field, def string) string {
@@ -177,11 +177,11 @@ func (fm *FormMailer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := fm.Fields.get(r, fm.Fields.Name, "name")
-	email := strings.ToLower(fm.Fields.get(r, fm.Fields.Email, "email"))
-	phone := fm.Fields.get(r, fm.Fields.Phone, "phone")
-	company := fm.Fields.get(r, fm.Fields.Company, "company")
-	message := fm.Fields.get(r, fm.Fields.Message, "message")
+	name := fm.Fields.get(r, fm.Fields.Name, "input_1")
+	email := strings.ToLower(fm.Fields.get(r, fm.Fields.Email, "input_3"))
+	phone := fm.Fields.get(r, fm.Fields.Phone, "input_4")
+	company := fm.Fields.get(r, fm.Fields.Company, "input_5")
+	message := fm.Fields.get(r, fm.Fields.Message, "input_7")
 
 	if err := validateLengths(name, email, phone, company, message); err != nil {
 		fm.writeError(w, err, true)
