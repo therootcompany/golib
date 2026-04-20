@@ -2,8 +2,10 @@ package dataset_test
 
 import (
 	"errors"
+	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/therootcompany/golib/sync/dataset"
 )
@@ -124,6 +126,49 @@ func TestGroup_LoaderError(t *testing.T) {
 	})
 	if err := g.Load(t.Context()); err == nil {
 		t.Error("expected loader error")
+	}
+}
+
+func TestPollFiles(t *testing.T) {
+	dir := t.TempDir()
+	a := dir + "/a.txt"
+	b := dir + "/b.txt"
+	if err := os.WriteFile(a, []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte("2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := dataset.PollFiles(a, b)
+
+	if u, err := p.Fetch(); err != nil || !u {
+		t.Fatalf("first Fetch: updated=%v err=%v, want true/nil", u, err)
+	}
+	if u, err := p.Fetch(); err != nil || u {
+		t.Fatalf("unchanged Fetch: updated=%v err=%v, want false/nil", u, err)
+	}
+
+	// Bump mtime + change contents on b.
+	future := time.Now().Add(2 * time.Second)
+	if err := os.WriteFile(b, []byte("22"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(b, future, future); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := p.Fetch(); err != nil || !u {
+		t.Errorf("after change: updated=%v err=%v, want true/nil", u, err)
+	}
+	if u, err := p.Fetch(); err != nil || u {
+		t.Errorf("steady Fetch: updated=%v err=%v, want false/nil", u, err)
+	}
+}
+
+func TestPollFiles_MissingFile(t *testing.T) {
+	p := dataset.PollFiles(t.TempDir() + "/nope.txt")
+	if _, err := p.Fetch(); err == nil {
+		t.Error("expected error for missing file")
 	}
 }
 

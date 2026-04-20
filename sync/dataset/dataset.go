@@ -16,6 +16,8 @@ package dataset
 
 import (
 	"context"
+	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -32,11 +34,51 @@ type FetcherFunc func() (bool, error)
 
 func (f FetcherFunc) Fetch() (bool, error) { return f() }
 
-// NopFetcher always reports no update. Use for groups backed by local files
-// that don't need a refresh cycle.
+// NopFetcher always reports no update. Use for groups whose source never
+// changes (test fixtures, embedded data).
 type NopFetcher struct{}
 
 func (NopFetcher) Fetch() (bool, error) { return false, nil }
+
+// PollFiles returns a Fetcher that stat's the given paths and reports
+// "updated" whenever any file's size or modtime has changed since the last
+// call. The first call always reports updated=true.
+//
+// Use for Group's whose source is local files that may be edited out of band
+// (e.g. a user-provided --inbound list) — pair with Group.Tick to pick up
+// changes automatically.
+func PollFiles(paths ...string) Fetcher {
+	return &filePoller{paths: paths, stats: make(map[string]fileStat, len(paths))}
+}
+
+type fileStat struct {
+	size    int64
+	modTime time.Time
+}
+
+type filePoller struct {
+	mu    sync.Mutex
+	paths []string
+	stats map[string]fileStat
+}
+
+func (p *filePoller) Fetch() (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	changed := false
+	for _, path := range p.paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return false, err
+		}
+		cur := fileStat{size: info.Size(), modTime: info.ModTime()}
+		if prev, ok := p.stats[path]; !ok || prev != cur {
+			changed = true
+			p.stats[path] = cur
+		}
+	}
+	return changed, nil
+}
 
 // Group ties one Fetcher to one or more views. A Load call fetches once and,
 // on the first call or when the source reports a change, reloads every view

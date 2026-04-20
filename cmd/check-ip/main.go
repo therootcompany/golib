@@ -292,7 +292,10 @@ func openBlocklists(cfg Config) (
 func newBlocklistFetcher(cfg Config) (fetcher dataset.Fetcher, inPaths, outPaths []string, err error) {
 	switch {
 	case cfg.Inbound != "" || cfg.Outbound != "":
-		return dataset.NopFetcher{}, splitCSV(cfg.Inbound), splitCSV(cfg.Outbound), nil
+		inPaths := splitCSV(cfg.Inbound)
+		outPaths := splitCSV(cfg.Outbound)
+		all := append(append([]string(nil), inPaths...), outPaths...)
+		return dataset.PollFiles(all...), inPaths, outPaths, nil
 
 	case cfg.GitURL != "":
 		dir, err := cacheDir(cfg.DataDir)
