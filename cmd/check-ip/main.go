@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/net/dataset"
+	"github.com/therootcompany/golib/net/geoip"
 	"github.com/therootcompany/golib/net/gitshallow"
 	"github.com/therootcompany/golib/net/httpcache"
 	"github.com/therootcompany/golib/net/ipcohort"
@@ -97,7 +98,7 @@ func main() {
 
 	// -- GeoIP (optional) --------------------------------------------------
 
-	geo, err := setupGeo(*geoipConf, *cityDB, *asnDB)
+	geo, err := geoip.OpenDatabases(*geoipConf, *cityDB, *asnDB)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

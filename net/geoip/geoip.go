@@ -34,6 +34,62 @@ type Downloader struct {
 	Timeout    time.Duration // 0 uses 5m
 }
 
+// DefaultConfPaths returns the standard locations where GeoIP.conf is looked
+// up: ./GeoIP.conf, then ~/.config/maxmind/GeoIP.conf.
+func DefaultConfPaths() []string {
+	paths := []string{"GeoIP.conf"}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".config", "maxmind", "GeoIP.conf"))
+	}
+	return paths
+}
+
+// OpenDatabases discovers credentials and paths, then returns a ready-to-Init
+// Databases. Returns nil with no error when geoip is not configured.
+//
+//   - confPath=""  → auto-discover from DefaultConfPaths
+//   - conf found   → auto-download; cityPath/asnPath override default locations
+//   - no conf      → cityPath and asnPath must point to existing .mmdb files
+//   - no conf and no paths → geoip disabled (returns nil, nil)
+func OpenDatabases(confPath, cityPath, asnPath string) (*Databases, error) {
+	if confPath == "" {
+		for _, p := range DefaultConfPaths() {
+			if _, err := os.Stat(p); err == nil {
+				confPath = p
+				break
+			}
+		}
+	}
+
+	if confPath != "" {
+		cfg, err := ParseConf(confPath)
+		if err != nil {
+			return nil, fmt.Errorf("geoip-conf: %w", err)
+		}
+		dbDir := cfg.DatabaseDirectory
+		if dbDir == "" {
+			if dbDir, err = DefaultCacheDir(); err != nil {
+				return nil, fmt.Errorf("geoip cache dir: %w", err)
+			}
+		}
+		if err := os.MkdirAll(dbDir, 0o755); err != nil {
+			return nil, fmt.Errorf("mkdir %s: %w", dbDir, err)
+		}
+		if cityPath == "" {
+			cityPath = filepath.Join(dbDir, CityEdition+".mmdb")
+		}
+		if asnPath == "" {
+			asnPath = filepath.Join(dbDir, ASNEdition+".mmdb")
+		}
+		return New(cfg.AccountID, cfg.LicenseKey).NewDatabases(cityPath, asnPath), nil
+	}
+
+	if cityPath == "" && asnPath == "" {
+		return nil, nil
+	}
+	return NewDatabases(cityPath, asnPath), nil
+}
+
 // DefaultCacheDir returns the OS cache directory for MaxMind databases,
 // e.g. ~/.cache/maxmind on Linux or ~/Library/Caches/maxmind on macOS.
 func DefaultCacheDir() (string, error) {
