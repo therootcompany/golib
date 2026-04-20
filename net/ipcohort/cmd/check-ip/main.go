@@ -185,7 +185,7 @@ func newGeoIPDataset(d *geoip.Downloader, edition, path string) *dataset.Dataset
 }
 
 func containsInbound(ip string,
-	whitelist, inbound *dataset.Dataset[ipcohort.Cohort],
+	whitelist, inbound *dataset.View[ipcohort.Cohort],
 ) bool {
 	if whitelist != nil {
 		if wl := whitelist.Load(); wl != nil && wl.Contains(ip) {
@@ -200,7 +200,7 @@ func containsInbound(ip string,
 }
 
 func containsOutbound(ip string,
-	whitelist, outbound *dataset.Dataset[ipcohort.Cohort],
+	whitelist, outbound *dataset.View[ipcohort.Cohort],
 ) bool {
 	if whitelist != nil {
 		if wl := whitelist.Load(); wl != nil && wl.Contains(ip) {
@@ -256,7 +256,7 @@ func printGeoInfo(ipStr string, cityDS, asnDS *dataset.Dataset[geoip2.Reader]) {
 	}
 }
 
-func cohortSize(ds *dataset.Dataset[ipcohort.Cohort]) int {
+func cohortSize(ds *dataset.View[ipcohort.Cohort]) int {
 	if ds == nil {
 		return 0
 	}

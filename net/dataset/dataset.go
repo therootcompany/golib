@@ -124,13 +124,24 @@ func NewGroup(syncer httpcache.Syncer) *Group {
 	return &Group{syncer: syncer}
 }
 
-// Add registers a new dataset in g and returns it. Fetch and reload are driven
-// by the Group — call Init/Run/Sync on g, not on the returned Dataset.
+// View is the read-only handle returned by Add. It exposes only Load —
+// fetch and reload are driven by the owning Group.
+type View[T any] struct {
+	d *Dataset[T]
+}
+
+// Load returns the current value. Returns nil before the Group is initialised.
+func (v *View[T]) Load() *T { return v.d.ptr.Load() }
+
+func (v *View[T]) reload() error { return v.d.reload() }
+
+// Add registers a new dataset in g and returns a View. Call Load to read the
+// current value. Drive updates by calling Init/Sync/Run on the Group.
 // load is a closure capturing whatever paths or config it needs.
-func Add[T any](g *Group, load func() (*T, error)) *Dataset[T] {
-	d := &Dataset[T]{syncer: httpcache.NopSyncer{}, load: load}
-	g.members = append(g.members, d)
-	return d
+func Add[T any](g *Group, load func() (*T, error)) *View[T] {
+	v := &View[T]{d: &Dataset[T]{load: load}}
+	g.members = append(g.members, v)
+	return v
 }
 
 // Init fetches once then reloads all registered datasets.

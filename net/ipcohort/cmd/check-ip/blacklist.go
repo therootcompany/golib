@@ -82,9 +82,9 @@ func (s *Sources) Fetch() (bool, error) {
 // outbound may be nil if no paths were configured.
 func (s *Sources) Datasets() (
 	g *dataset.Group,
-	whitelist *dataset.Dataset[ipcohort.Cohort],
-	inbound *dataset.Dataset[ipcohort.Cohort],
-	outbound *dataset.Dataset[ipcohort.Cohort],
+	whitelist *dataset.View[ipcohort.Cohort],
+	inbound *dataset.View[ipcohort.Cohort],
+	outbound *dataset.View[ipcohort.Cohort],
 ) {
 	g = dataset.NewGroup(s)
 	if len(s.whitelistPaths) > 0 {
