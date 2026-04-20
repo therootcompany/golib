@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -57,6 +58,26 @@ type Config struct {
 	CityDB    string
 	ASNDB     string
 	Serve     string
+	Format    string
+}
+
+// Format selects the report rendering.
+type Format string
+
+const (
+	FormatPretty Format = "pretty"
+	FormatJSON   Format = "json"
+)
+
+func parseFormat(s string) (Format, error) {
+	switch s {
+	case "", "pretty":
+		return FormatPretty, nil
+	case "json":
+		return FormatJSON, nil
+	default:
+		return "", fmt.Errorf("invalid --format %q (want: pretty, json)", s)
+	}
 }
 
 func main() {
@@ -72,6 +93,7 @@ func main() {
 	fs.StringVar(&cfg.CityDB, "city-db", "", "path to GeoLite2-City.mmdb (skips auto-download)")
 	fs.StringVar(&cfg.ASNDB, "asn-db", "", "path to GeoLite2-ASN.mmdb (skips auto-download)")
 	fs.StringVar(&cfg.Serve, "serve", "", "start HTTP server at addr:port (e.g. :8080) instead of one-shot check")
+	fs.StringVar(&cfg.Format, "format", "", "output format: pretty, json (default pretty)")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <ip-address>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "       %s --serve :8080 [flags]\n", os.Args[0])
@@ -137,23 +159,79 @@ type Checker struct {
 	geo       *geoip.Databases
 }
 
-// Report writes a human-readable status line (plus geoip info) for ip and
-// reports whether ip was blocked.
-func (c *Checker) Report(w io.Writer, ip string) (blocked bool) {
-	blockedIn := isBlocked(ip, c.whitelist, c.inbound.Value())
-	blockedOut := isBlocked(ip, c.whitelist, c.outbound.Value())
-	switch {
-	case blockedIn && blockedOut:
-		fmt.Fprintf(w, "%s is BLOCKED (inbound + outbound)\n", ip)
-	case blockedIn:
-		fmt.Fprintf(w, "%s is BLOCKED (inbound)\n", ip)
-	case blockedOut:
-		fmt.Fprintf(w, "%s is BLOCKED (outbound)\n", ip)
-	default:
-		fmt.Fprintf(w, "%s is allowed\n", ip)
+// Result is the structured verdict for a single IP.
+type Result struct {
+	IP              string     `json:"ip"`
+	Blocked         bool       `json:"blocked"`
+	BlockedInbound  bool       `json:"blocked_inbound"`
+	BlockedOutbound bool       `json:"blocked_outbound"`
+	Whitelisted     bool       `json:"whitelisted,omitempty"`
+	Geo             geoip.Info `json:"geo,omitzero"`
+}
+
+// Check returns the structured verdict for ip without rendering.
+func (c *Checker) Check(ip string) Result {
+	whitelisted := c.whitelist != nil && c.whitelist.Contains(ip)
+	in := !whitelisted && cohortContains(c.inbound.Value(), ip)
+	out := !whitelisted && cohortContains(c.outbound.Value(), ip)
+	return Result{
+		IP:              ip,
+		Blocked:         in || out,
+		BlockedInbound:  in,
+		BlockedOutbound: out,
+		Whitelisted:     whitelisted,
+		Geo:             c.geo.Lookup(ip),
 	}
-	c.geo.PrintInfo(w, ip)
-	return blockedIn || blockedOut
+}
+
+// Report renders r to w in the given format. Returns r.Blocked for convenience.
+func (r Result) Report(w io.Writer, format Format) bool {
+	switch format {
+	case FormatJSON:
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(r)
+	default:
+		r.writePretty(w)
+	}
+	return r.Blocked
+}
+
+func (r Result) writePretty(w io.Writer) {
+	switch {
+	case r.BlockedInbound && r.BlockedOutbound:
+		fmt.Fprintf(w, "%s is BLOCKED (inbound + outbound)\n", r.IP)
+	case r.BlockedInbound:
+		fmt.Fprintf(w, "%s is BLOCKED (inbound)\n", r.IP)
+	case r.BlockedOutbound:
+		fmt.Fprintf(w, "%s is BLOCKED (outbound)\n", r.IP)
+	default:
+		fmt.Fprintf(w, "%s is allowed\n", r.IP)
+	}
+	geoPrint(w, r.Geo)
+}
+
+func geoPrint(w io.Writer, info geoip.Info) {
+	var parts []string
+	if info.City != "" {
+		parts = append(parts, info.City)
+	}
+	if info.Region != "" {
+		parts = append(parts, info.Region)
+	}
+	if info.Country != "" {
+		parts = append(parts, fmt.Sprintf("%s (%s)", info.Country, info.CountryISO))
+	}
+	if len(parts) > 0 {
+		fmt.Fprintf(w, "  Location: %s\n", strings.Join(parts, ", "))
+	}
+	if info.ASN != 0 {
+		fmt.Fprintf(w, "  ASN:      AS%d %s\n", info.ASN, info.ASNOrg)
+	}
+}
+
+func cohortContains(c *ipcohort.Cohort, ip string) bool {
+	return c != nil && c.Contains(ip)
 }
 
 // newChecker builds a fully-populated Checker and starts background refresh.
@@ -185,12 +263,16 @@ func newChecker(ctx context.Context, cfg Config) (*Checker, func(), error) {
 }
 
 func oneshot(ctx context.Context, cfg Config, ip string) (blocked bool, err error) {
+	format, err := parseFormat(cfg.Format)
+	if err != nil {
+		return false, err
+	}
 	checker, cleanup, err := newChecker(ctx, cfg)
 	if err != nil {
 		return false, err
 	}
 	defer cleanup()
-	return checker.Report(os.Stdout, ip), nil
+	return checker.Check(ip).Report(os.Stdout, format), nil
 }
 
 func serve(ctx context.Context, cfg Config) error {
@@ -200,18 +282,26 @@ func serve(ctx context.Context, cfg Config) error {
 	}
 	defer cleanup()
 
+	handle := func(w http.ResponseWriter, r *http.Request, ip string) {
+		format := requestFormat(r)
+		if format == FormatJSON {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		} else {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		}
+		checker.Check(ip).Report(w, format)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /check", func(w http.ResponseWriter, r *http.Request) {
 		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
 		if ip == "" {
 			ip = clientIP(r)
 		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		checker.Report(w, ip)
+		handle(w, r, ip)
 	})
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		checker.Report(w, clientIP(r))
+		handle(w, r, clientIP(r))
 	})
 
 	srv := &http.Server{
@@ -234,6 +324,19 @@ func serve(ctx context.Context, cfg Config) error {
 		return err
 	}
 	return nil
+}
+
+// requestFormat picks a response format from ?format=, then Accept header.
+func requestFormat(r *http.Request) Format {
+	if q := r.URL.Query().Get("format"); q != "" {
+		if f, err := parseFormat(q); err == nil {
+			return f
+		}
+	}
+	if strings.Contains(r.Header.Get("Accept"), "application/json") {
+		return FormatJSON
+	}
+	return FormatPretty
 }
 
 // clientIP extracts the caller's IP, honoring X-Forwarded-For when present.
@@ -353,14 +456,4 @@ func splitCSV(s string) []string {
 		return nil
 	}
 	return strings.Split(s, ",")
-}
-
-func isBlocked(ip string, whitelist, cohort *ipcohort.Cohort) bool {
-	if cohort == nil {
-		return false
-	}
-	if whitelist != nil && whitelist.Contains(ip) {
-		return false
-	}
-	return cohort.Contains(ip)
 }

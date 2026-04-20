@@ -3,11 +3,9 @@ package geoip
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/oschwald/geoip2-golang"
 )
@@ -116,45 +114,48 @@ func (d *Databases) Close() error {
 	return errors.Join(errs...)
 }
 
-// PrintInfo writes city and ASN info for ip to w. No-op on nil receiver or
-// unparseable IP; missing readers are skipped silently.
-func (d *Databases) PrintInfo(w io.Writer, ip string) {
+// Info is the structured result of a GeoIP lookup. Zero-valued fields mean
+// the database didn't return a value (or wasn't configured).
+type Info struct {
+	City       string `json:"city,omitempty"`
+	Region     string `json:"region,omitempty"`
+	Country    string `json:"country,omitempty"`
+	CountryISO string `json:"country_iso,omitempty"`
+	ASN        uint   `json:"asn,omitzero"`
+	ASNOrg     string `json:"asn_org,omitempty"`
+}
+
+// Lookup returns city + ASN info for ip. Returns a zero Info on nil receiver,
+// unparseable IP, or database miss.
+func (d *Databases) Lookup(ip string) Info {
+	var info Info
 	if d == nil {
-		return
+		return info
 	}
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
-		return
+		return info
 	}
 	stdIP := addr.AsSlice()
 
 	if d.City != nil {
 		if rec, err := d.City.City(stdIP); err == nil {
-			city := rec.City.Names["en"]
-			country := rec.Country.Names["en"]
-			iso := rec.Country.IsoCode
-			var parts []string
-			if city != "" {
-				parts = append(parts, city)
-			}
+			info.City = rec.City.Names["en"]
+			info.Country = rec.Country.Names["en"]
+			info.CountryISO = rec.Country.IsoCode
 			if len(rec.Subdivisions) > 0 {
-				if sub := rec.Subdivisions[0].Names["en"]; sub != "" && sub != city {
-					parts = append(parts, sub)
+				if sub := rec.Subdivisions[0].Names["en"]; sub != "" && sub != info.City {
+					info.Region = sub
 				}
 			}
-			if country != "" {
-				parts = append(parts, fmt.Sprintf("%s (%s)", country, iso))
-			}
-			if len(parts) > 0 {
-				fmt.Fprintf(w, "  Location: %s\n", strings.Join(parts, ", "))
-			}
 		}
 	}
-
 	if d.ASN != nil {
-		if rec, err := d.ASN.ASN(stdIP); err == nil && rec.AutonomousSystemNumber != 0 {
-			fmt.Fprintf(w, "  ASN:      AS%d %s\n",
-				rec.AutonomousSystemNumber, rec.AutonomousSystemOrganization)
+		if rec, err := d.ASN.ASN(stdIP); err == nil {
+			info.ASN = rec.AutonomousSystemNumber
+			info.ASNOrg = rec.AutonomousSystemOrganization
 		}
 	}
+	return info
 }
+
