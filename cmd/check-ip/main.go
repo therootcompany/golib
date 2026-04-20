@@ -10,11 +10,7 @@
 // Each mode builds a sync/dataset.Group: one Fetcher shared by the inbound
 // and outbound views, so a single git pull (or HTTP-304 cycle) drives both.
 //
-// --serve turns check-ip into a long-running HTTP server whose dataset.Tick
-// loop actually gets exercised:
-//
-//	GET /         checks the request's client IP
-//	GET /check    same, plus ?ip= overrides
+// --serve turns check-ip into a long-running HTTP server; see server.go.
 package main
 
 import (
@@ -24,8 +20,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -45,7 +39,6 @@ const (
 	bitwireRawBase = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables"
 
 	refreshInterval = 47 * time.Minute
-	shutdownTimeout = 5 * time.Second
 )
 
 type Config struct {
@@ -59,25 +52,6 @@ type Config struct {
 	ASNDB     string
 	Serve     string
 	Format    string
-}
-
-// Format selects the report rendering.
-type Format string
-
-const (
-	FormatPretty Format = "pretty"
-	FormatJSON   Format = "json"
-)
-
-func parseFormat(s string) (Format, error) {
-	switch s {
-	case "", "pretty":
-		return FormatPretty, nil
-	case "json":
-		return FormatJSON, nil
-	default:
-		return "", fmt.Errorf("invalid --format %q (want: pretty, json)", s)
-	}
 }
 
 func main() {
@@ -113,25 +87,68 @@ func main() {
 			os.Exit(0)
 		}
 	}
-
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)
 		}
 		os.Exit(1)
 	}
+	format, err := parseFormat(cfg.Format)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Open the three "databases" that feed every IP check:
+	//
+	//   1. blocklists — inbound + outbound cohorts, hot-swapped on refresh
+	//   2. whitelist  — static cohort loaded once from disk
+	//   3. geoip      — city + ASN mmdb readers (optional)
+	//
+	// The blocklist Group.Tick goroutine refreshes in the background so the
+	// serve path actually exercises dataset's hot-swap.
+
+	group, inbound, outbound, err := openBlocklists(cfg)
+	if err != nil {
+		fatal("blocklists", err)
+	}
+	if err := group.Load(ctx); err != nil {
+		fatal("blocklists", err)
+	}
+	fmt.Fprintf(os.Stderr, "loaded inbound=%d outbound=%d\n",
+		inbound.Value().Size(), outbound.Value().Size())
+	go group.Tick(ctx, refreshInterval, func(err error) {
+		fmt.Fprintf(os.Stderr, "refresh: %v\n", err)
+	})
+
+	whitelist, err := openWhitelist(cfg.Whitelist)
+	if err != nil {
+		fatal("whitelist", err)
+	}
+
+	geo, err := geoip.OpenDatabases(cfg.GeoIPConf, cfg.CityDB, cfg.ASNDB)
+	if err != nil {
+		fatal("geoip", err)
+	}
+	defer func() { _ = geo.Close() }()
+
+	checker := &Checker{
+		whitelist: whitelist,
+		inbound:   inbound,
+		outbound:  outbound,
+		geo:       geo,
+	}
 
 	if cfg.Serve != "" {
 		if fs.NArg() != 0 {
 			fmt.Fprintln(os.Stderr, "error: --serve takes no positional args")
 			os.Exit(1)
 		}
-		if err := serve(ctx, cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+		if err := serve(ctx, cfg, checker); err != nil {
+			fatal("serve", err)
 		}
 		return
 	}
@@ -140,18 +157,18 @@ func main() {
 		fs.Usage()
 		os.Exit(1)
 	}
-	blocked, err := oneshot(ctx, cfg, fs.Arg(0))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+	blocked := checker.Check(fs.Arg(0)).Report(os.Stdout, format)
 	if blocked {
 		os.Exit(1)
 	}
 }
 
-// Checker bundles the hot-swappable blocklist views with the static whitelist
-// and geoip databases so one-shot and serve modes share the same report logic.
+func fatal(what string, err error) {
+	fmt.Fprintf(os.Stderr, "error: %s: %v\n", what, err)
+	os.Exit(1)
+}
+
+// Checker bundles the three databases plus the lookup + render logic.
 type Checker struct {
 	whitelist *ipcohort.Cohort
 	inbound   *dataset.View[ipcohort.Cohort]
@@ -184,6 +201,25 @@ func (c *Checker) Check(ip string) Result {
 	}
 }
 
+// Format selects the report rendering.
+type Format string
+
+const (
+	FormatPretty Format = "pretty"
+	FormatJSON   Format = "json"
+)
+
+func parseFormat(s string) (Format, error) {
+	switch s {
+	case "", "pretty":
+		return FormatPretty, nil
+	case "json":
+		return FormatJSON, nil
+	default:
+		return "", fmt.Errorf("invalid --format %q (want: pretty, json)", s)
+	}
+}
+
 // Report renders r to w in the given format. Returns r.Blocked for convenience.
 func (r Result) Report(w io.Writer, format Format) bool {
 	switch format {
@@ -208,10 +244,10 @@ func (r Result) writePretty(w io.Writer) {
 	default:
 		fmt.Fprintf(w, "%s is allowed\n", r.IP)
 	}
-	geoPrint(w, r.Geo)
+	writeGeo(w, r.Geo)
 }
 
-func geoPrint(w io.Writer, info geoip.Info) {
+func writeGeo(w io.Writer, info geoip.Info) {
 	var parts []string
 	if info.City != "" {
 		parts = append(parts, info.City)
@@ -234,136 +270,14 @@ func cohortContains(c *ipcohort.Cohort, ip string) bool {
 	return c != nil && c.Contains(ip)
 }
 
-// newChecker builds a fully-populated Checker and starts background refresh.
-// Returns a cleanup that closes the geoip databases.
-func newChecker(ctx context.Context, cfg Config) (*Checker, func(), error) {
-	group, inbound, outbound, err := newBlocklistGroup(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := group.Load(ctx); err != nil {
-		return nil, nil, fmt.Errorf("blacklist: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "Loaded inbound=%d outbound=%d\n",
-		inbound.Value().Size(), outbound.Value().Size())
-	go group.Tick(ctx, refreshInterval, func(err error) {
-		fmt.Fprintf(os.Stderr, "refresh: %v\n", err)
-	})
-
-	whitelist, err := loadWhitelist(cfg.Whitelist)
-	if err != nil {
-		return nil, nil, fmt.Errorf("whitelist: %w", err)
-	}
-
-	geo, err := geoip.OpenDatabases(cfg.GeoIPConf, cfg.CityDB, cfg.ASNDB)
-	if err != nil {
-		return nil, nil, fmt.Errorf("geoip: %w", err)
-	}
-	cleanup := func() { _ = geo.Close() }
-
-	return &Checker{whitelist: whitelist, inbound: inbound, outbound: outbound, geo: geo}, cleanup, nil
-}
-
-func oneshot(ctx context.Context, cfg Config, ip string) (blocked bool, err error) {
-	format, err := parseFormat(cfg.Format)
-	if err != nil {
-		return false, err
-	}
-	checker, cleanup, err := newChecker(ctx, cfg)
-	if err != nil {
-		return false, err
-	}
-	defer cleanup()
-	return checker.Check(ip).Report(os.Stdout, format), nil
-}
-
-func serve(ctx context.Context, cfg Config) error {
-	checker, cleanup, err := newChecker(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	handle := func(w http.ResponseWriter, r *http.Request, ip string) {
-		format := requestFormat(r)
-		if format == FormatJSON {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		} else {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		}
-		checker.Check(ip).Report(w, format)
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /check", func(w http.ResponseWriter, r *http.Request) {
-		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
-		if ip == "" {
-			ip = clientIP(r)
-		}
-		handle(w, r, ip)
-	})
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		handle(w, r, clientIP(r))
-	})
-
-	srv := &http.Server{
-		Addr:    cfg.Serve,
-		Handler: mux,
-		BaseContext: func(_ net.Listener) context.Context {
-			return ctx
-		},
-	}
-
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-
-	fmt.Fprintf(os.Stderr, "listening on %s\n", cfg.Serve)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
-}
-
-// requestFormat picks a response format from ?format=, then Accept header.
-func requestFormat(r *http.Request) Format {
-	if q := r.URL.Query().Get("format"); q != "" {
-		if f, err := parseFormat(q); err == nil {
-			return f
-		}
-	}
-	if strings.Contains(r.Header.Get("Accept"), "application/json") {
-		return FormatJSON
-	}
-	return FormatPretty
-}
-
-// clientIP extracts the caller's IP, honoring X-Forwarded-For when present.
-// The leftmost entry in X-Forwarded-For is the originating client; intermediate
-// proxies append themselves rightward.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		first, _, _ := strings.Cut(xff, ",")
-		return strings.TrimSpace(first)
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
-// newBlocklistGroup wires a dataset.Group to the configured source (local
-// files, git, or HTTP-cached raw files) and registers inbound/outbound views.
-func newBlocklistGroup(cfg Config) (
+// openBlocklists picks a Fetcher based on cfg and wires inbound/outbound views
+// into a shared dataset.Group so one pull drives both.
+func openBlocklists(cfg Config) (
 	_ *dataset.Group,
 	inbound, outbound *dataset.View[ipcohort.Cohort],
 	err error,
 ) {
-	fetcher, inPaths, outPaths, err := newFetcher(cfg)
+	fetcher, inPaths, outPaths, err := newBlocklistFetcher(cfg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -373,9 +287,9 @@ func newBlocklistGroup(cfg Config) (
 	return g, inbound, outbound, nil
 }
 
-// newFetcher picks a Fetcher based on cfg and returns the on-disk file paths
-// each view should parse after a sync.
-func newFetcher(cfg Config) (fetcher dataset.Fetcher, inPaths, outPaths []string, err error) {
+// newBlocklistFetcher returns a dataset.Fetcher and the on-disk paths each
+// view should parse after a sync.
+func newBlocklistFetcher(cfg Config) (fetcher dataset.Fetcher, inPaths, outPaths []string, err error) {
 	switch {
 	case cfg.Inbound != "" || cfg.Outbound != "":
 		return dataset.NopFetcher{}, splitCSV(cfg.Inbound), splitCSV(cfg.Outbound), nil
@@ -431,7 +345,7 @@ func loadCohort(paths []string) func() (*ipcohort.Cohort, error) {
 	}
 }
 
-func loadWhitelist(paths string) (*ipcohort.Cohort, error) {
+func openWhitelist(paths string) (*ipcohort.Cohort, error) {
 	if paths == "" {
 		return nil, nil
 	}
