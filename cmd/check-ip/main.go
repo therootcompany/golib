@@ -36,15 +36,16 @@ type IPCheck struct {
 	GeoIPConfPath string
 	RepoURL       string
 	CacheDir      string
+	WhitelistPath string
 
 	// GeoIPBasicAuth is the pre-encoded Authorization header value for
-	// MaxMind downloads. Empty when no GeoIP.conf was found — in that case
-	// the .tar.gz archives must already exist in <CacheDir>/maxmind/.
+	// MaxMind downloads.
 	GeoIPBasicAuth string
 
-	inbound  *dataset.View[ipcohort.Cohort]
-	outbound *dataset.View[ipcohort.Cohort]
-	geo      *dataset.View[geoip.Databases]
+	inbound   *dataset.View[ipcohort.Cohort]
+	outbound  *dataset.View[ipcohort.Cohort]
+	whitelist *dataset.View[ipcohort.Cohort]
+	geo       *dataset.View[geoip.Databases]
 }
 
 func main() {
@@ -54,6 +55,7 @@ func main() {
 	fs.StringVar(&cfg.GeoIPConfPath, "geoip-conf", "", "path to GeoIP.conf (default: ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf)")
 	fs.StringVar(&cfg.RepoURL, "blocklist-repo", defaultBlocklistRepo, "git URL of the blocklist repo (must match bitwire-it layout)")
 	fs.StringVar(&cfg.CacheDir, "cache-dir", "", "cache parent dir, holds bitwire-it/ and maxmind/ subdirs (default: OS user cache)")
+	fs.StringVar(&cfg.WhitelistPath, "whitelist", "", "path to a file of IPs and/or CIDRs (one per line) that override block decisions")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <ip> [ip...]\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "       %s --serve <bind> [flags]\n", os.Args[0])
@@ -135,33 +137,28 @@ func main() {
 		log.Fatalf("blocklists: %v", err)
 	}
 
-	// GeoIP: with credentials, download the City + ASN tar.gz archives via
-	// httpcache conditional GETs. Without them, poll the existing tar.gz
-	// files in maxmindDir. geoip.Open extracts in-memory — no .mmdb files
+	// GeoIP: download the City + ASN tar.gz archives via httpcache
+	// conditional GETs. geoip.Open extracts in-memory — no .mmdb files
 	// are written to disk.
-	maxmindDir := filepath.Join(cfg.CacheDir, "maxmind")
-	cityTarPath := filepath.Join(maxmindDir, "GeoLite2-City.tar.gz")
-	asnTarPath := filepath.Join(maxmindDir, "GeoLite2-ASN.tar.gz")
-	var geoSet *dataset.Set
-	if cfg.GeoIPBasicAuth != "" {
-		authHeader := http.Header{"Authorization": []string{cfg.GeoIPBasicAuth}}
-		geoSet = dataset.NewSet(
-			&httpcache.Cacher{
-				URL:    geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
-				Path:   cityTarPath,
-				MaxAge: 3 * 24 * time.Hour,
-				Header: authHeader,
-			},
-			&httpcache.Cacher{
-				URL:    geoip.DownloadBase + "/GeoLite2-ASN/download?suffix=tar.gz",
-				Path:   asnTarPath,
-				MaxAge: 3 * 24 * time.Hour,
-				Header: authHeader,
-			},
-		)
-	} else {
-		geoSet = dataset.NewSet(dataset.PollFiles(cityTarPath, asnTarPath))
+	if cfg.GeoIPBasicAuth == "" {
+		log.Fatalf("geoip-conf: not found; set --geoip-conf or place GeoIP.conf in a default location")
 	}
+	maxmindDir := filepath.Join(cfg.CacheDir, "maxmind")
+	authHeader := http.Header{"Authorization": []string{cfg.GeoIPBasicAuth}}
+	geoSet := dataset.NewSet(
+		&httpcache.Cacher{
+			URL:    geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
+			Path:   filepath.Join(maxmindDir, "GeoLite2-City.tar.gz"),
+			MaxAge: 3 * 24 * time.Hour,
+			Header: authHeader,
+		},
+		&httpcache.Cacher{
+			URL:    geoip.DownloadBase + "/GeoLite2-ASN/download?suffix=tar.gz",
+			Path:   filepath.Join(maxmindDir, "GeoLite2-ASN.tar.gz"),
+			MaxAge: 3 * 24 * time.Hour,
+			Header: authHeader,
+		},
+	)
 	cfg.geo = dataset.Add(geoSet, func() (*geoip.Databases, error) {
 		return geoip.Open(maxmindDir)
 	})
@@ -169,6 +166,19 @@ func main() {
 		log.Fatalf("geoip: %v", err)
 	}
 	defer func() { _ = cfg.geo.Value().Close() }()
+
+	// Whitelist: combined IPs + CIDRs in one file, polled for mtime changes.
+	// A match here overrides any block decision from the blocklists.
+	var whitelistSet *dataset.Set
+	if cfg.WhitelistPath != "" {
+		whitelistSet = dataset.NewSet(dataset.PollFiles(cfg.WhitelistPath))
+		cfg.whitelist = dataset.Add(whitelistSet, func() (*ipcohort.Cohort, error) {
+			return ipcohort.LoadFile(cfg.WhitelistPath)
+		})
+		if err := whitelistSet.Load(context.Background()); err != nil {
+			log.Fatalf("whitelist: %v", err)
+		}
+	}
 
 	for _, ip := range ips {
 		cfg.writeText(os.Stdout, cfg.lookup(ip))
@@ -185,6 +195,11 @@ func main() {
 	go geoSet.Tick(ctx, refreshInterval, func(err error) {
 		log.Printf("geoip refresh: %v", err)
 	})
+	if whitelistSet != nil {
+		go whitelistSet.Tick(ctx, refreshInterval, func(err error) {
+			log.Printf("whitelist refresh: %v", err)
+		})
+	}
 	if err := cfg.serve(ctx); err != nil {
 		log.Fatalf("serve: %v", err)
 	}

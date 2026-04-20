@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -21,26 +22,36 @@ type Result struct {
 	Blocked         bool       `json:"blocked"`
 	BlockedInbound  bool       `json:"blocked_inbound"`
 	BlockedOutbound bool       `json:"blocked_outbound"`
+	Allowlisted     bool       `json:"allowlisted,omitzero"`
 	Geo             geoip.Info `json:"geo,omitzero"`
 }
 
 // lookup builds a Result for ip against the currently loaded blocklists
 // and GeoIP databases.
 func (c *IPCheck) lookup(ip string) Result {
-	in := c.inbound.Value().Contains(ip)
-	out := c.outbound.Value().Contains(ip)
-	return Result{
-		IP:              ip,
-		Blocked:         in || out,
-		BlockedInbound:  in,
-		BlockedOutbound: out,
-		Geo:             c.geo.Value().Lookup(ip),
+	res := Result{IP: ip, Geo: c.geo.Value().Lookup(ip)}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		res.Blocked = true
+		res.BlockedInbound = true
+		res.BlockedOutbound = true
+		return res
 	}
+	if c.whitelist != nil && c.whitelist.Value().ContainsAddr(addr) {
+		res.Allowlisted = true
+		return res
+	}
+	res.BlockedInbound = c.inbound.Value().ContainsAddr(addr)
+	res.BlockedOutbound = c.outbound.Value().ContainsAddr(addr)
+	res.Blocked = res.BlockedInbound || res.BlockedOutbound
+	return res
 }
 
 // writeText renders res as human-readable plain text.
 func (c *IPCheck) writeText(w io.Writer, res Result) {
 	switch {
+	case res.Allowlisted:
+		fmt.Fprintf(w, "%s is ALLOWED (whitelist)\n", res.IP)
 	case res.BlockedInbound && res.BlockedOutbound:
 		fmt.Fprintf(w, "%s is BLOCKED (inbound + outbound)\n", res.IP)
 	case res.BlockedInbound:
