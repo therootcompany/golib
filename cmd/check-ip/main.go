@@ -246,7 +246,9 @@ func newChecker(ctx context.Context, cfg Config) (*Checker, func(), error) {
 	}
 	fmt.Fprintf(os.Stderr, "Loaded inbound=%d outbound=%d\n",
 		inbound.Value().Size(), outbound.Value().Size())
-	go group.Tick(ctx, refreshInterval)
+	go group.Tick(ctx, refreshInterval, func(err error) {
+		fmt.Fprintf(os.Stderr, "refresh: %v\n", err)
+	})
 
 	whitelist, err := loadWhitelist(cfg.Whitelist)
 	if err != nil {

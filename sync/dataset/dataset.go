@@ -16,8 +16,6 @@ package dataset
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"sync/atomic"
 	"time"
 )
@@ -81,9 +79,10 @@ func (g *Group) Load(ctx context.Context) error {
 	return nil
 }
 
-// Tick calls Load every interval until ctx is done. Errors are written to
-// stderr and do not stop the loop.
-func (g *Group) Tick(ctx context.Context, interval time.Duration) {
+// Tick calls Load every interval until ctx is done. Load errors are passed to
+// onError (if non-nil) and do not stop the loop; callers choose whether to log,
+// count, page, or ignore. Run in a goroutine: `go g.Tick(ctx, d, onError)`.
+func (g *Group) Tick(ctx context.Context, interval time.Duration, onError func(error)) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -91,8 +90,8 @@ func (g *Group) Tick(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := g.Load(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "dataset: load error: %v\n", err)
+			if err := g.Load(ctx); err != nil && onError != nil {
+				onError(err)
 			}
 		}
 	}
