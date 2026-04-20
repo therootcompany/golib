@@ -134,8 +134,8 @@ func main() {
 // downloaded via httpcache conditional GETs; otherwise the files are
 // expected to exist on disk and are polled for out-of-band changes.
 func geoFetcher(confPath, dir string) dataset.Fetcher {
-	cityPath := filepath.Join(dir, geoip.CityEdition+".mmdb")
-	asnPath := filepath.Join(dir, geoip.ASNEdition+".mmdb")
+	cityPath := filepath.Join(dir, "GeoLite2-City.mmdb")
+	asnPath := filepath.Join(dir, "GeoLite2-ASN.mmdb")
 	if confPath == "" {
 		for _, p := range geoip.DefaultConfPaths() {
 			if _, err := os.Stat(p); err == nil {

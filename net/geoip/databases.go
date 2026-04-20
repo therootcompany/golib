@@ -17,8 +17,8 @@ type Databases struct {
 
 // Open opens <dir>/GeoLite2-City.mmdb and <dir>/GeoLite2-ASN.mmdb.
 func Open(dir string) (*Databases, error) {
-	cityPath := filepath.Join(dir, CityEdition+".mmdb")
-	asnPath := filepath.Join(dir, ASNEdition+".mmdb")
+	cityPath := filepath.Join(dir, "GeoLite2-City.mmdb")
+	asnPath := filepath.Join(dir, "GeoLite2-ASN.mmdb")
 	city, err := geoip2.Open(cityPath)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", cityPath, err)
