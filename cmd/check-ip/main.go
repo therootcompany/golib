@@ -37,7 +37,7 @@ type IPCheck struct {
 
 	inbound  *dataset.View[ipcohort.Cohort]
 	outbound *dataset.View[ipcohort.Cohort]
-	geo      *geoip.Databases
+	geo      *dataset.View[geoip.Databases]
 }
 
 func printVersion(w *os.File) {
@@ -103,16 +103,16 @@ func main() {
 	}
 
 	maxmind := filepath.Join(cfg.CacheDir, "maxmind")
-	geo, err := geoip.OpenDatabases(
-		cfg.ConfPath,
-		filepath.Join(maxmind, geoip.CityEdition+".mmdb"),
-		filepath.Join(maxmind, geoip.ASNEdition+".mmdb"),
-	)
-	if err != nil {
+	cityPath := filepath.Join(maxmind, geoip.CityEdition+".mmdb")
+	asnPath := filepath.Join(maxmind, geoip.ASNEdition+".mmdb")
+	geoGroup := dataset.NewGroup(geoFetcher(cfg.ConfPath, cityPath, asnPath))
+	cfg.geo = dataset.Add(geoGroup, func() (*geoip.Databases, error) {
+		return geoip.Open(cityPath, asnPath)
+	})
+	if err := geoGroup.Load(context.Background()); err != nil {
 		log.Fatalf("geoip: %v", err)
 	}
-	defer func() { _ = geo.Close() }()
-	cfg.geo = geo
+	defer func() { _ = cfg.geo.Value().Close() }()
 
 	if cfg.Bind == "" {
 		return
@@ -121,9 +121,48 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go group.Tick(ctx, refreshInterval, func(err error) {
-		log.Printf("refresh: %v", err)
+		log.Printf("blocklists refresh: %v", err)
+	})
+	go geoGroup.Tick(ctx, refreshInterval, func(err error) {
+		log.Printf("geoip refresh: %v", err)
 	})
 	if err := cfg.serve(ctx); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+// geoFetcher returns a Fetcher for the GeoLite2 City + ASN .mmdb files.
+// With a GeoIP.conf (explicit path or auto-discovered) both files are
+// downloaded via httpcache conditional GETs; otherwise the files are
+// expected to exist on disk and are polled for out-of-band changes.
+func geoFetcher(confPath, cityPath, asnPath string) dataset.Fetcher {
+	if confPath == "" {
+		for _, p := range geoip.DefaultConfPaths() {
+			if _, err := os.Stat(p); err == nil {
+				confPath = p
+				break
+			}
+		}
+	}
+	if confPath == "" {
+		return dataset.PollFiles(cityPath, asnPath)
+	}
+	conf, err := geoip.ParseConf(confPath)
+	if err != nil {
+		log.Fatalf("geoip-conf: %v", err)
+	}
+	dl := geoip.New(conf.AccountID, conf.LicenseKey)
+	city := dl.NewCacher(geoip.CityEdition, cityPath)
+	asn := dl.NewCacher(geoip.ASNEdition, asnPath)
+	return dataset.FetcherFunc(func() (bool, error) {
+		cityUpdated, err := city.Fetch()
+		if err != nil {
+			return false, fmt.Errorf("fetch %s: %w", geoip.CityEdition, err)
+		}
+		asnUpdated, err := asn.Fetch()
+		if err != nil {
+			return false, fmt.Errorf("fetch %s: %w", geoip.ASNEdition, err)
+		}
+		return cityUpdated || asnUpdated, nil
+	})
 }

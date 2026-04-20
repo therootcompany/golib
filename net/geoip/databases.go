@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"os"
-	"path/filepath"
 
 	"github.com/oschwald/geoip2-golang"
 )
@@ -14,41 +12,6 @@ import (
 type Databases struct {
 	City *geoip2.Reader
 	ASN  *geoip2.Reader
-}
-
-// OpenDatabases resolves configuration, downloads stale .mmdb files (when a
-// GeoIP.conf with credentials is available), and opens the readers.
-//
-//   - confPath=""  → auto-discover from DefaultConfPaths
-//   - conf found   → auto-download to cityPath/asnPath
-//   - no conf      → cityPath and asnPath must point to existing .mmdb files
-func OpenDatabases(confPath, cityPath, asnPath string) (*Databases, error) {
-	if confPath == "" {
-		for _, p := range DefaultConfPaths() {
-			if _, err := os.Stat(p); err == nil {
-				confPath = p
-				break
-			}
-		}
-	}
-
-	if confPath != "" {
-		cfg, err := ParseConf(confPath)
-		if err != nil {
-			return nil, fmt.Errorf("geoip-conf: %w", err)
-		}
-		if err := os.MkdirAll(filepath.Dir(cityPath), 0o755); err != nil {
-			return nil, err
-		}
-		dl := New(cfg.AccountID, cfg.LicenseKey)
-		if _, err := dl.NewCacher(CityEdition, cityPath).Fetch(); err != nil {
-			return nil, fmt.Errorf("fetch %s: %w", CityEdition, err)
-		}
-		if _, err := dl.NewCacher(ASNEdition, asnPath).Fetch(); err != nil {
-			return nil, fmt.Errorf("fetch %s: %w", ASNEdition, err)
-		}
-	}
-	return Open(cityPath, asnPath)
 }
 
 // Open opens city and ASN .mmdb files from the given paths.
