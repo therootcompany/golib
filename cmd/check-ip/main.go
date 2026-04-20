@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -23,50 +24,83 @@ const (
 	outboundNetworkURL = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/outbound/networks.txt"
 )
 
-func main() {
-	dataDir   := flag.String("data-dir", "", "blacklist cache dir (default ~/.cache/bitwire-it)")
-	gitURL    := flag.String("git", "", "git URL to clone/pull blacklist from")
-	whitelist := flag.String("whitelist", "", "path to whitelist file")
-	inbound   := flag.String("inbound", "", "comma-separated paths to inbound blacklist files")
-	outbound  := flag.String("outbound", "", "comma-separated paths to outbound blacklist files")
-	geoipConf := flag.String("geoip-conf", "", "path to GeoIP.conf (auto-discovered if absent)")
-	cityDB    := flag.String("city-db", "", "path to GeoLite2-City.mmdb (skips auto-download)")
-	asnDB     := flag.String("asn-db", "", "path to GeoLite2-ASN.mmdb (skips auto-download)")
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <ip-address>\n", os.Args[0])
-		flag.PrintDefaults()
-	}
-	flag.Parse()
+type CheckIPConfig struct {
+	DataDir   string
+	GitURL    string
+	Whitelist string
+	Inbound   string
+	Outbound  string
+	GeoIPConf string
+	CityDB    string
+	ASNDB     string
+}
 
-	if flag.NArg() != 1 {
-		flag.Usage()
+func main() {
+	cfg := CheckIPConfig{}
+
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	fs.StringVar(&cfg.DataDir,   "data-dir",  "", "blacklist cache dir (default ~/.cache/bitwire-it)")
+	fs.StringVar(&cfg.GitURL,    "git",        "", "git URL to clone/pull blacklist from")
+	fs.StringVar(&cfg.Whitelist, "whitelist",  "", "path to whitelist file")
+	fs.StringVar(&cfg.Inbound,   "inbound",   "", "comma-separated paths to inbound blacklist files")
+	fs.StringVar(&cfg.Outbound,  "outbound",  "", "comma-separated paths to outbound blacklist files")
+	fs.StringVar(&cfg.GeoIPConf, "geoip-conf", "", "path to GeoIP.conf (auto-discovered if absent)")
+	fs.StringVar(&cfg.CityDB,    "city-db",    "", "path to GeoLite2-City.mmdb (skips auto-download)")
+	fs.StringVar(&cfg.ASNDB,     "asn-db",     "", "path to GeoLite2-ASN.mmdb (skips auto-download)")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <ip-address>\n", os.Args[0])
+		fs.PrintDefaults()
+	}
+
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-V", "-version", "--version", "version":
+			fmt.Fprintf(os.Stdout, "check-ip\n")
+			os.Exit(0)
+		case "help", "-help", "--help":
+			fmt.Fprintf(os.Stdout, "check-ip\n\n")
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			os.Exit(0)
+		}
+	}
+
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
 		os.Exit(1)
 	}
-	ipStr := flag.Arg(0)
+
+	if fs.NArg() != 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	ipStr := fs.Arg(0)
 
 	// -- Blacklist ----------------------------------------------------------
 
 	var (
-		syncer       dataset.Syncer
-		inboundPaths []string
+		syncer        dataset.Syncer
+		inboundPaths  []string
 		outboundPaths []string
 	)
 
 	switch {
-	case *inbound != "" || *outbound != "":
+	case cfg.Inbound != "" || cfg.Outbound != "":
 		syncer         = dataset.NopSyncer{}
-		inboundPaths   = splitPaths(*inbound)
-		outboundPaths  = splitPaths(*outbound)
+		inboundPaths   = splitPaths(cfg.Inbound)
+		outboundPaths  = splitPaths(cfg.Outbound)
 
-	case *gitURL != "":
-		dir := cacheDir(*dataDir, "bitwire-it")
-		gr  := gitshallow.New(*gitURL, dir, 1, "")
+	case cfg.GitURL != "":
+		dir := cacheDir(cfg.DataDir, "bitwire-it")
+		gr  := gitshallow.New(cfg.GitURL, dir, 1, "")
 		syncer         = gr
 		inboundPaths   = []string{gr.FilePath("tables/inbound/single_ips.txt"), gr.FilePath("tables/inbound/networks.txt")}
 		outboundPaths  = []string{gr.FilePath("tables/outbound/single_ips.txt"), gr.FilePath("tables/outbound/networks.txt")}
 
 	default:
-		dir        := cacheDir(*dataDir, "bitwire-it")
+		dir        := cacheDir(cfg.DataDir, "bitwire-it")
 		inSingle   := httpcache.New(inboundSingleURL,   filepath.Join(dir, "inbound_single_ips.txt"))
 		inNetwork  := httpcache.New(inboundNetworkURL,  filepath.Join(dir, "inbound_networks.txt"))
 		outSingle  := httpcache.New(outboundSingleURL,  filepath.Join(dir, "outbound_single_ips.txt"))
@@ -88,8 +122,8 @@ func main() {
 		inboundDS.Load().Size(), outboundDS.Load().Size())
 
 	var whitelistDS *dataset.Dataset[ipcohort.Cohort]
-	if *whitelist != "" {
-		whitelistDS = dataset.New(dataset.NopSyncer{}, loadCohort(splitPaths(*whitelist)...))
+	if cfg.Whitelist != "" {
+		whitelistDS = dataset.New(dataset.NopSyncer{}, loadCohort(splitPaths(cfg.Whitelist)...))
 		if err := whitelistDS.Init(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: whitelist: %v\n", err)
 			os.Exit(1)
@@ -98,7 +132,7 @@ func main() {
 
 	// -- GeoIP (optional) --------------------------------------------------
 
-	geo, err := geoip.OpenDatabases(*geoipConf, *cityDB, *asnDB)
+	geo, err := geoip.OpenDatabases(cfg.GeoIPConf, cfg.CityDB, cfg.ASNDB)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
