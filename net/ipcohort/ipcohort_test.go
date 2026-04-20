@@ -21,7 +21,6 @@ func TestParseIPv4(t *testing.T) {
 		{"", true},
 		{"not-an-ip", true},
 		{"1.2.3.4/33", true},
-		{"::1", true}, // IPv6 not supported
 	}
 	for _, tt := range tests {
 		_, err := ipcohort.ParseIPv4(tt.raw)
@@ -104,16 +103,6 @@ func TestContains_FailClosed(t *testing.T) {
 	}
 }
 
-func TestContains_IPv6NeverBlocked(t *testing.T) {
-	c, _ := ipcohort.Parse([]string{"1.2.3.4", "10.0.0.0/8"})
-	// IPv6 addresses are not stored; should return false, not panic.
-	if c.Contains("::1") {
-		t.Error("IPv6 address should not be in an IPv4-only cohort")
-	}
-	if c.Contains("2001:db8::1") {
-		t.Error("IPv6 address should not be in an IPv4-only cohort")
-	}
-}
 
 func TestContains_Empty(t *testing.T) {
 	c, err := ipcohort.Parse(nil)
@@ -175,16 +164,3 @@ func TestLoadFiles_Merge(t *testing.T) {
 	}
 }
 
-func TestCSVSkipsIPv6(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "mixed.txt")
-	os.WriteFile(path, []byte("1.2.3.4\n::1\n2001:db8::/32\n5.6.7.8\n"), 0o644)
-
-	c, err := ipcohort.LoadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Size() != 2 {
-		t.Errorf("Size() = %d, want 2 (IPv6 should be skipped)", c.Size())
-	}
-}

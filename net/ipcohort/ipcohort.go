@@ -132,7 +132,7 @@ func ParseIPv4(raw string) (ipv4net IPv4Net, err error) {
 
 	addr := ippre.Addr()
 	if !addr.Is4() {
-		return ipv4net, fmt.Errorf("IPv6 not supported: %s", raw)
+		return ipv4net, fmt.Errorf("not an IPv4 address: %s", raw)
 	}
 	ip4 := addr.As4()
 	prefix := uint8(ippre.Bits()) // 0–32
@@ -200,11 +200,6 @@ func ReadAll(r *csv.Reader) (*Cohort, error) {
 		raw := strings.TrimSpace(record[0])
 
 		if raw == "" || strings.HasPrefix(raw, "#") {
-			continue
-		}
-
-		// skip IPv6
-		if strings.Contains(raw, ":") {
 			continue
 		}
 
