@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -23,47 +24,31 @@ type Result struct {
 	Geo             geoip.Info `json:"geo,omitzero"`
 }
 
-func (c *IPCheck) handle(w http.ResponseWriter, r *http.Request) {
-	ip := strings.TrimSpace(r.URL.Query().Get("ip"))
-	if ip == "" {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			first, _, _ := strings.Cut(xff, ",")
-			ip = strings.TrimSpace(first)
-		} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			ip = host
-		} else {
-			ip = r.RemoteAddr
-		}
-	}
+// lookup builds a Result for ip against the currently loaded blocklists
+// and GeoIP databases.
+func (c *IPCheck) lookup(ip string) Result {
 	in := c.inbound.Value().Contains(ip)
 	out := c.outbound.Value().Contains(ip)
-	res := Result{
+	return Result{
 		IP:              ip,
 		Blocked:         in || out,
 		BlockedInbound:  in,
 		BlockedOutbound: out,
-		Geo:             c.geo.Value().Lookup(ip),
+		Geo:             c.geo.Load().Lookup(ip),
 	}
+}
 
-	if r.URL.Query().Get("format") == "json" ||
-		strings.Contains(r.Header.Get("Accept"), "application/json") {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(res)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+// writeText renders res as human-readable plain text.
+func (c *IPCheck) writeText(w io.Writer, res Result) {
 	switch {
-	case in && out:
-		fmt.Fprintf(w, "%s is BLOCKED (inbound + outbound)\n", ip)
-	case in:
-		fmt.Fprintf(w, "%s is BLOCKED (inbound)\n", ip)
-	case out:
-		fmt.Fprintf(w, "%s is BLOCKED (outbound)\n", ip)
+	case res.BlockedInbound && res.BlockedOutbound:
+		fmt.Fprintf(w, "%s is BLOCKED (inbound + outbound)\n", res.IP)
+	case res.BlockedInbound:
+		fmt.Fprintf(w, "%s is BLOCKED (inbound)\n", res.IP)
+	case res.BlockedOutbound:
+		fmt.Fprintf(w, "%s is BLOCKED (outbound)\n", res.IP)
 	default:
-		fmt.Fprintf(w, "%s is allowed\n", ip)
+		fmt.Fprintf(w, "%s is allowed\n", res.IP)
 	}
 	var parts []string
 	if res.Geo.City != "" {
@@ -81,6 +66,33 @@ func (c *IPCheck) handle(w http.ResponseWriter, r *http.Request) {
 	if res.Geo.ASN != 0 {
 		fmt.Fprintf(w, "  ASN:      AS%d %s\n", res.Geo.ASN, res.Geo.ASNOrg)
 	}
+}
+
+func (c *IPCheck) handle(w http.ResponseWriter, r *http.Request) {
+	ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+	if ip == "" {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			first, _, _ := strings.Cut(xff, ",")
+			ip = strings.TrimSpace(first)
+		} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			ip = host
+		} else {
+			ip = r.RemoteAddr
+		}
+	}
+	res := c.lookup(ip)
+
+	if r.URL.Query().Get("format") == "json" ||
+		strings.Contains(r.Header.Get("Accept"), "application/json") {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(res)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	c.writeText(w, res)
 }
 
 func (c *IPCheck) serve(ctx context.Context) error {

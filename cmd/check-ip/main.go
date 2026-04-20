@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -43,7 +44,7 @@ type IPCheck struct {
 
 	inbound  *dataset.View[ipcohort.Cohort]
 	outbound *dataset.View[ipcohort.Cohort]
-	geo      *dataset.View[geoip.Databases]
+	geo      atomic.Pointer[geoip.Databases]
 }
 
 func main() {
@@ -54,7 +55,8 @@ func main() {
 	fs.StringVar(&cfg.RepoURL, "blocklist-repo", defaultBlocklistRepo, "git URL of the blocklist repo (must match bitwire-it layout)")
 	fs.StringVar(&cfg.CacheDir, "cache-dir", "", "cache parent dir, holds bitwire-it/ and maxmind/ subdirs (default: OS user cache)")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s --serve <bind> [flags]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <ip> [ip...]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "       %s --serve <bind> [flags]\n", os.Args[0])
 		fs.PrintDefaults()
 	}
 
@@ -75,6 +77,12 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)
 		}
+		os.Exit(1)
+	}
+	ips := fs.Args()
+	if cfg.Bind == "" && len(ips) == 0 {
+		fmt.Fprintln(os.Stderr, "error: provide at least one IP argument or --serve <bind>")
+		fs.Usage()
 		os.Exit(1)
 	}
 	if cfg.CacheDir == "" {
@@ -160,15 +168,19 @@ func main() {
 	} else {
 		geoFetcher = dataset.PollFiles(cityTarPath, asnTarPath)
 	}
-	geoGroup := dataset.NewGroup(geoFetcher)
-	cfg.geo = dataset.Add(geoGroup, func() (*geoip.Databases, error) {
-		return geoip.Open(maxmindDir)
-	})
-	if err := geoGroup.Load(context.Background()); err != nil {
+	if _, err := geoFetcher.Fetch(); err != nil {
 		log.Fatalf("geoip: %v", err)
 	}
-	defer func() { _ = cfg.geo.Value().Close() }()
+	geoDB, err := geoip.Open(maxmindDir)
+	if err != nil {
+		log.Fatalf("geoip: %v", err)
+	}
+	cfg.geo.Store(geoDB)
+	defer func() { _ = cfg.geo.Load().Close() }()
 
+	for _, ip := range ips {
+		cfg.writeText(os.Stdout, cfg.lookup(ip))
+	}
 	if cfg.Bind == "" {
 		return
 	}
@@ -178,9 +190,33 @@ func main() {
 	go group.Tick(ctx, refreshInterval, func(err error) {
 		log.Printf("blocklists refresh: %v", err)
 	})
-	go geoGroup.Tick(ctx, refreshInterval, func(err error) {
-		log.Printf("geoip refresh: %v", err)
-	})
+	go func() {
+		t := time.NewTicker(refreshInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				updated, err := geoFetcher.Fetch()
+				if err != nil {
+					log.Printf("geoip refresh: %v", err)
+					continue
+				}
+				if !updated {
+					continue
+				}
+				db, err := geoip.Open(maxmindDir)
+				if err != nil {
+					log.Printf("geoip refresh: %v", err)
+					continue
+				}
+				if old := cfg.geo.Swap(db); old != nil {
+					_ = old.Close()
+				}
+			}
+		}
+	}()
 	if err := cfg.serve(ctx); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
