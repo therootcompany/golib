@@ -115,27 +115,29 @@ func main() {
 	if *geoipConf != "" {
 		cfg, err := geoip.ParseConf(*geoipConf)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warn: geoip-conf: %v\n", err)
-		} else {
-			dbDir := cfg.DatabaseDirectory
-			if dbDir == "" {
-				if d, err := geoip.DefaultCacheDir(); err == nil {
-					dbDir = d
-				}
-			}
-			if err := os.MkdirAll(dbDir, 0o755); err != nil {
-				fmt.Fprintf(os.Stderr, "warn: mkdir %s: %v\n", dbDir, err)
-			}
-			d := geoip.New(cfg.AccountID, cfg.LicenseKey)
-			if resolvedCityPath == "" {
-				resolvedCityPath = filepath.Join(dbDir, geoip.CityEdition+".mmdb")
-			}
-			if resolvedASNPath == "" {
-				resolvedASNPath = filepath.Join(dbDir, geoip.ASNEdition+".mmdb")
-			}
-			cityDS = newGeoIPDataset(d, geoip.CityEdition, resolvedCityPath)
-			asnDS = newGeoIPDataset(d, geoip.ASNEdition, resolvedASNPath)
+			fmt.Fprintf(os.Stderr, "error: geoip-conf: %v\n", err)
+			os.Exit(1)
 		}
+		dbDir := cfg.DatabaseDirectory
+		if dbDir == "" {
+			if dbDir, err = geoip.DefaultCacheDir(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: geoip cache dir: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		if err := os.MkdirAll(dbDir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", dbDir, err)
+			os.Exit(1)
+		}
+		d := geoip.New(cfg.AccountID, cfg.LicenseKey)
+		if resolvedCityPath == "" {
+			resolvedCityPath = filepath.Join(dbDir, geoip.CityEdition+".mmdb")
+		}
+		if resolvedASNPath == "" {
+			resolvedASNPath = filepath.Join(dbDir, geoip.ASNEdition+".mmdb")
+		}
+		cityDS = newGeoIPDataset(d, geoip.CityEdition, resolvedCityPath)
+		asnDS = newGeoIPDataset(d, geoip.ASNEdition, resolvedASNPath)
 	} else {
 		// Manual paths: no auto-download, just open existing files.
 		if resolvedCityPath != "" {
@@ -148,12 +150,14 @@ func main() {
 
 	if cityDS != nil {
 		if err := cityDS.Init(); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: city DB: %v\n", err)
+			fmt.Fprintf(os.Stderr, "error: city DB: %v\n", err)
+			os.Exit(1)
 		}
 	}
 	if asnDS != nil {
 		if err := asnDS.Init(); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: ASN DB: %v\n", err)
+			fmt.Fprintf(os.Stderr, "error: ASN DB: %v\n", err)
+			os.Exit(1)
 		}
 	}
 
@@ -210,31 +214,25 @@ func newGeoIPDataset(d *geoip.Downloader, edition, path string) *dataset.Dataset
 func containsInbound(ip string,
 	whitelist, inbound *dataset.View[ipcohort.Cohort],
 ) bool {
-	if whitelist != nil {
-		if wl := whitelist.Load(); wl != nil && wl.Contains(ip) {
-			return false
-		}
+	if whitelist != nil && whitelist.Load().Contains(ip) {
+		return false
 	}
 	if inbound == nil {
 		return false
 	}
-	c := inbound.Load()
-	return c != nil && c.Contains(ip)
+	return inbound.Load().Contains(ip)
 }
 
 func containsOutbound(ip string,
 	whitelist, outbound *dataset.View[ipcohort.Cohort],
 ) bool {
-	if whitelist != nil {
-		if wl := whitelist.Load(); wl != nil && wl.Contains(ip) {
-			return false
-		}
+	if whitelist != nil && whitelist.Load().Contains(ip) {
+		return false
 	}
 	if outbound == nil {
 		return false
 	}
-	c := outbound.Load()
-	return c != nil && c.Contains(ip)
+	return outbound.Load().Contains(ip)
 }
 
 func printGeoInfo(ipStr string, cityDS, asnDS *dataset.Dataset[geoip2.Reader]) {
@@ -245,36 +243,34 @@ func printGeoInfo(ipStr string, cityDS, asnDS *dataset.Dataset[geoip2.Reader]) {
 	stdIP := ip.AsSlice()
 
 	if cityDS != nil {
-		if r := cityDS.Load(); r != nil {
-			if rec, err := r.City(stdIP); err == nil {
-				city := rec.City.Names["en"]
-				country := rec.Country.Names["en"]
-				iso := rec.Country.IsoCode
-				var parts []string
-				if city != "" {
-					parts = append(parts, city)
+		r := cityDS.Load()
+		if rec, err := r.City(stdIP); err == nil {
+			city := rec.City.Names["en"]
+			country := rec.Country.Names["en"]
+			iso := rec.Country.IsoCode
+			var parts []string
+			if city != "" {
+				parts = append(parts, city)
+			}
+			if len(rec.Subdivisions) > 0 {
+				if sub := rec.Subdivisions[0].Names["en"]; sub != "" && sub != city {
+					parts = append(parts, sub)
 				}
-				if len(rec.Subdivisions) > 0 {
-					if sub := rec.Subdivisions[0].Names["en"]; sub != "" && sub != city {
-						parts = append(parts, sub)
-					}
-				}
-				if country != "" {
-					parts = append(parts, fmt.Sprintf("%s (%s)", country, iso))
-				}
-				if len(parts) > 0 {
-					fmt.Printf("  Location: %s\n", strings.Join(parts, ", "))
-				}
+			}
+			if country != "" {
+				parts = append(parts, fmt.Sprintf("%s (%s)", country, iso))
+			}
+			if len(parts) > 0 {
+				fmt.Printf("  Location: %s\n", strings.Join(parts, ", "))
 			}
 		}
 	}
 
 	if asnDS != nil {
-		if r := asnDS.Load(); r != nil {
-			if rec, err := r.ASN(stdIP); err == nil && rec.AutonomousSystemNumber != 0 {
-				fmt.Printf("  ASN:      AS%d %s\n",
-					rec.AutonomousSystemNumber, rec.AutonomousSystemOrganization)
-			}
+		r := asnDS.Load()
+		if rec, err := r.ASN(stdIP); err == nil && rec.AutonomousSystemNumber != 0 {
+			fmt.Printf("  ASN:      AS%d %s\n",
+				rec.AutonomousSystemNumber, rec.AutonomousSystemOrganization)
 		}
 	}
 }
