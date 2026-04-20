@@ -6,38 +6,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/therootcompany/golib/net/dataset"
+	"github.com/therootcompany/golib/net/gitshallow"
+	"github.com/therootcompany/golib/net/httpcache"
+	"github.com/therootcompany/golib/net/ipcohort"
 )
 
-// Default HTTP sources for the bitwire-it blacklist.
 const (
-	inboundSingleURL  = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/inbound/single_ips.txt"
-	inboundNetworkURL = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/inbound/networks.txt"
+	inboundSingleURL   = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/inbound/single_ips.txt"
+	inboundNetworkURL  = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/inbound/networks.txt"
 	outboundSingleURL  = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/outbound/single_ips.txt"
 	outboundNetworkURL = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/outbound/networks.txt"
 )
 
-func defaultCacheDir(sub string) string {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = filepath.Join(os.Getenv("HOME"), ".cache")
-	}
-	return filepath.Join(base, sub)
-}
-
 func main() {
-	// Blacklist source flags — all optional; defaults pull from bitwire-it via HTTP.
 	dataDir   := flag.String("data-dir", "", "blacklist cache dir (default ~/.cache/bitwire-it)")
-	gitURL    := flag.String("git", "", "git URL to clone/pull blacklist from (alternative to HTTP)")
-	whitelist := flag.String("whitelist", "", "path to whitelist file (overrides block)")
+	gitURL    := flag.String("git", "", "git URL to clone/pull blacklist from")
+	whitelist := flag.String("whitelist", "", "path to whitelist file")
 	inbound   := flag.String("inbound", "", "comma-separated paths to inbound blacklist files")
 	outbound  := flag.String("outbound", "", "comma-separated paths to outbound blacklist files")
-
-	// GeoIP flags — auto-discovered from ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf.
 	geoipConf := flag.String("geoip-conf", "", "path to GeoIP.conf (auto-discovered if absent)")
 	cityDB    := flag.String("city-db", "", "path to GeoLite2-City.mmdb (skips auto-download)")
 	asnDB     := flag.String("asn-db", "", "path to GeoLite2-ASN.mmdb (skips auto-download)")
-
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <ip-address>\n", os.Args[0])
 		flag.PrintDefaults()
@@ -52,14 +45,57 @@ func main() {
 
 	// -- Blacklist ----------------------------------------------------------
 
-	src := buildSources(*gitURL, *dataDir, *whitelist, *inbound, *outbound)
-	blGroup, whitelistDS, inboundDS, outboundDS := src.Datasets()
-	if err := blGroup.Init(); err != nil {
+	var syncs dataset.MultiSyncer
+	var inboundPaths, outboundPaths []string
+
+	switch {
+	case *inbound != "" || *outbound != "":
+		inboundPaths = splitPaths(*inbound)
+		outboundPaths = splitPaths(*outbound)
+
+	case *gitURL != "":
+		cacheDir := cacheDir(*dataDir, "bitwire-it")
+		syncs = dataset.MultiSyncer{gitshallow.New(*gitURL, cacheDir, 1, "")}
+		inboundPaths = []string{
+			filepath.Join(cacheDir, "tables/inbound/single_ips.txt"),
+			filepath.Join(cacheDir, "tables/inbound/networks.txt"),
+		}
+		outboundPaths = []string{
+			filepath.Join(cacheDir, "tables/outbound/single_ips.txt"),
+			filepath.Join(cacheDir, "tables/outbound/networks.txt"),
+		}
+
+	default:
+		dir := cacheDir(*dataDir, "bitwire-it")
+		inboundSingle  := filepath.Join(dir, "inbound_single_ips.txt")
+		inboundNetwork := filepath.Join(dir, "inbound_networks.txt")
+		outboundSingle  := filepath.Join(dir, "outbound_single_ips.txt")
+		outboundNetwork := filepath.Join(dir, "outbound_networks.txt")
+		syncs = dataset.MultiSyncer{
+			httpcache.New(inboundSingleURL, inboundSingle),
+			httpcache.New(inboundNetworkURL, inboundNetwork),
+			httpcache.New(outboundSingleURL, outboundSingle),
+			httpcache.New(outboundNetworkURL, outboundNetwork),
+		}
+		inboundPaths  = []string{inboundSingle, inboundNetwork}
+		outboundPaths = []string{outboundSingle, outboundNetwork}
+	}
+
+	g := dataset.NewGroup(syncs)
+	var whitelistDS *dataset.View[ipcohort.Cohort]
+	if *whitelist != "" {
+		paths := splitPaths(*whitelist)
+		whitelistDS = dataset.Add(g, func() (*ipcohort.Cohort, error) { return ipcohort.LoadFiles(paths...) })
+	}
+	inboundDS  := dataset.Add(g, func() (*ipcohort.Cohort, error) { return ipcohort.LoadFiles(inboundPaths...) })
+	outboundDS := dataset.Add(g, func() (*ipcohort.Cohort, error) { return ipcohort.LoadFiles(outboundPaths...) })
+
+	if err := g.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: blacklist: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Loaded inbound=%d outbound=%d\n",
-		cohortSize(inboundDS), cohortSize(outboundDS))
+		inboundDS.Load().Size(), outboundDS.Load().Size())
 
 	// -- GeoIP (optional) --------------------------------------------------
 
@@ -77,7 +113,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go blGroup.Run(ctx, 47*time.Minute)
+	go g.Run(ctx, 47*time.Minute)
 	geo.Run(ctx, 47*time.Minute)
 
 	// -- Check and report --------------------------------------------------
@@ -100,4 +136,29 @@ func main() {
 	if blockedIn || blockedOut {
 		os.Exit(1)
 	}
+}
+
+func isBlocked(ip string, whitelist, cohort *dataset.View[ipcohort.Cohort]) bool {
+	if cohort == nil {
+		return false
+	}
+	if whitelist != nil && whitelist.Load().Contains(ip) {
+		return false
+	}
+	return cohort.Load().Contains(ip)
+}
+
+func cacheDir(override, sub string) string {
+	if override != "" {
+		return override
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		base = filepath.Join(os.Getenv("HOME"), ".cache")
+	}
+	return filepath.Join(base, sub)
+}
+
+func splitPaths(s string) []string {
+	return strings.Split(s, ",")
 }

@@ -34,6 +34,22 @@ type Syncer interface {
 	Fetch() (updated bool, err error)
 }
 
+// MultiSyncer fans out Fetch to multiple Syncers, returning updated=true if
+// any reports a change. Stops and returns the first error.
+type MultiSyncer []Syncer
+
+func (ms MultiSyncer) Fetch() (bool, error) {
+	var anyUpdated bool
+	for _, s := range ms {
+		updated, err := s.Fetch()
+		if err != nil {
+			return anyUpdated, err
+		}
+		anyUpdated = anyUpdated || updated
+	}
+	return anyUpdated, nil
+}
+
 // NopSyncer is a Syncer that always reports no update and no error.
 // Use for datasets backed by local files with no remote source.
 type NopSyncer struct{}
