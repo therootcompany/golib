@@ -1,6 +1,7 @@
 package httpcache
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,19 @@ import (
 	"sync"
 	"time"
 )
+
+// BasicAuth returns an HTTP Basic Authorization header value:
+// "Basic " + base64(user:pass). Assign to Cacher.AuthValue with
+// AuthHeader "Authorization".
+func BasicAuth(user, pass string) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
+}
+
+// Bearer returns a Bearer Authorization header value: "Bearer " + token.
+// Assign to Cacher.AuthValue with AuthHeader "Authorization".
+func Bearer(token string) string {
+	return "Bearer " + token
+}
 
 const (
 	defaultConnTimeout = 5 * time.Second // TCP connect + TLS handshake
@@ -34,11 +48,9 @@ const (
 // Auth — AuthHeader/AuthValue set a request header on every attempt. Auth is
 // stripped before following redirects so presigned targets (e.g. S3/R2 URLs)
 // never receive credentials. Use any scheme: "Authorization"/"Bearer token",
-// "X-API-Key"/"secret", "Authorization"/"Basic base64(user:pass)", etc.
-//
-// Transform — if set, called with the response body instead of the default
-// atomic file copy. The func is responsible for writing to path atomically.
-// Use this for archives (e.g. extracting a .mmdb from a MaxMind tar.gz).
+// "X-API-Key"/"secret", "Authorization"/"Basic base64(user:pass)", etc. The
+// BasicAuth and Bearer helpers produce the right AuthValue for the common
+// cases.
 type Cacher struct {
 	URL         string
 	Path        string
@@ -48,7 +60,6 @@ type Cacher struct {
 	MinInterval time.Duration // 0 disables; skip HTTP if last Fetch attempt was within this
 	AuthHeader  string        // e.g. "Authorization" or "X-API-Key"
 	AuthValue   string        // e.g. "Bearer token" or "Basic base64(user:pass)"
-	Transform   func(r io.Reader, path string) error // nil = direct atomic copy
 
 	mu          sync.Mutex
 	etag        string
@@ -186,30 +197,24 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(c.Path), 0o755); err != nil {
 		return false, err
 	}
-	if c.Transform != nil {
-		if err := c.Transform(resp.Body, c.Path); err != nil {
-			return false, err
-		}
-	} else {
-		tmp := c.Path + ".tmp"
-		f, err := os.Create(tmp)
-		if err != nil {
-			return false, err
-		}
-		n, err := io.Copy(f, resp.Body)
-		f.Close()
-		if err != nil {
-			os.Remove(tmp)
-			return false, err
-		}
-		if n == 0 {
-			os.Remove(tmp)
-			return false, fmt.Errorf("empty response from %s", c.URL)
-		}
-		if err := os.Rename(tmp, c.Path); err != nil {
-			os.Remove(tmp)
-			return false, err
-		}
+	tmp := c.Path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return false, err
+	}
+	n, err := io.Copy(f, resp.Body)
+	f.Close()
+	if err != nil {
+		os.Remove(tmp)
+		return false, err
+	}
+	if n == 0 {
+		os.Remove(tmp)
+		return false, fmt.Errorf("empty response from %s", c.URL)
+	}
+	if err := os.Rename(tmp, c.Path); err != nil {
+		os.Remove(tmp)
+		return false, err
 	}
 
 	if etag := resp.Header.Get("ETag"); etag != "" {

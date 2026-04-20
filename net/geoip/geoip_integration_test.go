@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/therootcompany/golib/net/geoip"
+	"github.com/therootcompany/golib/net/httpcache"
 )
 
 func testdataDir(t *testing.T) string {
@@ -27,7 +28,6 @@ func testdataDir(t *testing.T) string {
 
 func geoipConf(t *testing.T) *geoip.Conf {
 	t.Helper()
-	// Look for GeoIP.conf relative to the module root.
 	dir, _ := filepath.Abs(".")
 	for {
 		p := filepath.Join(dir, "GeoIP.conf")
@@ -48,19 +48,25 @@ func geoipConf(t *testing.T) *geoip.Conf {
 	return nil
 }
 
-func TestDownloader_CityAndASN(t *testing.T) {
+func newCacher(cfg *geoip.Conf, edition, path string) *httpcache.Cacher {
+	return &httpcache.Cacher{
+		URL:        geoip.DownloadBase + "/" + edition + "/download?suffix=tar.gz",
+		Path:       path,
+		AuthHeader: "Authorization",
+		AuthValue:  httpcache.BasicAuth(cfg.AccountID, cfg.LicenseKey),
+	}
+}
+
+func TestDownload_CityAndASN(t *testing.T) {
 	cfg := geoipConf(t)
 	td := testdataDir(t)
 
-	d := geoip.New(cfg.AccountID, cfg.LicenseKey)
-
 	for _, edition := range []string{geoip.CityEdition, geoip.ASNEdition} {
-		path := filepath.Join(td, edition+".mmdb")
+		path := filepath.Join(td, edition+".tar.gz")
 		os.Remove(path)
 		os.Remove(path + ".meta")
 
-		cacher := d.NewCacher(edition, path)
-		updated, err := cacher.Fetch()
+		updated, err := newCacher(cfg, edition, path).Fetch()
 		if err != nil {
 			t.Fatalf("%s Fetch: %v", edition, err)
 		}
@@ -83,23 +89,18 @@ func TestDownloader_CityAndASN(t *testing.T) {
 	}
 }
 
-func TestDownloader_ConditionalGet_FreshCacher(t *testing.T) {
+func TestDownload_ConditionalGet_FreshCacher(t *testing.T) {
 	cfg := geoipConf(t)
 	td := testdataDir(t)
 
-	d := geoip.New(cfg.AccountID, cfg.LicenseKey)
-
 	for _, edition := range []string{geoip.CityEdition, geoip.ASNEdition} {
-		path := filepath.Join(td, edition+".mmdb")
+		path := filepath.Join(td, edition+".tar.gz")
 
-		// Ensure downloaded.
-		if _, err := d.NewCacher(edition, path).Fetch(); err != nil {
+		if _, err := newCacher(cfg, edition, path).Fetch(); err != nil {
 			t.Fatalf("%s initial Fetch: %v", edition, err)
 		}
 
-		// Fresh cacher — no in-memory ETag, must use sidecar.
-		fresh := d.NewCacher(edition, path)
-		updated, err := fresh.Fetch()
+		updated, err := newCacher(cfg, edition, path).Fetch()
 		if err != nil {
 			t.Fatalf("%s fresh Fetch: %v", edition, err)
 		}

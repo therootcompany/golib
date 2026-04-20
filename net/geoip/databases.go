@@ -1,10 +1,15 @@
 package geoip
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/oschwald/geoip2-golang"
 )
@@ -15,20 +20,51 @@ type Databases struct {
 	ASN  *geoip2.Reader
 }
 
-// Open opens <dir>/GeoLite2-City.mmdb and <dir>/GeoLite2-ASN.mmdb.
+// Open reads <dir>/GeoLite2-City.tar.gz and <dir>/GeoLite2-ASN.tar.gz,
+// extracts the .mmdb entry from each archive in memory, and returns open
+// readers. No .mmdb files are written to disk.
 func Open(dir string) (*Databases, error) {
-	cityPath := filepath.Join(dir, "GeoLite2-City.mmdb")
-	asnPath := filepath.Join(dir, "GeoLite2-ASN.mmdb")
-	city, err := geoip2.Open(cityPath)
+	city, err := openMMDBTarGz(filepath.Join(dir, "GeoLite2-City.tar.gz"))
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", cityPath, err)
+		return nil, fmt.Errorf("city: %w", err)
 	}
-	asn, err := geoip2.Open(asnPath)
+	asn, err := openMMDBTarGz(filepath.Join(dir, "GeoLite2-ASN.tar.gz"))
 	if err != nil {
 		_ = city.Close()
-		return nil, fmt.Errorf("open %s: %w", asnPath, err)
+		return nil, fmt.Errorf("asn: %w", err)
 	}
 	return &Databases{City: city, ASN: asn}, nil
+}
+
+func openMMDBTarGz(path string) (*geoip2.Reader, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, fmt.Errorf("gzip %s: %w", path, err)
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil, fmt.Errorf("no .mmdb entry in %s", path)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !strings.HasSuffix(hdr.Name, ".mmdb") {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, err
+		}
+		return geoip2.FromBytes(data)
+	}
 }
 
 // Close closes the city and ASN readers.

@@ -17,6 +17,7 @@ import (
 
 	"github.com/therootcompany/golib/net/geoip"
 	"github.com/therootcompany/golib/net/gitshallow"
+	"github.com/therootcompany/golib/net/httpcache"
 	"github.com/therootcompany/golib/net/ipcohort"
 	"github.com/therootcompany/golib/sync/dataset"
 )
@@ -37,11 +38,7 @@ type IPCheck struct {
 
 	inbound  *dataset.View[ipcohort.Cohort]
 	outbound *dataset.View[ipcohort.Cohort]
-	geo      *dataset.View[geoip.Databases]
-}
-
-func printVersion(w *os.File) {
-	fmt.Fprintf(w, "check-ip %s\n", version)
+	geo      *geoip.Databases
 }
 
 func main() {
@@ -59,11 +56,10 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "-V", "-version", "--version", "version":
-			printVersion(os.Stdout)
+			fmt.Fprintf(os.Stdout, "check-ip %s\n", version)
 			os.Exit(0)
 		case "help", "-help", "--help":
-			printVersion(os.Stdout)
-			fmt.Fprintln(os.Stdout, "")
+			fmt.Fprintf(os.Stdout, "check-ip %s\n\n", version)
 			fs.SetOutput(os.Stdout)
 			fs.Usage()
 			os.Exit(0)
@@ -84,6 +80,7 @@ func main() {
 		cfg.CacheDir = d
 	}
 
+	// Blocklists: git repo with inbound + outbound IP cohort files.
 	repo := gitshallow.New(cfg.RepoURL, filepath.Join(cfg.CacheDir, "bitwire-it"), 1, "")
 	group := dataset.NewGroup(repo)
 	cfg.inbound = dataset.Add(group, func() (*ipcohort.Cohort, error) {
@@ -102,15 +99,53 @@ func main() {
 		log.Fatalf("blocklists: %v", err)
 	}
 
-	maxmind := filepath.Join(cfg.CacheDir, "maxmind")
-	geoGroup := dataset.NewGroup(geoFetcher(cfg.ConfPath, maxmind))
-	cfg.geo = dataset.Add(geoGroup, func() (*geoip.Databases, error) {
-		return geoip.Open(maxmind)
-	})
-	if err := geoGroup.Load(context.Background()); err != nil {
+	// GeoIP: with GeoIP.conf, download the City + ASN tar.gz archives via
+	// httpcache conditional GETs. Without it, expect the tar.gz files to
+	// already be in maxmindDir. geoip.Open extracts in-memory — no .mmdb
+	// files are written to disk.
+	maxmindDir := filepath.Join(cfg.CacheDir, "maxmind")
+	confPath := cfg.ConfPath
+	if confPath == "" {
+		for _, p := range geoip.DefaultConfPaths() {
+			if _, err := os.Stat(p); err == nil {
+				confPath = p
+				break
+			}
+		}
+	}
+	if confPath != "" {
+		conf, err := geoip.ParseConf(confPath)
+		if err != nil {
+			log.Fatalf("geoip-conf: %v", err)
+		}
+		auth := httpcache.BasicAuth(conf.AccountID, conf.LicenseKey)
+		city := &httpcache.Cacher{
+			URL:        geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
+			Path:       filepath.Join(maxmindDir, "GeoLite2-City.tar.gz"),
+			MaxAge:     3 * 24 * time.Hour,
+			AuthHeader: "Authorization",
+			AuthValue:  auth,
+		}
+		asn := &httpcache.Cacher{
+			URL:        geoip.DownloadBase + "/GeoLite2-ASN/download?suffix=tar.gz",
+			Path:       filepath.Join(maxmindDir, "GeoLite2-ASN.tar.gz"),
+			MaxAge:     3 * 24 * time.Hour,
+			AuthHeader: "Authorization",
+			AuthValue:  auth,
+		}
+		if _, err := city.Fetch(); err != nil {
+			log.Fatalf("fetch GeoLite2-City: %v", err)
+		}
+		if _, err := asn.Fetch(); err != nil {
+			log.Fatalf("fetch GeoLite2-ASN: %v", err)
+		}
+	}
+	geo, err := geoip.Open(maxmindDir)
+	if err != nil {
 		log.Fatalf("geoip: %v", err)
 	}
-	defer func() { _ = cfg.geo.Value().Close() }()
+	defer func() { _ = geo.Close() }()
+	cfg.geo = geo
 
 	if cfg.Bind == "" {
 		return
@@ -121,48 +156,7 @@ func main() {
 	go group.Tick(ctx, refreshInterval, func(err error) {
 		log.Printf("blocklists refresh: %v", err)
 	})
-	go geoGroup.Tick(ctx, refreshInterval, func(err error) {
-		log.Printf("geoip refresh: %v", err)
-	})
 	if err := cfg.serve(ctx); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
-}
-
-// geoFetcher returns a Fetcher for the GeoLite2 City + ASN .mmdb files.
-// With a GeoIP.conf (explicit path or auto-discovered) both files are
-// downloaded via httpcache conditional GETs; otherwise the files are
-// expected to exist on disk and are polled for out-of-band changes.
-func geoFetcher(confPath, dir string) dataset.Fetcher {
-	cityPath := filepath.Join(dir, "GeoLite2-City.mmdb")
-	asnPath := filepath.Join(dir, "GeoLite2-ASN.mmdb")
-	if confPath == "" {
-		for _, p := range geoip.DefaultConfPaths() {
-			if _, err := os.Stat(p); err == nil {
-				confPath = p
-				break
-			}
-		}
-	}
-	if confPath == "" {
-		return dataset.PollFiles(cityPath, asnPath)
-	}
-	conf, err := geoip.ParseConf(confPath)
-	if err != nil {
-		log.Fatalf("geoip-conf: %v", err)
-	}
-	dl := geoip.New(conf.AccountID, conf.LicenseKey)
-	city := dl.NewCacher(geoip.CityEdition, cityPath)
-	asn := dl.NewCacher(geoip.ASNEdition, asnPath)
-	return dataset.FetcherFunc(func() (bool, error) {
-		cityUpdated, err := city.Fetch()
-		if err != nil {
-			return false, fmt.Errorf("fetch %s: %w", geoip.CityEdition, err)
-		}
-		asnUpdated, err := asn.Fetch()
-		if err != nil {
-			return false, fmt.Errorf("fetch %s: %w", geoip.ASNEdition, err)
-		}
-		return cityUpdated || asnUpdated, nil
-	})
 }

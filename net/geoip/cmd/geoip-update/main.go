@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/therootcompany/golib/net/geoip"
+	"github.com/therootcompany/golib/net/httpcache"
 )
 
 func main() {
 	configPath := flag.String("config", "GeoIP.conf", "path to GeoIP.conf")
-	dir := flag.String("dir", "", "directory to store .mmdb files (overrides DatabaseDirectory in config)")
-	freshDays := flag.Int("fresh-days", 0, "skip download if file is younger than N days (default 3)")
+	dir := flag.String("dir", "", "directory to store .tar.gz files (overrides DatabaseDirectory in config)")
+	freshDays := flag.Int("fresh-days", 3, "skip download if file is younger than N days")
 	flag.Parse()
 
 	cfg, err := geoip.ParseConf(*configPath)
@@ -28,7 +30,6 @@ func main() {
 	if outDir == "" {
 		outDir = "."
 	}
-
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", outDir, err)
 		os.Exit(1)
@@ -39,25 +40,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	d := geoip.New(cfg.AccountID, cfg.LicenseKey)
-	d.FreshDays = *freshDays
+	auth := httpcache.BasicAuth(cfg.AccountID, cfg.LicenseKey)
+	maxAge := time.Duration(*freshDays) * 24 * time.Hour
 
 	exitCode := 0
 	for _, edition := range cfg.EditionIDs {
-		path := filepath.Join(outDir, edition+".mmdb")
-		updated, err := d.Fetch(edition, path)
+		path := filepath.Join(outDir, edition+".tar.gz")
+		cacher := &httpcache.Cacher{
+			URL:        geoip.DownloadBase + "/" + edition + "/download?suffix=tar.gz",
+			Path:       path,
+			MaxAge:     maxAge,
+			AuthHeader: "Authorization",
+			AuthValue:  auth,
+		}
+		updated, err := cacher.Fetch()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %s: %v\n", edition, err)
 			exitCode = 1
 			continue
 		}
+		info, _ := os.Stat(path)
+		state := "fresh:  "
 		if updated {
-			info, _ := os.Stat(path)
-			fmt.Printf("updated: %s -> %s (%s)\n", edition, path, info.ModTime().Format("2006-01-02"))
-		} else {
-			info, _ := os.Stat(path)
-			fmt.Printf("fresh:   %s (%s)\n", edition, info.ModTime().Format("2006-01-02"))
+			state = "updated:"
 		}
+		fmt.Printf("%s %s -> %s (%s)\n", state, edition, path, info.ModTime().Format("2006-01-02"))
 	}
 	os.Exit(exitCode)
 }
