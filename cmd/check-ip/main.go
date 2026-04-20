@@ -9,6 +9,12 @@
 //
 // Each mode builds a sync/dataset.Group: one Fetcher shared by the inbound
 // and outbound views, so a single git pull (or HTTP-304 cycle) drives both.
+//
+// --serve turns check-ip into a long-running HTTP server whose dataset.Tick
+// loop actually gets exercised:
+//
+//	GET /         checks the request's client IP
+//	GET /check    same, plus ?ip= overrides
 package main
 
 import (
@@ -16,9 +22,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/therootcompany/golib/net/geoip"
@@ -33,6 +44,7 @@ const (
 	bitwireRawBase = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables"
 
 	refreshInterval = 47 * time.Minute
+	shutdownTimeout = 5 * time.Second
 )
 
 type Config struct {
@@ -44,6 +56,7 @@ type Config struct {
 	GeoIPConf string
 	CityDB    string
 	ASNDB     string
+	Serve     string
 }
 
 func main() {
@@ -58,8 +71,10 @@ func main() {
 	fs.StringVar(&cfg.GeoIPConf, "geoip-conf", "", "path to GeoIP.conf (auto-discovered if absent)")
 	fs.StringVar(&cfg.CityDB, "city-db", "", "path to GeoLite2-City.mmdb (skips auto-download)")
 	fs.StringVar(&cfg.ASNDB, "asn-db", "", "path to GeoLite2-ASN.mmdb (skips auto-download)")
+	fs.StringVar(&cfg.Serve, "serve", "", "start HTTP server at addr:port (e.g. :8080) instead of one-shot check")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <ip-address>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "       %s --serve :8080 [flags]\n", os.Args[0])
 		fs.PrintDefaults()
 	}
 
@@ -83,12 +98,27 @@ func main() {
 		}
 		os.Exit(1)
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if cfg.Serve != "" {
+		if fs.NArg() != 0 {
+			fmt.Fprintln(os.Stderr, "error: --serve takes no positional args")
+			os.Exit(1)
+		}
+		if err := serve(ctx, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if fs.NArg() != 1 {
 		fs.Usage()
 		os.Exit(1)
 	}
-
-	blocked, err := run(cfg, fs.Arg(0))
+	blocked, err := oneshot(ctx, cfg, fs.Arg(0))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -98,16 +128,43 @@ func main() {
 	}
 }
 
-func run(cfg Config, ipStr string) (blocked bool, err error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// Checker bundles the hot-swappable blocklist views with the static whitelist
+// and geoip databases so one-shot and serve modes share the same report logic.
+type Checker struct {
+	whitelist *ipcohort.Cohort
+	inbound   *dataset.View[ipcohort.Cohort]
+	outbound  *dataset.View[ipcohort.Cohort]
+	geo       *geoip.Databases
+}
 
+// Report writes a human-readable status line (plus geoip info) for ip and
+// reports whether ip was blocked.
+func (c *Checker) Report(w io.Writer, ip string) (blocked bool) {
+	blockedIn := isBlocked(ip, c.whitelist, c.inbound.Value())
+	blockedOut := isBlocked(ip, c.whitelist, c.outbound.Value())
+	switch {
+	case blockedIn && blockedOut:
+		fmt.Fprintf(w, "%s is BLOCKED (inbound + outbound)\n", ip)
+	case blockedIn:
+		fmt.Fprintf(w, "%s is BLOCKED (inbound)\n", ip)
+	case blockedOut:
+		fmt.Fprintf(w, "%s is BLOCKED (outbound)\n", ip)
+	default:
+		fmt.Fprintf(w, "%s is allowed\n", ip)
+	}
+	c.geo.PrintInfo(w, ip)
+	return blockedIn || blockedOut
+}
+
+// newChecker builds a fully-populated Checker and starts background refresh.
+// Returns a cleanup that closes the geoip databases.
+func newChecker(ctx context.Context, cfg Config) (*Checker, func(), error) {
 	group, inbound, outbound, err := newBlocklistGroup(cfg)
 	if err != nil {
-		return false, err
+		return nil, nil, err
 	}
 	if err := group.Load(ctx); err != nil {
-		return false, fmt.Errorf("blacklist: %w", err)
+		return nil, nil, fmt.Errorf("blacklist: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Loaded inbound=%d outbound=%d\n",
 		inbound.Value().Size(), outbound.Value().Size())
@@ -115,31 +172,83 @@ func run(cfg Config, ipStr string) (blocked bool, err error) {
 
 	whitelist, err := loadWhitelist(cfg.Whitelist)
 	if err != nil {
-		return false, fmt.Errorf("whitelist: %w", err)
+		return nil, nil, fmt.Errorf("whitelist: %w", err)
 	}
 
 	geo, err := geoip.OpenDatabases(cfg.GeoIPConf, cfg.CityDB, cfg.ASNDB)
 	if err != nil {
-		return false, fmt.Errorf("geoip: %w", err)
+		return nil, nil, fmt.Errorf("geoip: %w", err)
 	}
-	defer func() { _ = geo.Close() }()
+	cleanup := func() { _ = geo.Close() }
 
-	blockedIn := isBlocked(ipStr, whitelist, inbound.Value())
-	blockedOut := isBlocked(ipStr, whitelist, outbound.Value())
+	return &Checker{whitelist: whitelist, inbound: inbound, outbound: outbound, geo: geo}, cleanup, nil
+}
 
-	switch {
-	case blockedIn && blockedOut:
-		fmt.Printf("%s is BLOCKED (inbound + outbound)\n", ipStr)
-	case blockedIn:
-		fmt.Printf("%s is BLOCKED (inbound)\n", ipStr)
-	case blockedOut:
-		fmt.Printf("%s is BLOCKED (outbound)\n", ipStr)
-	default:
-		fmt.Printf("%s is allowed\n", ipStr)
+func oneshot(ctx context.Context, cfg Config, ip string) (blocked bool, err error) {
+	checker, cleanup, err := newChecker(ctx, cfg)
+	if err != nil {
+		return false, err
 	}
-	geo.PrintInfo(os.Stdout, ipStr)
+	defer cleanup()
+	return checker.Report(os.Stdout, ip), nil
+}
 
-	return blockedIn || blockedOut, nil
+func serve(ctx context.Context, cfg Config) error {
+	checker, cleanup, err := newChecker(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /check", func(w http.ResponseWriter, r *http.Request) {
+		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+		if ip == "" {
+			ip = clientIP(r)
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		checker.Report(w, ip)
+	})
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		checker.Report(w, clientIP(r))
+	})
+
+	srv := &http.Server{
+		Addr:    cfg.Serve,
+		Handler: mux,
+		BaseContext: func(_ net.Listener) context.Context {
+			return ctx
+		},
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+
+	fmt.Fprintf(os.Stderr, "listening on %s\n", cfg.Serve)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// clientIP extracts the caller's IP, honoring X-Forwarded-For when present.
+// The leftmost entry in X-Forwarded-For is the originating client; intermediate
+// proxies append themselves rightward.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		first, _, _ := strings.Cut(xff, ",")
+		return strings.TrimSpace(first)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // newBlocklistGroup wires a dataset.Group to the configured source (local
