@@ -31,10 +31,15 @@ const (
 // IPCheck holds the parsed CLI config and the loaded data sources used by
 // the HTTP handler.
 type IPCheck struct {
-	Bind     string
-	ConfPath string
-	RepoURL  string
-	CacheDir string
+	Bind          string
+	GeoIPConfPath string
+	RepoURL       string
+	CacheDir      string
+
+	// GeoIPBasicAuth is the pre-encoded Authorization header value for
+	// MaxMind downloads. Empty when no GeoIP.conf was found — in that case
+	// the .tar.gz archives must already exist in <CacheDir>/maxmind/.
+	GeoIPBasicAuth string
 
 	inbound  *dataset.View[ipcohort.Cohort]
 	outbound *dataset.View[ipcohort.Cohort]
@@ -45,7 +50,7 @@ func main() {
 	cfg := IPCheck{}
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	fs.StringVar(&cfg.Bind, "serve", "", "bind address for the HTTP API, e.g. :8080")
-	fs.StringVar(&cfg.ConfPath, "geoip-conf", "", "path to GeoIP.conf (default: ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf)")
+	fs.StringVar(&cfg.GeoIPConfPath, "geoip-conf", "", "path to GeoIP.conf (default: ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf)")
 	fs.StringVar(&cfg.RepoURL, "blocklist-repo", defaultBlocklistRepo, "git URL of the blocklist repo (must match bitwire-it layout)")
 	fs.StringVar(&cfg.CacheDir, "cache-dir", "", "cache parent dir, holds bitwire-it/ and maxmind/ subdirs (default: OS user cache)")
 	fs.Usage = func() {
@@ -80,6 +85,25 @@ func main() {
 		cfg.CacheDir = d
 	}
 
+	// GeoIP config discovery: explicit --geoip-conf wins; otherwise check the
+	// default locations. If found, parse it and stash the basic-auth header
+	// value for later MaxMind downloads.
+	if cfg.GeoIPConfPath == "" {
+		for _, p := range geoip.DefaultConfPaths() {
+			if _, err := os.Stat(p); err == nil {
+				cfg.GeoIPConfPath = p
+				break
+			}
+		}
+	}
+	if cfg.GeoIPConfPath != "" {
+		conf, err := geoip.ParseConf(cfg.GeoIPConfPath)
+		if err != nil {
+			log.Fatalf("geoip-conf: %v", err)
+		}
+		cfg.GeoIPBasicAuth = httpcache.BasicAuth(conf.AccountID, conf.LicenseKey)
+	}
+
 	// Blocklists: git repo with inbound + outbound IP cohort files.
 	repo := gitshallow.New(cfg.RepoURL, filepath.Join(cfg.CacheDir, "bitwire-it"), 1, "")
 	group := dataset.NewGroup(repo)
@@ -99,39 +123,25 @@ func main() {
 		log.Fatalf("blocklists: %v", err)
 	}
 
-	// GeoIP: with GeoIP.conf, download the City + ASN tar.gz archives via
-	// httpcache conditional GETs. Without it, expect the tar.gz files to
+	// GeoIP: with credentials, download the City + ASN tar.gz archives via
+	// httpcache conditional GETs. Without them, expect the tar.gz files to
 	// already be in maxmindDir. geoip.Open extracts in-memory — no .mmdb
 	// files are written to disk.
 	maxmindDir := filepath.Join(cfg.CacheDir, "maxmind")
-	confPath := cfg.ConfPath
-	if confPath == "" {
-		for _, p := range geoip.DefaultConfPaths() {
-			if _, err := os.Stat(p); err == nil {
-				confPath = p
-				break
-			}
-		}
-	}
-	if confPath != "" {
-		conf, err := geoip.ParseConf(confPath)
-		if err != nil {
-			log.Fatalf("geoip-conf: %v", err)
-		}
-		auth := httpcache.BasicAuth(conf.AccountID, conf.LicenseKey)
+	if cfg.GeoIPBasicAuth != "" {
 		city := &httpcache.Cacher{
 			URL:        geoip.DownloadBase + "/GeoLite2-City/download?suffix=tar.gz",
 			Path:       filepath.Join(maxmindDir, "GeoLite2-City.tar.gz"),
 			MaxAge:     3 * 24 * time.Hour,
 			AuthHeader: "Authorization",
-			AuthValue:  auth,
+			AuthValue:  cfg.GeoIPBasicAuth,
 		}
 		asn := &httpcache.Cacher{
 			URL:        geoip.DownloadBase + "/GeoLite2-ASN/download?suffix=tar.gz",
 			Path:       filepath.Join(maxmindDir, "GeoLite2-ASN.tar.gz"),
 			MaxAge:     3 * 24 * time.Hour,
 			AuthHeader: "Authorization",
-			AuthValue:  auth,
+			AuthValue:  cfg.GeoIPBasicAuth,
 		}
 		if _, err := city.Fetch(); err != nil {
 			log.Fatalf("fetch GeoLite2-City: %v", err)
