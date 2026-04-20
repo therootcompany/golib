@@ -11,10 +11,11 @@ import (
 
 // Repo manages a shallow git clone used as a periodically-updated data source.
 type Repo struct {
-	URL    string
-	Path   string
-	Depth  int    // 0 defaults to 1, -1 for all
-	Branch string // Optional: specific branch to clone/pull
+	URL     string
+	Path    string
+	Depth   int    // 0 defaults to 1, -1 for all
+	Branch  string // Optional: specific branch to clone/pull
+	LightGC bool   // true = skip aggressive GC; false (default) = aggressive+prune
 
 	mu sync.Mutex
 }
@@ -176,6 +177,11 @@ func (r *Repo) gc(aggressiveGC, pruneNow bool) error {
 // lightGC=false runs aggressive GC with --prune=now to minimize disk use.
 func (r *Repo) Sync(lightGC bool) (bool, error) {
 	return r.syncGit(lightGC)
+}
+
+// Fetch satisfies httpcache.Syncer using the Repo's LightGC setting.
+func (r *Repo) Fetch() (bool, error) {
+	return r.syncGit(r.LightGC)
 }
 
 func (r *Repo) syncGit(lightGC bool) (updated bool, err error) {

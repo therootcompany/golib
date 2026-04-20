@@ -77,7 +77,7 @@ func main() {
 
 	var whitelist, inbound, outbound atomic.Pointer[ipcohort.Cohort]
 
-	if err := src.Init(false); err != nil {
+	if err := src.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -186,7 +186,7 @@ func runLoop(ctx context.Context, src *Sources,
 		select {
 		case <-ticker.C:
 			// Blocklists.
-			if updated, err := src.Fetch(false); err != nil {
+			if updated, err := src.Fetch(); err != nil {
 				fmt.Fprintf(os.Stderr, "error: blocklist sync: %v\n", err)
 			} else if updated {
 				if err := reloadBlocklists(src, whitelist, inbound, outbound); err != nil {

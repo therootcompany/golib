@@ -11,6 +11,12 @@ import (
 
 const defaultTimeout = 30 * time.Second
 
+// Syncer is implemented by any value that can fetch a remote resource and
+// report whether it changed. Both *Cacher and *gitshallow.Repo satisfy this.
+type Syncer interface {
+	Fetch() (updated bool, err error)
+}
+
 // Cacher fetches a URL to a local file, using ETag/Last-Modified to skip
 // unchanged responses.
 //
@@ -129,12 +135,16 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 		if err != nil {
 			return false, err
 		}
-		if _, err := io.Copy(f, resp.Body); err != nil {
-			f.Close()
+		n, err := io.Copy(f, resp.Body)
+		f.Close()
+		if err != nil {
 			os.Remove(tmp)
 			return false, err
 		}
-		f.Close()
+		if n == 0 {
+			os.Remove(tmp)
+			return false, fmt.Errorf("empty response from %s", c.URL)
+		}
 		if err := os.Rename(tmp, c.Path); err != nil {
 			os.Remove(tmp)
 			return false, err

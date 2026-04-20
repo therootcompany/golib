@@ -21,9 +21,8 @@ type Sources struct {
 	inboundPaths   []string
 	outboundPaths  []string
 
-	git          *gitshallow.Repo
-	httpInbound  []*httpcache.Cacher
-	httpOutbound []*httpcache.Cacher
+	gitRepo *gitshallow.Repo  // non-nil for git source; used by Init for clone-if-missing
+	syncs   []httpcache.Syncer // all syncable sources (git repo or HTTP cachers)
 }
 
 func newFileSources(whitelist, inbound, outbound []string) *Sources {
@@ -42,11 +41,13 @@ func newGitSources(gitURL, repoDir string, whitelist, inboundRel, outboundRel []
 		}
 		return out
 	}
+	repo := gitshallow.New(gitURL, repoDir, 1, "")
 	return &Sources{
 		whitelistPaths: whitelist,
 		inboundPaths:   abs(inboundRel),
 		outboundPaths:  abs(outboundRel),
-		git:            gitshallow.New(gitURL, repoDir, 1, ""),
+		gitRepo:        repo,
+		syncs:          []httpcache.Syncer{repo},
 	}
 }
 
@@ -54,60 +55,39 @@ func newHTTPSources(whitelist []string, inbound, outbound []HTTPSource) *Sources
 	s := &Sources{whitelistPaths: whitelist}
 	for _, src := range inbound {
 		s.inboundPaths = append(s.inboundPaths, src.Path)
-		s.httpInbound = append(s.httpInbound, httpcache.New(src.URL, src.Path))
+		s.syncs = append(s.syncs, httpcache.New(src.URL, src.Path))
 	}
 	for _, src := range outbound {
 		s.outboundPaths = append(s.outboundPaths, src.Path)
-		s.httpOutbound = append(s.httpOutbound, httpcache.New(src.URL, src.Path))
+		s.syncs = append(s.syncs, httpcache.New(src.URL, src.Path))
 	}
 	return s
 }
 
-// Fetch pulls updates from the remote (git or HTTP).
-// Returns whether any new data was received.
-func (s *Sources) Fetch(lightGC bool) (bool, error) {
-	switch {
-	case s.git != nil:
-		return s.git.Sync(lightGC)
-	case len(s.httpInbound) > 0 || len(s.httpOutbound) > 0:
-		var anyUpdated bool
-		for _, c := range s.httpInbound {
-			updated, err := c.Fetch()
-			if err != nil {
-				return anyUpdated, err
-			}
-			anyUpdated = anyUpdated || updated
+// Fetch pulls updates from all sources. Returns whether any new data arrived.
+// Satisfies httpcache.Syncer.
+func (s *Sources) Fetch() (bool, error) {
+	var anyUpdated bool
+	for _, syn := range s.syncs {
+		updated, err := syn.Fetch()
+		if err != nil {
+			return anyUpdated, err
 		}
-		for _, c := range s.httpOutbound {
-			updated, err := c.Fetch()
-			if err != nil {
-				return anyUpdated, err
-			}
-			anyUpdated = anyUpdated || updated
-		}
-		return anyUpdated, nil
-	default:
-		return false, nil
+		anyUpdated = anyUpdated || updated
 	}
+	return anyUpdated, nil
 }
 
-// Init ensures the remote is ready (clones if needed, fetches HTTP files).
-// Always returns true so the caller knows to load data on startup.
-func (s *Sources) Init(lightGC bool) error {
-	switch {
-	case s.git != nil:
-		_, err := s.git.Init(lightGC)
+// Init ensures remotes are ready. For git: clones if missing then syncs.
+// For HTTP: fetches each cacher unconditionally on first run.
+func (s *Sources) Init() error {
+	if s.gitRepo != nil {
+		_, err := s.gitRepo.Init(s.gitRepo.LightGC)
 		return err
-	case len(s.httpInbound) > 0 || len(s.httpOutbound) > 0:
-		for _, c := range s.httpInbound {
-			if _, err := c.Fetch(); err != nil {
-				return err
-			}
-		}
-		for _, c := range s.httpOutbound {
-			if _, err := c.Fetch(); err != nil {
-				return err
-			}
+	}
+	for _, syn := range s.syncs {
+		if _, err := syn.Fetch(); err != nil {
+			return err
 		}
 	}
 	return nil
