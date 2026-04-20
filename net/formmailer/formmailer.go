@@ -3,9 +3,8 @@
 //
 // Typical setup:
 //
-//	blGroup, _, inboundDS, _ := src.Datasets()
-//	blGroup.Init()
-//	go blGroup.Run(ctx, 47*time.Minute)
+//	var blacklist atomic.Pointer[ipcohort.Cohort]
+//	// ... caller loads blacklist and hot-swaps on a timer ...
 //
 //	fm := &formmailer.FormMailer{
 //	    SMTPHost:    "smtp.example.com:587",
@@ -16,7 +15,7 @@
 //	    Subject:     "Contact from {.Email}",
 //	    SuccessBody: successHTML,
 //	    ErrorBody:   errorHTML,
-//	    Blacklist:   inboundDS,
+//	    Blacklist:   &blacklist,
 //	    AllowedCountries: []string{"US", "CA", "MX"},
 //	}
 //	http.Handle("POST /contact", fm)
@@ -35,12 +34,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/phuslu/iploc"
 	"golang.org/x/time/rate"
 
-	"github.com/therootcompany/golib/net/dataset"
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
@@ -102,7 +101,7 @@ type FormMailer struct {
 	ContentType string // inferred from SuccessBody if empty
 
 	// Blacklist — if set, matching IPs are rejected before any other processing.
-	Blacklist *dataset.Dataset[ipcohort.Cohort]
+	Blacklist *atomic.Pointer[ipcohort.Cohort]
 
 	// AllowedCountries — if non-nil, only requests from listed ISO codes are
 	// accepted. Unknown country ("") is always allowed.

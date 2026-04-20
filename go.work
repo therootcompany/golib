@@ -3,7 +3,6 @@ go 1.26.1
 use (
 	.
 	./cmd/check-ip
-	./net/dataset
 	./net/formmailer
 	./net/geoip
 	./net/gitshallow
@@ -12,7 +11,6 @@ use (
 )
 
 replace (
-	github.com/therootcompany/golib/net/dataset v0.0.0 => ./net/dataset
 	github.com/therootcompany/golib/net/formmailer v0.0.0 => ./net/formmailer
 	github.com/therootcompany/golib/net/geoip v0.0.0 => ./net/geoip
 	github.com/therootcompany/golib/net/gitshallow v0.0.0 => ./net/gitshallow

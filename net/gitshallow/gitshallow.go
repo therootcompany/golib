@@ -168,7 +168,7 @@ func (r *Repo) Sync() (bool, error) {
 	return r.syncGit()
 }
 
-// Fetch satisfies dataset.Syncer.
+// Fetch syncs the repo and reports whether HEAD changed.
 func (r *Repo) Fetch() (bool, error) {
 	return r.syncGit()
 }
@@ -186,8 +186,8 @@ func (r *Repo) File(relPath string) *File {
 }
 
 // File is a handle to a single file inside a Repo.
-// It implements dataset.Syncer: Fetch syncs the repo (deduped across all File
-// handles sharing the same Repo) then reports whether this file changed.
+// Fetch syncs the repo (deduped across all File handles sharing the same
+// Repo) and reports whether this file changed.
 type File struct {
 	repo    *Repo
 	rel     string
@@ -206,7 +206,7 @@ func (f *File) Open() (*os.File, error) {
 }
 
 // Fetch syncs the repo and reports whether this file changed since last call.
-// Implements dataset.Syncer; safe to call concurrently.
+// Safe to call concurrently.
 func (f *File) Fetch() (bool, error) {
 	if _, err := f.repo.syncGit(); err != nil {
 		return false, err
