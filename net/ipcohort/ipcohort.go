@@ -122,7 +122,11 @@ func ParseIPv4(raw string) (ipv4net IPv4Net, err error) {
 		ippre = netip.PrefixFrom(ip, 32)
 	}
 
-	ip4 := ippre.Addr().As4()
+	addr := ippre.Addr()
+	if !addr.Is4() {
+		return ipv4net, fmt.Errorf("IPv6 not supported: %s", raw)
+	}
+	ip4 := addr.As4()
 	prefix := uint8(ippre.Bits()) // 0–32
 	return NewIPv4Net(
 		binary.BigEndian.Uint32(ip4[:]),
