@@ -44,7 +44,11 @@ func main() {
 		os.Exit(1)
 	}
 	if cacheDir == "" {
-		cacheDir, _ = os.UserCacheDir()
+		d, err := os.UserCacheDir()
+		if err != nil {
+			log.Fatalf("cache-dir: %v", err)
+		}
+		cacheDir = d
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -80,7 +84,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("geoip: %v", err)
 	}
-	defer geo.Close()
+	defer func() { _ = geo.Close() }()
 
 	if bind == "" {
 		return
