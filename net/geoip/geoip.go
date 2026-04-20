@@ -3,6 +3,7 @@ package geoip
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -50,14 +51,15 @@ func (d *Downloader) NewCacher(edition, path string) *httpcache.Cacher {
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
+	creds := base64.StdEncoding.EncodeToString([]byte(d.AccountID + ":" + d.LicenseKey))
 	return &httpcache.Cacher{
-		URL:       fmt.Sprintf("%s/%s/download?suffix=tar.gz", downloadBase, edition),
-		Path:      path,
-		MaxAge:    time.Duration(freshDays) * 24 * time.Hour,
-		Timeout:   timeout,
-		Username:  d.AccountID,
-		Password:  d.LicenseKey,
-		Transform: ExtractMMDB,
+		URL:        fmt.Sprintf("%s/%s/download?suffix=tar.gz", downloadBase, edition),
+		Path:       path,
+		MaxAge:     time.Duration(freshDays) * 24 * time.Hour,
+		Timeout:    timeout,
+		AuthHeader: "Authorization",
+		AuthValue:  "Basic " + creds,
+		Transform:  ExtractMMDB,
 	}
 }
 

@@ -37,9 +37,9 @@ func (NopSyncer) Fetch() (bool, error) { return false, nil }
 //   - MinInterval: skips if Fetch was called within this duration (in-memory).
 //     Guards against tight poll loops hammering a rate-limited API.
 //
-// Auth — Username/Password sets HTTP Basic Auth on the initial request only.
-// The Authorization header is stripped before following any redirect, so
-// presigned redirect targets (e.g. Cloudflare R2) never receive credentials.
+// Auth — AuthHeader/AuthValue set a request header on every attempt, including
+// redirects. Use any scheme: "Authorization"/"Bearer token",
+// "X-API-Key"/"secret", "Authorization"/"Basic base64(user:pass)", etc.
 //
 // Transform — if set, called with the response body instead of the default
 // atomic file copy. The func is responsible for writing to path atomically.
@@ -51,8 +51,8 @@ type Cacher struct {
 	Timeout     time.Duration // 0 uses 5m;  caps overall request including body read
 	MaxAge      time.Duration // 0 disables; skip HTTP if file mtime is within this
 	MinInterval time.Duration // 0 disables; skip HTTP if last Fetch attempt was within this
-	Username    string        // Basic Auth — not forwarded on redirects
-	Password    string
+	AuthHeader  string        // e.g. "Authorization" or "X-API-Key"
+	AuthValue   string        // e.g. "Bearer token" or "Basic base64(user:pass)"
 	Transform   func(r io.Reader, path string) error // nil = direct atomic copy
 
 	mu          sync.Mutex
@@ -116,22 +116,11 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 		TLSHandshakeTimeout: connTimeout,
 	}
 
-	var client *http.Client
-	if c.Username != "" {
-		req.SetBasicAuth(c.Username, c.Password)
-		// Strip auth before following any redirect — presigned URLs (e.g. R2)
-		// must not receive our credentials.
-		client = &http.Client{
-			Timeout:   timeout,
-			Transport: transport,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				req.Header.Del("Authorization")
-				return nil
-			},
-		}
-	} else {
-		client = &http.Client{Timeout: timeout, Transport: transport}
+	if c.AuthHeader != "" {
+		req.Header.Set(c.AuthHeader, c.AuthValue)
 	}
+
+	client := &http.Client{Timeout: timeout, Transport: transport}
 
 	resp, err := client.Do(req)
 	if err != nil {
