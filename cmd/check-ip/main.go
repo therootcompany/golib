@@ -18,6 +18,7 @@ import (
 )
 
 const (
+	bitwireGitURL      = "https://github.com/bitwire-it/ipblocklist.git"
 	inboundSingleURL   = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/inbound/single_ips.txt"
 	inboundNetworkURL  = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/inbound/networks.txt"
 	outboundSingleURL  = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/outbound/single_ips.txt"
@@ -40,7 +41,7 @@ func main() {
 
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	fs.StringVar(&cfg.DataDir,   "data-dir",  "", "blacklist cache dir (default ~/.cache/bitwire-it)")
-	fs.StringVar(&cfg.GitURL,    "git",        "", "git URL to clone/pull blacklist from")
+	fs.StringVar(&cfg.GitURL,    "git",        "", "git URL to clone/pull blacklist from (default: "+bitwireGitURL+")")
 	fs.StringVar(&cfg.Whitelist, "whitelist",  "", "path to whitelist file")
 	fs.StringVar(&cfg.Inbound,   "inbound",   "", "comma-separated paths to inbound blacklist files")
 	fs.StringVar(&cfg.Outbound,  "outbound",  "", "comma-separated paths to outbound blacklist files")
