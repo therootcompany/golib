@@ -168,9 +168,55 @@ func (r *Repo) Sync() (bool, error) {
 	return r.syncGit()
 }
 
-// Fetch satisfies httpcache.Syncer.
+// Fetch satisfies dataset.Syncer.
 func (r *Repo) Fetch() (bool, error) {
 	return r.syncGit()
+}
+
+// File returns a handle to relPath within this repo.
+// The handle's Path and Open methods give access to the file; its Fetch method
+// syncs the repo and reports whether this specific file changed (by mtime).
+func (r *Repo) File(relPath string) *File {
+	return &File{repo: r, rel: relPath}
+}
+
+// File is a handle to a single file inside a Repo.
+// It implements dataset.Syncer: Fetch syncs the repo (deduped across all File
+// handles sharing the same Repo) then reports whether this file changed.
+type File struct {
+	repo    *Repo
+	rel     string
+	mu      sync.Mutex
+	lastMod time.Time
+}
+
+// Path returns the absolute path to the file.
+func (f *File) Path() string {
+	return filepath.Join(f.repo.Path, f.rel)
+}
+
+// Open returns an open *os.File for reading. The caller must Close it.
+func (f *File) Open() (*os.File, error) {
+	return os.Open(f.Path())
+}
+
+// Fetch syncs the repo and reports whether this file changed since last call.
+// Implements dataset.Syncer; safe to call concurrently.
+func (f *File) Fetch() (bool, error) {
+	if _, err := f.repo.syncGit(); err != nil {
+		return false, err
+	}
+	info, err := os.Stat(f.Path())
+	if err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if info.ModTime().Equal(f.lastMod) {
+		return false, nil
+	}
+	f.lastMod = info.ModTime()
+	return true, nil
 }
 
 func (r *Repo) syncGit() (updated bool, err error) {

@@ -45,43 +45,43 @@ func main() {
 
 	// -- Blacklist ----------------------------------------------------------
 
-	var syncs dataset.MultiSyncer
-	var inboundPaths, outboundPaths []string
+	var (
+		syncer        dataset.Syncer
+		inboundPaths  []string
+		outboundPaths []string
+	)
 
 	switch {
 	case *inbound != "" || *outbound != "":
-		inboundPaths = splitPaths(*inbound)
+		syncer        = dataset.NopSyncer{}
+		inboundPaths  = splitPaths(*inbound)
 		outboundPaths = splitPaths(*outbound)
 
 	case *gitURL != "":
-		cacheDir := cacheDir(*dataDir, "bitwire-it")
-		syncs = dataset.MultiSyncer{gitshallow.New(*gitURL, cacheDir, 1, "")}
-		inboundPaths = []string{
-			filepath.Join(cacheDir, "tables/inbound/single_ips.txt"),
-			filepath.Join(cacheDir, "tables/inbound/networks.txt"),
+		dir := cacheDir(*dataDir, "bitwire-it")
+		gr  := gitshallow.New(*gitURL, dir, 1, "")
+		syncer        = gr
+		inboundPaths  = []string{
+			gr.File("tables/inbound/single_ips.txt").Path(),
+			gr.File("tables/inbound/networks.txt").Path(),
 		}
 		outboundPaths = []string{
-			filepath.Join(cacheDir, "tables/outbound/single_ips.txt"),
-			filepath.Join(cacheDir, "tables/outbound/networks.txt"),
+			gr.File("tables/outbound/single_ips.txt").Path(),
+			gr.File("tables/outbound/networks.txt").Path(),
 		}
 
 	default:
 		dir := cacheDir(*dataDir, "bitwire-it")
-		inboundSingle  := filepath.Join(dir, "inbound_single_ips.txt")
-		inboundNetwork := filepath.Join(dir, "inbound_networks.txt")
-		outboundSingle  := filepath.Join(dir, "outbound_single_ips.txt")
-		outboundNetwork := filepath.Join(dir, "outbound_networks.txt")
-		syncs = dataset.MultiSyncer{
-			httpcache.New(inboundSingleURL, inboundSingle),
-			httpcache.New(inboundNetworkURL, inboundNetwork),
-			httpcache.New(outboundSingleURL, outboundSingle),
-			httpcache.New(outboundNetworkURL, outboundNetwork),
-		}
-		inboundPaths  = []string{inboundSingle, inboundNetwork}
-		outboundPaths = []string{outboundSingle, outboundNetwork}
+		inSingle  := httpcache.New(inboundSingleURL,   filepath.Join(dir, "inbound_single_ips.txt"))
+		inNetwork := httpcache.New(inboundNetworkURL,  filepath.Join(dir, "inbound_networks.txt"))
+		outSingle := httpcache.New(outboundSingleURL,  filepath.Join(dir, "outbound_single_ips.txt"))
+		outNetwork:= httpcache.New(outboundNetworkURL, filepath.Join(dir, "outbound_networks.txt"))
+		syncer        = dataset.MultiSyncer{inSingle, inNetwork, outSingle, outNetwork}
+		inboundPaths  = []string{inSingle.Path, inNetwork.Path}
+		outboundPaths = []string{outSingle.Path, outNetwork.Path}
 	}
 
-	g := dataset.NewGroup(syncs)
+	g := dataset.NewGroup(syncer)
 	var whitelistDS *dataset.View[ipcohort.Cohort]
 	if *whitelist != "" {
 		paths := splitPaths(*whitelist)
