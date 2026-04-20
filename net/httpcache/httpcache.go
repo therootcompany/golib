@@ -89,17 +89,21 @@ func (c *Cacher) loadMeta() {
 }
 
 // saveMeta writes etag/lastMod to the sidecar file atomically.
-func (c *Cacher) saveMeta() {
+func (c *Cacher) saveMeta() error {
 	m := cacheMeta{ETag: c.etag, LastMod: c.lastMod}
 	data, err := json.Marshal(m)
 	if err != nil {
-		return
+		return err
 	}
 	tmp := c.metaPath() + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return
+		return err
 	}
-	os.Rename(tmp, c.metaPath())
+	if err := os.Rename(tmp, c.metaPath()); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // New creates a Cacher that fetches URL and writes it to path.
@@ -219,7 +223,9 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 	if lm := resp.Header.Get("Last-Modified"); lm != "" {
 		c.lastMod = lm
 	}
-	c.saveMeta()
+	if err := c.saveMeta(); err != nil {
+		return true, fmt.Errorf("save meta for %s: %w", c.Path, err)
+	}
 
 	return true, nil
 }
