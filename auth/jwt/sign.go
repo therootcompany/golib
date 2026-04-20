@@ -63,13 +63,13 @@ func NewSigner(keys []*PrivateKey, retiredKeys ...PublicKey) (*Signer, error) {
 	// Copy so the caller can't mutate after construction.
 	ss := make([]PrivateKey, len(keys))
 	for i, k := range keys {
-		if k == nil || k.privKey == nil {
+		if k == nil || k.Priv == nil {
 			return nil, fmt.Errorf("NewSigner: key[%d]: %w", i, ErrNoSigningKey)
 		}
 		ss[i] = *k
 
 		// Derive algorithm from key type; validate caller's Alg if already set.
-		alg, _, _, err := signingParams(ss[i].privKey)
+		alg, _, _, err := signingParams(ss[i].Priv)
 		if err != nil {
 			return nil, fmt.Errorf("NewSigner: key[%d]: %w", i, err)
 		}
@@ -87,7 +87,11 @@ func NewSigner(keys []*PrivateKey, retiredKeys ...PublicKey) (*Signer, error) {
 
 		// Auto-compute KID from thumbprint if empty.
 		if ss[i].KID == "" {
-			thumb, err := ss[i].Thumbprint()
+			pub, err := ss[i].PublicKey()
+			if err != nil {
+				return nil, fmt.Errorf("NewSigner: derive public key for key[%d]: %w", i, err)
+			}
+			thumb, err := pub.Thumbprint()
 			if err != nil {
 				return nil, fmt.Errorf("NewSigner: compute thumbprint for key[%d]: %w", i, err)
 			}
@@ -166,11 +170,11 @@ func (s *Signer) SignJWT(jws SignableJWT) error {
 		pk = s.nextKey()
 		hdr.KID = pk.KID
 	}
-	if pk.privKey == nil {
+	if pk.Priv == nil {
 		return fmt.Errorf("kid %q: %w", pk.KID, ErrNoSigningKey)
 	}
 
-	alg, hash, ecKeySize, err := signingParams(pk.privKey)
+	alg, hash, ecKeySize, err := signingParams(pk.Priv)
 	if err != nil {
 		return err
 	}
@@ -187,7 +191,7 @@ func (s *Signer) SignJWT(jws SignableJWT) error {
 
 	input := signingInputBytes(jws.GetProtected(), jws.GetPayload())
 
-	sig, err := signBytes(pk.privKey, alg, hash, ecKeySize, input)
+	sig, err := signBytes(pk.Priv, alg, hash, ecKeySize, input)
 	if err != nil {
 		return err
 	}
@@ -212,13 +216,13 @@ func (s *Signer) SignJWT(jws SignableJWT) error {
 // produces an empty payload segment (used by ACME POST-as-GET).
 func (s *Signer) SignRaw(hdr Header, payload []byte) (*RawJWT, error) {
 	pk := s.nextKey()
-	if pk.privKey == nil {
+	if pk.Priv == nil {
 		return nil, fmt.Errorf("kid %q: %w", pk.KID, ErrNoSigningKey)
 	}
 
 	rfc := hdr.GetRFCHeader()
 
-	alg, hash, ecKeySize, err := signingParams(pk.privKey)
+	alg, hash, ecKeySize, err := signingParams(pk.Priv)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +241,7 @@ func (s *Signer) SignRaw(hdr Header, payload []byte) (*RawJWT, error) {
 
 	input := signingInputBytes([]byte(protectedB64), []byte(payloadB64))
 
-	sig, err := signBytes(pk.privKey, alg, hash, ecKeySize, input)
+	sig, err := signBytes(pk.Priv, alg, hash, ecKeySize, input)
 	if err != nil {
 		return nil, err
 	}
@@ -326,21 +330,21 @@ func signBytes(signer crypto.Signer, alg string, hash crypto.Hash, ecKeySize int
 // validateSigningKey performs a test sign+verify round-trip to catch bad
 // keys at construction time rather than on first use.
 func validateSigningKey(pk *PrivateKey, pub *PublicKey) error {
-	alg, hash, ecKeySize, err := signingParams(pk.privKey)
+	alg, hash, ecKeySize, err := signingParams(pk.Priv)
 	if err != nil {
 		return err
 	}
 
 	testInput := []byte("jwt-key-validation")
 
-	sig, err := signBytes(pk.privKey, alg, hash, ecKeySize, testInput)
+	sig, err := signBytes(pk.Priv, alg, hash, ecKeySize, testInput)
 	if err != nil {
 		return fmt.Errorf("test sign: %w", err)
 	}
 
 	// Verify against the public key.
 	h := RFCHeader{Alg: alg, KID: pk.KID}
-	if err := verifyOneKey(h, pub.Key, testInput, sig); err != nil {
+	if err := verifyOneKey(h, pub.Pub, testInput, sig); err != nil {
 		return fmt.Errorf("test verify: %w", err)
 	}
 	return nil

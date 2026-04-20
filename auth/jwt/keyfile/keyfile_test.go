@@ -228,7 +228,7 @@ func TestParsePublicJWK(t *testing.T) {
 	if pk.KID == "" {
 		t.Error("KID should be set")
 	}
-	if pk.Key == nil {
+	if pk.Pub == nil {
 		t.Error("Key should be set")
 	}
 }
@@ -500,7 +500,11 @@ func TestSavePrivateJWK_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kid, err := pk.Thumbprint()
+	pub, err := pk.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid, err := pub.Thumbprint()
 	if err != nil {
 		t.Fatal(err)
 	}
