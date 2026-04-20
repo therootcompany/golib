@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Default HTTP sources for the bitwire-it blocklist.
+// Default HTTP sources for the bitwire-it blacklist.
 const (
 	inboundSingleURL  = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/inbound/single_ips.txt"
 	inboundNetworkURL = "https://github.com/bitwire-it/ipblocklist/raw/refs/heads/main/tables/inbound/networks.txt"
@@ -26,12 +26,12 @@ func defaultCacheDir(sub string) string {
 }
 
 func main() {
-	// Blocklist source flags — all optional; defaults pull from bitwire-it via HTTP.
-	dataDir   := flag.String("data-dir", "", "blocklist cache dir (default ~/.cache/bitwire-it)")
-	gitURL    := flag.String("git", "", "git URL to clone/pull blocklist from (alternative to HTTP)")
+	// Blacklist source flags — all optional; defaults pull from bitwire-it via HTTP.
+	dataDir   := flag.String("data-dir", "", "blacklist cache dir (default ~/.cache/bitwire-it)")
+	gitURL    := flag.String("git", "", "git URL to clone/pull blacklist from (alternative to HTTP)")
 	whitelist := flag.String("whitelist", "", "path to whitelist file (overrides block)")
-	inbound   := flag.String("inbound", "", "comma-separated paths to inbound blocklist files")
-	outbound  := flag.String("outbound", "", "comma-separated paths to outbound blocklist files")
+	inbound   := flag.String("inbound", "", "comma-separated paths to inbound blacklist files")
+	outbound  := flag.String("outbound", "", "comma-separated paths to outbound blacklist files")
 
 	// GeoIP flags — auto-discovered from ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf.
 	geoipConf := flag.String("geoip-conf", "", "path to GeoIP.conf (auto-discovered if absent)")
@@ -50,12 +50,12 @@ func main() {
 	}
 	ipStr := flag.Arg(0)
 
-	// -- Blocklist ----------------------------------------------------------
+	// -- Blacklist ----------------------------------------------------------
 
 	src := buildSources(*gitURL, *dataDir, *whitelist, *inbound, *outbound)
 	blGroup, whitelistDS, inboundDS, outboundDS := src.Datasets()
 	if err := blGroup.Init(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: blocklist: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: blacklist: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Loaded inbound=%d outbound=%d\n",

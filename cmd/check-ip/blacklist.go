@@ -10,7 +10,7 @@ import (
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
-// Sources holds fetch configuration for the blocklist cohorts.
+// Sources holds fetch configuration for the blacklist cohorts.
 type Sources struct {
 	whitelistPaths []string
 	inboundPaths   []string
