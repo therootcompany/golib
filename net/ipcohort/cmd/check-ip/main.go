@@ -8,12 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/oschwald/geoip2-golang"
+	"github.com/therootcompany/golib/net/dataset"
 	"github.com/therootcompany/golib/net/geoip"
-	"github.com/therootcompany/golib/net/httpcache"
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
@@ -75,25 +74,24 @@ func main() {
 		)
 	}
 
-	var whitelist, inbound, outbound atomic.Pointer[ipcohort.Cohort]
-
+	// Build typed datasets from the source.
 	if err := src.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := reloadBlocklists(src, &whitelist, &inbound, &outbound); err != nil {
+	blGroup, whitelistDS, inboundDS, outboundDS := src.Datasets()
+	if err := blGroup.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Loaded inbound=%d outbound=%d\n",
-		cohortSize(&inbound), cohortSize(&outbound))
+		cohortSize(inboundDS), cohortSize(outboundDS))
 
-	// GeoIP: resolve paths and build cachers if we have credentials.
-	var cityDB, asnDB atomic.Pointer[geoip2.Reader]
-	var cityCacher, asnCacher *httpcache.Cacher
-
+	// GeoIP datasets.
 	resolvedCityPath := *cityDBPath
 	resolvedASNPath := *asnDBPath
+
+	var cityDS, asnDS *dataset.Dataset[geoip2.Reader]
 
 	if *geoipConf != "" {
 		cfg, err := geoip.ParseConf(*geoipConf)
@@ -104,6 +102,9 @@ func main() {
 			if dbDir == "" {
 				dbDir = dataPath
 			}
+			if err := os.MkdirAll(dbDir, 0o755); err != nil {
+				fmt.Fprintf(os.Stderr, "warn: mkdir %s: %v\n", dbDir, err)
+			}
 			d := geoip.New(cfg.AccountID, cfg.LicenseKey)
 			if resolvedCityPath == "" {
 				resolvedCityPath = filepath.Join(dbDir, geoip.CityEdition+".mmdb")
@@ -111,37 +112,44 @@ func main() {
 			if resolvedASNPath == "" {
 				resolvedASNPath = filepath.Join(dbDir, geoip.ASNEdition+".mmdb")
 			}
-			cityCacher = d.NewCacher(geoip.CityEdition, resolvedCityPath)
-			asnCacher = d.NewCacher(geoip.ASNEdition, resolvedASNPath)
-			if err := os.MkdirAll(dbDir, 0o755); err != nil {
-				fmt.Fprintf(os.Stderr, "warn: mkdir %s: %v\n", dbDir, err)
-			}
+			cityDS = newGeoIPDataset(d, geoip.CityEdition, resolvedCityPath)
+			asnDS = newGeoIPDataset(d, geoip.ASNEdition, resolvedASNPath)
+		}
+	} else {
+		// Manual paths: no auto-download, just open existing files.
+		if resolvedCityPath != "" {
+			cityDS = newGeoIPDataset(nil, "", resolvedCityPath)
+		}
+		if resolvedASNPath != "" {
+			asnDS = newGeoIPDataset(nil, "", resolvedASNPath)
 		}
 	}
 
-	// Fetch GeoIP DBs if we have cachers; otherwise just open existing files.
-	if cityCacher != nil {
-		if _, err := cityCacher.Fetch(); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: city DB fetch: %v\n", err)
+	if cityDS != nil {
+		if err := cityDS.Init(); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: city DB: %v\n", err)
 		}
 	}
-	if asnCacher != nil {
-		if _, err := asnCacher.Fetch(); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: ASN DB fetch: %v\n", err)
+	if asnDS != nil {
+		if err := asnDS.Init(); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: ASN DB: %v\n", err)
 		}
 	}
-	openGeoIPReader(resolvedCityPath, &cityDB)
-	openGeoIPReader(resolvedASNPath, &asnDB)
 
-	// Keep everything fresh in the background if running as a daemon.
+	// Keep everything fresh in the background.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go runLoop(ctx, src, &whitelist, &inbound, &outbound,
-		cityCacher, asnCacher, &cityDB, &asnDB)
+	go blGroup.Run(ctx, 47*time.Minute)
+	if cityDS != nil {
+		go cityDS.Run(ctx, 47*time.Minute)
+	}
+	if asnDS != nil {
+		go asnDS.Run(ctx, 47*time.Minute)
+	}
 
 	// Check and report.
-	blockedInbound := containsInbound(ipStr, &whitelist, &inbound)
-	blockedOutbound := containsOutbound(ipStr, &whitelist, &outbound)
+	blockedInbound := containsInbound(ipStr, whitelistDS, inboundDS)
+	blockedOutbound := containsOutbound(ipStr, whitelistDS, outboundDS)
 
 	switch {
 	case blockedInbound && blockedOutbound:
@@ -154,149 +162,112 @@ func main() {
 		fmt.Printf("%s is allowed\n", ipStr)
 	}
 
-	printGeoInfo(ipStr, &cityDB, &asnDB)
+	printGeoInfo(ipStr, cityDS, asnDS)
 
 	if blockedInbound || blockedOutbound {
 		os.Exit(1)
 	}
 }
 
-func openGeoIPReader(path string, ptr *atomic.Pointer[geoip2.Reader]) {
-	if path == "" {
-		return
+// newGeoIPDataset creates a Dataset[geoip2.Reader]. If d is nil, only
+// opens the existing file (no download). Close is wired to Reader.Close.
+func newGeoIPDataset(d *geoip.Downloader, edition, path string) *dataset.Dataset[geoip2.Reader] {
+	var syncer interface{ Fetch() (bool, error) }
+	if d != nil {
+		syncer = d.NewCacher(edition, path)
+	} else {
+		syncer = &nopSyncer{}
 	}
-	r, err := geoip2.Open(path)
-	if err != nil {
-		return
-	}
-	if old := ptr.Swap(r); old != nil {
-		old.Close()
-	}
+	ds := dataset.New(syncer, func() (*geoip2.Reader, error) {
+		return geoip2.Open(path)
+	})
+	ds.Name = edition
+	ds.Close = func(r *geoip2.Reader) { r.Close() }
+	return ds
 }
 
-func runLoop(ctx context.Context, src *Sources,
-	whitelist, inbound, outbound *atomic.Pointer[ipcohort.Cohort],
-	cityCacher, asnCacher *httpcache.Cacher,
-	cityDB, asnDB *atomic.Pointer[geoip2.Reader],
-) {
-	ticker := time.NewTicker(47 * time.Minute)
-	defer ticker.Stop()
+// nopSyncer satisfies httpcache.Syncer for file-only datasets (no download).
+type nopSyncer struct{}
 
-	for {
-		select {
-		case <-ticker.C:
-			// Blocklists.
-			if updated, err := src.Fetch(); err != nil {
-				fmt.Fprintf(os.Stderr, "error: blocklist sync: %v\n", err)
-			} else if updated {
-				if err := reloadBlocklists(src, whitelist, inbound, outbound); err != nil {
-					fmt.Fprintf(os.Stderr, "error: blocklist reload: %v\n", err)
-				} else {
-					fmt.Fprintf(os.Stderr, "reloaded: inbound=%d outbound=%d\n",
-						cohortSize(inbound), cohortSize(outbound))
-				}
-			}
+func (n *nopSyncer) Fetch() (bool, error) { return false, nil }
 
-			// GeoIP DBs.
-			if cityCacher != nil {
-				if updated, err := cityCacher.Fetch(); err != nil {
-					fmt.Fprintf(os.Stderr, "error: city DB sync: %v\n", err)
-				} else if updated {
-					openGeoIPReader(cityCacher.Path, cityDB)
-					fmt.Fprintf(os.Stderr, "reloaded: %s\n", cityCacher.Path)
-				}
-			}
-			if asnCacher != nil {
-				if updated, err := asnCacher.Fetch(); err != nil {
-					fmt.Fprintf(os.Stderr, "error: ASN DB sync: %v\n", err)
-				} else if updated {
-					openGeoIPReader(asnCacher.Path, asnDB)
-					fmt.Fprintf(os.Stderr, "reloaded: %s\n", asnCacher.Path)
-				}
-			}
-		case <-ctx.Done():
-			return
+func containsInbound(ip string,
+	whitelist, inbound *dataset.Dataset[ipcohort.Cohort],
+) bool {
+	if whitelist != nil {
+		if wl := whitelist.Load(); wl != nil && wl.Contains(ip) {
+			return false
 		}
 	}
-}
-
-func printGeoInfo(ipStr string, cityDB, asnDB *atomic.Pointer[geoip2.Reader]) {
-	ip, err := netip.ParseAddr(ipStr)
-	if err != nil {
-		return
-	}
-	stdIP := ip.AsSlice()
-
-	if r := cityDB.Load(); r != nil {
-		if rec, err := r.City(stdIP); err == nil {
-			city := rec.City.Names["en"]
-			country := rec.Country.Names["en"]
-			iso := rec.Country.IsoCode
-			var parts []string
-			if city != "" {
-				parts = append(parts, city)
-			}
-			if len(rec.Subdivisions) > 0 {
-				if sub := rec.Subdivisions[0].Names["en"]; sub != "" && sub != city {
-					parts = append(parts, sub)
-				}
-			}
-			if country != "" {
-				parts = append(parts, fmt.Sprintf("%s (%s)", country, iso))
-			}
-			if len(parts) > 0 {
-				fmt.Printf("  Location: %s\n", strings.Join(parts, ", "))
-			}
-		}
-	}
-
-	if r := asnDB.Load(); r != nil {
-		if rec, err := r.ASN(stdIP); err == nil && rec.AutonomousSystemNumber != 0 {
-			fmt.Printf("  ASN:      AS%d %s\n",
-				rec.AutonomousSystemNumber, rec.AutonomousSystemOrganization)
-		}
-	}
-}
-
-func reloadBlocklists(src *Sources,
-	whitelist, inbound, outbound *atomic.Pointer[ipcohort.Cohort],
-) error {
-	if wl, err := src.LoadWhitelist(); err != nil {
-		return err
-	} else if wl != nil {
-		whitelist.Store(wl)
-	}
-	if in, err := src.LoadInbound(); err != nil {
-		return err
-	} else if in != nil {
-		inbound.Store(in)
-	}
-	if out, err := src.LoadOutbound(); err != nil {
-		return err
-	} else if out != nil {
-		outbound.Store(out)
-	}
-	return nil
-}
-
-func containsInbound(ip string, whitelist, inbound *atomic.Pointer[ipcohort.Cohort]) bool {
-	if wl := whitelist.Load(); wl != nil && wl.Contains(ip) {
+	if inbound == nil {
 		return false
 	}
 	c := inbound.Load()
 	return c != nil && c.Contains(ip)
 }
 
-func containsOutbound(ip string, whitelist, outbound *atomic.Pointer[ipcohort.Cohort]) bool {
-	if wl := whitelist.Load(); wl != nil && wl.Contains(ip) {
+func containsOutbound(ip string,
+	whitelist, outbound *dataset.Dataset[ipcohort.Cohort],
+) bool {
+	if whitelist != nil {
+		if wl := whitelist.Load(); wl != nil && wl.Contains(ip) {
+			return false
+		}
+	}
+	if outbound == nil {
 		return false
 	}
 	c := outbound.Load()
 	return c != nil && c.Contains(ip)
 }
 
-func cohortSize(ptr *atomic.Pointer[ipcohort.Cohort]) int {
-	if c := ptr.Load(); c != nil {
+func printGeoInfo(ipStr string, cityDS, asnDS *dataset.Dataset[geoip2.Reader]) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return
+	}
+	stdIP := ip.AsSlice()
+
+	if cityDS != nil {
+		if r := cityDS.Load(); r != nil {
+			if rec, err := r.City(stdIP); err == nil {
+				city := rec.City.Names["en"]
+				country := rec.Country.Names["en"]
+				iso := rec.Country.IsoCode
+				var parts []string
+				if city != "" {
+					parts = append(parts, city)
+				}
+				if len(rec.Subdivisions) > 0 {
+					if sub := rec.Subdivisions[0].Names["en"]; sub != "" && sub != city {
+						parts = append(parts, sub)
+					}
+				}
+				if country != "" {
+					parts = append(parts, fmt.Sprintf("%s (%s)", country, iso))
+				}
+				if len(parts) > 0 {
+					fmt.Printf("  Location: %s\n", strings.Join(parts, ", "))
+				}
+			}
+		}
+	}
+
+	if asnDS != nil {
+		if r := asnDS.Load(); r != nil {
+			if rec, err := r.ASN(stdIP); err == nil && rec.AutonomousSystemNumber != 0 {
+				fmt.Printf("  ASN:      AS%d %s\n",
+					rec.AutonomousSystemNumber, rec.AutonomousSystemOrganization)
+			}
+		}
+	}
+}
+
+func cohortSize(ds *dataset.Dataset[ipcohort.Cohort]) int {
+	if ds == nil {
+		return 0
+	}
+	if c := ds.Load(); c != nil {
 		return c.Size()
 	}
 	return 0

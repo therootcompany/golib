@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 
+	"github.com/therootcompany/golib/net/dataset"
 	"github.com/therootcompany/golib/net/gitshallow"
 	"github.com/therootcompany/golib/net/httpcache"
 	"github.com/therootcompany/golib/net/ipcohort"
@@ -14,15 +15,15 @@ type HTTPSource struct {
 	Path string
 }
 
-// Sources holds the configuration for fetching and loading the three cohorts.
+// Sources holds fetch configuration for the three blocklist cohorts.
 // It knows how to pull data from git or HTTP, but owns no atomic state.
 type Sources struct {
 	whitelistPaths []string
 	inboundPaths   []string
 	outboundPaths  []string
 
-	gitRepo *gitshallow.Repo  // non-nil for git source; used by Init for clone-if-missing
-	syncs   []httpcache.Syncer // all syncable sources (git repo or HTTP cachers)
+	gitRepo *gitshallow.Repo   // non-nil for git source; used by Init for clone-if-missing
+	syncs   []httpcache.Syncer // all syncable sources
 }
 
 func newFileSources(whitelist, inbound, outbound []string) *Sources {
@@ -78,8 +79,7 @@ func (s *Sources) Fetch() (bool, error) {
 	return anyUpdated, nil
 }
 
-// Init ensures remotes are ready. For git: clones if missing then syncs.
-// For HTTP: fetches each cacher unconditionally on first run.
+// Init ensures remotes are ready: clones git if missing, or fetches HTTP files.
 func (s *Sources) Init() error {
 	if s.gitRepo != nil {
 		_, err := s.gitRepo.Init()
@@ -93,23 +93,33 @@ func (s *Sources) Init() error {
 	return nil
 }
 
-func (s *Sources) LoadWhitelist() (*ipcohort.Cohort, error) {
-	if len(s.whitelistPaths) == 0 {
-		return nil, nil
+// Datasets builds a dataset.Group backed by this Sources and returns typed
+// datasets for whitelist, inbound, and outbound cohorts. Either whitelist or
+// outbound may be nil if no paths were configured.
+func (s *Sources) Datasets() (
+	g *dataset.Group,
+	whitelist *dataset.Dataset[ipcohort.Cohort],
+	inbound *dataset.Dataset[ipcohort.Cohort],
+	outbound *dataset.Dataset[ipcohort.Cohort],
+) {
+	g = dataset.NewGroup(s)
+	if len(s.whitelistPaths) > 0 {
+		paths := s.whitelistPaths
+		whitelist = dataset.Add(g, func() (*ipcohort.Cohort, error) {
+			return ipcohort.LoadFiles(paths...)
+		})
 	}
-	return ipcohort.LoadFiles(s.whitelistPaths...)
-}
-
-func (s *Sources) LoadInbound() (*ipcohort.Cohort, error) {
-	if len(s.inboundPaths) == 0 {
-		return nil, nil
+	if len(s.inboundPaths) > 0 {
+		paths := s.inboundPaths
+		inbound = dataset.Add(g, func() (*ipcohort.Cohort, error) {
+			return ipcohort.LoadFiles(paths...)
+		})
 	}
-	return ipcohort.LoadFiles(s.inboundPaths...)
-}
-
-func (s *Sources) LoadOutbound() (*ipcohort.Cohort, error) {
-	if len(s.outboundPaths) == 0 {
-		return nil, nil
+	if len(s.outboundPaths) > 0 {
+		paths := s.outboundPaths
+		outbound = dataset.Add(g, func() (*ipcohort.Cohort, error) {
+			return ipcohort.LoadFiles(paths...)
+		})
 	}
-	return ipcohort.LoadFiles(s.outboundPaths...)
+	return g, whitelist, inbound, outbound
 }
