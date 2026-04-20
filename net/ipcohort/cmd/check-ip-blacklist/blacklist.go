@@ -9,13 +9,15 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/net/gitshallow"
+	"github.com/therootcompany/golib/net/httpcache"
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
 type Blacklist struct {
 	atomic.Pointer[ipcohort.Cohort]
 	path string
-	repo *gitshallow.Repo // nil if file-only
+	git  *gitshallow.Repo
+	http *httpcache.Cacher
 }
 
 func NewBlacklist(path string) *Blacklist {
@@ -24,16 +26,27 @@ func NewBlacklist(path string) *Blacklist {
 
 func NewGitBlacklist(gitURL, path string) *Blacklist {
 	repo := gitshallow.New(gitURL, filepath.Dir(path), 1, "")
-	b := &Blacklist{path: path, repo: repo}
+	b := &Blacklist{path: path, git: repo}
 	repo.Register(b.reload)
 	return b
 }
 
+func NewHTTPBlacklist(url, path string) *Blacklist {
+	cacher := httpcache.New(url, path)
+	b := &Blacklist{path: path, http: cacher}
+	cacher.Register(b.reload)
+	return b
+}
+
 func (b *Blacklist) Init(lightGC bool) error {
-	if b.repo != nil {
-		return b.repo.Init(lightGC)
+	switch {
+	case b.git != nil:
+		return b.git.Init(lightGC)
+	case b.http != nil:
+		return b.http.Init()
+	default:
+		return b.reload()
 	}
-	return b.reload()
 }
 
 func (b *Blacklist) Run(ctx context.Context, lightGC bool) {
@@ -43,7 +56,8 @@ func (b *Blacklist) Run(ctx context.Context, lightGC bool) {
 	for {
 		select {
 		case <-ticker.C:
-			if updated, err := b.repo.Sync(lightGC); err != nil {
+			updated, err := b.sync(lightGC)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: blacklist sync: %v\n", err)
 			} else if updated {
 				fmt.Fprintf(os.Stderr, "blacklist: reloaded %d entries\n", b.Size())
@@ -51,6 +65,17 @@ func (b *Blacklist) Run(ctx context.Context, lightGC bool) {
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+func (b *Blacklist) sync(lightGC bool) (bool, error) {
+	switch {
+	case b.git != nil:
+		return b.git.Sync(lightGC)
+	case b.http != nil:
+		return b.http.Sync()
+	default:
+		return false, nil
 	}
 }
 

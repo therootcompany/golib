@@ -3,25 +3,29 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: %s <blacklist.csv> <ip-address> [git-url]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s <blacklist.csv> <ip-address> [git-url|http-url]\n", os.Args[0])
 		os.Exit(1)
 	}
 
 	dataPath := os.Args[1]
 	ipStr := os.Args[2]
-	gitURL := ""
+	remoteURL := ""
 	if len(os.Args) >= 4 {
-		gitURL = os.Args[3]
+		remoteURL = os.Args[3]
 	}
 
 	var bl *Blacklist
-	if gitURL != "" {
-		bl = NewGitBlacklist(gitURL, dataPath)
-	} else {
+	switch {
+	case strings.HasPrefix(remoteURL, "http://") || strings.HasPrefix(remoteURL, "https://"):
+		bl = NewHTTPBlacklist(remoteURL, dataPath)
+	case remoteURL != "":
+		bl = NewGitBlacklist(remoteURL, dataPath)
+	default:
 		bl = NewBlacklist(dataPath)
 	}
 
