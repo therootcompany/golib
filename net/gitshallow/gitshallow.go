@@ -115,7 +115,9 @@ func (r *Repo) runGit(args ...string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// Pull performs a shallow pull (--ff-only) and reports whether HEAD changed.
+// Pull fetches from origin and hard-resets the working tree to the remote
+// branch, reporting whether HEAD changed. This is a read-only mirror — we
+// never try to merge, so force-pushes upstream are handled transparently.
 func (r *Repo) Pull() (updated bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -127,19 +129,27 @@ func (r *Repo) pull() (updated bool, err error) {
 		return false, fmt.Errorf("repository does not exist at %s", r.Path)
 	}
 
-	oldHead, err := r.runGit("rev-parse", "HEAD")
-	if err != nil {
+	oldHead, _ := r.runGit("rev-parse", "HEAD")
+
+	branch := r.Branch
+	if branch == "" {
+		out, err := r.runGit("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+		if err != nil {
+			return false, err
+		}
+		_, branch, _ = strings.Cut(out, "/")
+	}
+
+	fetchArgs := []string{"fetch", "--no-tags"}
+	if depth := r.effectiveDepth(); depth >= 0 {
+		fetchArgs = append(fetchArgs, "--depth", fmt.Sprintf("%d", depth))
+	}
+	fetchArgs = append(fetchArgs, "origin", branch)
+	if _, err := r.runGit(fetchArgs...); err != nil {
 		return false, err
 	}
 
-	pullArgs := []string{"pull", "--ff-only", "--no-tags"}
-	if depth := r.effectiveDepth(); depth >= 0 {
-		pullArgs = append(pullArgs, "--depth", fmt.Sprintf("%d", depth))
-	}
-	if r.Branch != "" {
-		pullArgs = append(pullArgs, "origin", r.Branch)
-	}
-	if _, err = r.runGit(pullArgs...); err != nil {
+	if _, err := r.runGit("reset", "--hard", "origin/"+branch); err != nil {
 		return false, err
 	}
 
