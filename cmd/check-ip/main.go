@@ -134,9 +134,15 @@ func main() {
 			repo.FilePath("tables/outbound/networks.txt"),
 		)
 	})
+	t := time.Now()
 	if err := blocklists.Load(context.Background()); err != nil {
 		log.Fatalf("blocklists: %v", err)
 	}
+	fmt.Fprintf(os.Stderr, "Loading blocklists... %s (inbound=%d, outbound=%d)\n",
+		time.Since(t).Round(time.Millisecond),
+		cfg.inbound.Value().Size(),
+		cfg.outbound.Value().Size(),
+	)
 
 	// GeoIP: download the City + ASN tar.gz archives via httpcache
 	// conditional GETs. geoip.Open extracts in-memory — no .mmdb files
@@ -170,9 +176,11 @@ func main() {
 	cfg.geo = dataset.Add(geoSet, func() (*geoip.Databases, error) {
 		return geoip.Open(maxmindDir)
 	})
+	t = time.Now()
 	if err := geoSet.Load(context.Background()); err != nil {
 		log.Fatalf("geoip: %v", err)
 	}
+	fmt.Fprintf(os.Stderr, "Loading geoip... %s\n", time.Since(t).Round(time.Millisecond))
 	defer func() { _ = cfg.geo.Value().Close() }()
 
 	// Whitelist: combined IPs + CIDRs in one file, polled for mtime changes.
@@ -183,9 +191,14 @@ func main() {
 		cfg.whitelist = dataset.Add(whitelistSet, func() (*ipcohort.Cohort, error) {
 			return ipcohort.LoadFile(cfg.WhitelistPath)
 		})
+		t = time.Now()
 		if err := whitelistSet.Load(context.Background()); err != nil {
 			log.Fatalf("whitelist: %v", err)
 		}
+		fmt.Fprintf(os.Stderr, "Loading whitelist... %s (entries=%d)\n",
+			time.Since(t).Round(time.Millisecond),
+			cfg.whitelist.Value().Size(),
+		)
 	}
 
 	for _, ip := range ips {
