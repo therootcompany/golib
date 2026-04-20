@@ -3,6 +3,7 @@ package httpcache
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,21 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+)
+
+// Sentinel errors returned by Fetch; wrap with errors.Is to branch on the
+// failure mode. The wrapped error always includes the URL or Path context.
+var (
+	// ErrUnexpectedStatus is returned when the server replies with a
+	// non-200, non-304 response.
+	ErrUnexpectedStatus = errors.New("unexpected response status")
+
+	// ErrEmptyResponse is returned when a 200 response body is zero bytes.
+	ErrEmptyResponse = errors.New("empty response body")
+
+	// ErrSaveMeta is returned when the .meta sidecar cannot be written
+	// after a successful body download (updated is still true).
+	ErrSaveMeta = errors.New("save meta sidecar")
 )
 
 // BasicAuth returns an HTTP Basic Authorization header value:
@@ -191,7 +207,7 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 		return false, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("unexpected status %d fetching %s", resp.StatusCode, c.URL)
+		return false, fmt.Errorf("%w %d fetching %s", ErrUnexpectedStatus, resp.StatusCode, c.URL)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(c.Path), 0o755); err != nil {
@@ -210,7 +226,7 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 	}
 	if n == 0 {
 		os.Remove(tmp)
-		return false, fmt.Errorf("empty response from %s", c.URL)
+		return false, fmt.Errorf("%w from %s", ErrEmptyResponse, c.URL)
 	}
 	if err := os.Rename(tmp, c.Path); err != nil {
 		os.Remove(tmp)
@@ -224,7 +240,7 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 		c.lastMod = lm
 	}
 	if err := c.saveMeta(); err != nil {
-		return true, fmt.Errorf("save meta for %s: %w", c.Path, err)
+		return true, fmt.Errorf("%w for %s: %w", ErrSaveMeta, c.Path, err)
 	}
 
 	return true, nil
