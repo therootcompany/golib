@@ -1,14 +1,12 @@
 package gitshallow
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
 
 // Repo manages a shallow git clone used as a periodically-updated data source.
@@ -56,28 +54,6 @@ func (r *Repo) Init(lightGC bool) error {
 	}
 
 	return r.invokeCallbacks()
-}
-
-// Run periodically syncs the repo and invokes callbacks when HEAD changes.
-// Blocks until ctx is done.
-// lightGC=false (zero value) runs aggressive GC with immediate pruning to minimize disk use.
-// Pass true to skip both when the periodic GC is too slow for your workload.
-func (r *Repo) Run(ctx context.Context, lightGC bool) {
-	ticker := time.NewTicker(47 * time.Minute)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			if updated, err := r.Sync(lightGC); err != nil {
-				fmt.Fprintf(os.Stderr, "error: git sync: %v\n", err)
-			} else if updated {
-				fmt.Fprintf(os.Stderr, "git: repo updated\n")
-			}
-		case <-ctx.Done():
-			return
-		}
-	}
 }
 
 // Clone performs a shallow clone (--depth N --single-branch --no-tags).
