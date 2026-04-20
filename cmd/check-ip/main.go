@@ -45,30 +45,23 @@ func main() {
 
 	// -- Blacklist ----------------------------------------------------------
 
-	var (
-		syncer        dataset.Syncer
-		inboundPaths  []string
-		outboundPaths []string
-	)
+	var inboundDS, outboundDS *dataset.Dataset[ipcohort.Cohort]
 
 	switch {
 	case *inbound != "" || *outbound != "":
-		syncer        = dataset.NopSyncer{}
-		inboundPaths  = splitPaths(*inbound)
-		outboundPaths = splitPaths(*outbound)
+		inboundDS  = cohortDataset(dataset.NopSyncer{}, splitPaths(*inbound)...)
+		outboundDS = cohortDataset(dataset.NopSyncer{}, splitPaths(*outbound)...)
 
 	case *gitURL != "":
 		dir := cacheDir(*dataDir, "bitwire-it")
 		gr  := gitshallow.New(*gitURL, dir, 1, "")
-		syncer        = gr
-		inboundPaths  = []string{
-			gr.File("tables/inbound/single_ips.txt").Path(),
-			gr.File("tables/inbound/networks.txt").Path(),
-		}
-		outboundPaths = []string{
-			gr.File("tables/outbound/single_ips.txt").Path(),
-			gr.File("tables/outbound/networks.txt").Path(),
-		}
+		inSingle  := gr.File("tables/inbound/single_ips.txt")
+		inNetwork := gr.File("tables/inbound/networks.txt")
+		outSingle := gr.File("tables/outbound/single_ips.txt")
+		outNetwork:= gr.File("tables/outbound/networks.txt")
+		// Each File.Fetch deduplicates the git pull via the shared Repo.
+		inboundDS  = cohortDataset(dataset.MultiSyncer{inSingle, inNetwork},  inSingle.Path(), inNetwork.Path())
+		outboundDS = cohortDataset(dataset.MultiSyncer{outSingle, outNetwork}, outSingle.Path(), outNetwork.Path())
 
 	default:
 		dir := cacheDir(*dataDir, "bitwire-it")
@@ -76,23 +69,23 @@ func main() {
 		inNetwork := httpcache.New(inboundNetworkURL,  filepath.Join(dir, "inbound_networks.txt"))
 		outSingle := httpcache.New(outboundSingleURL,  filepath.Join(dir, "outbound_single_ips.txt"))
 		outNetwork:= httpcache.New(outboundNetworkURL, filepath.Join(dir, "outbound_networks.txt"))
-		syncer        = dataset.MultiSyncer{inSingle, inNetwork, outSingle, outNetwork}
-		inboundPaths  = []string{inSingle.Path, inNetwork.Path}
-		outboundPaths = []string{outSingle.Path, outNetwork.Path}
+		inboundDS  = cohortDataset(dataset.MultiSyncer{inSingle, inNetwork},   inSingle.Path, inNetwork.Path)
+		outboundDS = cohortDataset(dataset.MultiSyncer{outSingle, outNetwork}, outSingle.Path, outNetwork.Path)
 	}
 
-	g := dataset.NewGroup(syncer)
-	var whitelistDS *dataset.View[ipcohort.Cohort]
+	var whitelistDS *dataset.Dataset[ipcohort.Cohort]
 	if *whitelist != "" {
-		paths := splitPaths(*whitelist)
-		whitelistDS = dataset.Add(g, func() (*ipcohort.Cohort, error) { return ipcohort.LoadFiles(paths...) })
+		whitelistDS = cohortDataset(dataset.NopSyncer{}, splitPaths(*whitelist)...)
 	}
-	inboundDS  := dataset.Add(g, func() (*ipcohort.Cohort, error) { return ipcohort.LoadFiles(inboundPaths...) })
-	outboundDS := dataset.Add(g, func() (*ipcohort.Cohort, error) { return ipcohort.LoadFiles(outboundPaths...) })
 
-	if err := g.Init(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: blacklist: %v\n", err)
-		os.Exit(1)
+	for _, ds := range []*dataset.Dataset[ipcohort.Cohort]{whitelistDS, inboundDS, outboundDS} {
+		if ds == nil {
+			continue
+		}
+		if err := ds.Init(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: blacklist: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	fmt.Fprintf(os.Stderr, "Loaded inbound=%d outbound=%d\n",
 		inboundDS.Load().Size(), outboundDS.Load().Size())
@@ -113,7 +106,11 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go g.Run(ctx, 47*time.Minute)
+	for _, ds := range []*dataset.Dataset[ipcohort.Cohort]{whitelistDS, inboundDS, outboundDS} {
+		if ds != nil {
+			go ds.Run(ctx, 47*time.Minute)
+		}
+	}
 	geo.Run(ctx, 47*time.Minute)
 
 	// -- Check and report --------------------------------------------------
@@ -138,7 +135,14 @@ func main() {
 	}
 }
 
-func isBlocked(ip string, whitelist, cohort *dataset.View[ipcohort.Cohort]) bool {
+// cohortDataset creates a Dataset that fetches via syncer and loads paths as a Cohort.
+func cohortDataset(syncer dataset.Syncer, paths ...string) *dataset.Dataset[ipcohort.Cohort] {
+	return dataset.New(syncer, func() (*ipcohort.Cohort, error) {
+		return ipcohort.LoadFiles(paths...)
+	})
+}
+
+func isBlocked(ip string, whitelist, cohort *dataset.Dataset[ipcohort.Cohort]) bool {
 	if cohort == nil {
 		return false
 	}
