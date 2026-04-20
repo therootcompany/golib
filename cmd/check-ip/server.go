@@ -13,26 +13,53 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/net/geoip"
+	"github.com/therootcompany/golib/net/ipcohort"
+	"github.com/therootcompany/golib/sync/dataset"
 )
 
 const shutdownTimeout = 5 * time.Second
 
-// serve runs the HTTP API until ctx is cancelled, shutting down gracefully.
+// Result is the structured verdict for a single IP.
+type Result struct {
+	IP              string     `json:"ip"`
+	Blocked         bool       `json:"blocked"`
+	BlockedInbound  bool       `json:"blocked_inbound"`
+	BlockedOutbound bool       `json:"blocked_outbound"`
+	Geo             geoip.Info `json:"geo,omitzero"`
+}
+
+// serve runs the HTTP API until ctx is cancelled.
 //
 //	GET /         checks the request's client IP
 //	GET /check    same, plus ?ip= overrides
 //
-// Response format is chosen per request: ?format=json, then
-// Accept: application/json, else pretty text.
-func serve(ctx context.Context, bind string, checker *Checker) error {
+// Response format: ?format=json, then Accept: application/json, else pretty.
+func serve(
+	ctx context.Context,
+	bind string,
+	inbound, outbound *dataset.View[ipcohort.Cohort],
+	geo *geoip.Databases,
+) error {
+	check := func(ip string) Result {
+		in := inbound.Value().Contains(ip)
+		out := outbound.Value().Contains(ip)
+		return Result{
+			IP:              ip,
+			Blocked:         in || out,
+			BlockedInbound:  in,
+			BlockedOutbound: out,
+			Geo:             geo.Lookup(ip),
+		}
+	}
+
 	handle := func(w http.ResponseWriter, r *http.Request, ip string) {
-		format := requestFormat(r)
-		if format == formatJSON {
+		f := requestFormat(r)
+		if f == formatJSON {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		} else {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		}
-		writeResult(w, checker.Check(ip), format)
+		write(w, check(ip), f)
 	}
 
 	mux := http.NewServeMux()
@@ -54,7 +81,6 @@ func serve(ctx context.Context, bind string, checker *Checker) error {
 			return ctx
 		},
 	}
-
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -77,7 +103,6 @@ const (
 	formatJSON
 )
 
-// requestFormat picks a response format from ?format=, then Accept header.
 func requestFormat(r *http.Request) format {
 	switch r.URL.Query().Get("format") {
 	case "json":
@@ -91,7 +116,7 @@ func requestFormat(r *http.Request) format {
 	return formatPretty
 }
 
-func writeResult(w io.Writer, r Result, f format) {
+func write(w io.Writer, r Result, f format) {
 	if f == formatJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -108,31 +133,25 @@ func writeResult(w io.Writer, r Result, f format) {
 	default:
 		fmt.Fprintf(w, "%s is allowed\n", r.IP)
 	}
-	writeGeo(w, r.Geo)
-}
-
-func writeGeo(w io.Writer, info geoip.Info) {
 	var parts []string
-	if info.City != "" {
-		parts = append(parts, info.City)
+	if r.Geo.City != "" {
+		parts = append(parts, r.Geo.City)
 	}
-	if info.Region != "" {
-		parts = append(parts, info.Region)
+	if r.Geo.Region != "" {
+		parts = append(parts, r.Geo.Region)
 	}
-	if info.Country != "" {
-		parts = append(parts, fmt.Sprintf("%s (%s)", info.Country, info.CountryISO))
+	if r.Geo.Country != "" {
+		parts = append(parts, fmt.Sprintf("%s (%s)", r.Geo.Country, r.Geo.CountryISO))
 	}
 	if len(parts) > 0 {
 		fmt.Fprintf(w, "  Location: %s\n", strings.Join(parts, ", "))
 	}
-	if info.ASN != 0 {
-		fmt.Fprintf(w, "  ASN:      AS%d %s\n", info.ASN, info.ASNOrg)
+	if r.Geo.ASN != 0 {
+		fmt.Fprintf(w, "  ASN:      AS%d %s\n", r.Geo.ASN, r.Geo.ASNOrg)
 	}
 }
 
 // clientIP extracts the caller's IP, honoring X-Forwarded-For when present.
-// The leftmost entry in X-Forwarded-For is the originating client; intermediate
-// proxies append themselves rightward.
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		first, _, _ := strings.Cut(xff, ",")

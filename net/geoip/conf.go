@@ -9,10 +9,10 @@ import (
 
 // Conf holds the fields parsed from a geoipupdate-style config file.
 type Conf struct {
-	AccountID          string
-	LicenseKey         string
-	EditionIDs         []string
-	DatabaseDirectory  string
+	AccountID         string
+	LicenseKey        string
+	EditionIDs        []string
+	DatabaseDirectory string
 }
 
 // ParseConf reads a geoipupdate-style config file (whitespace-separated

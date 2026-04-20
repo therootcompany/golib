@@ -10,9 +10,7 @@ import (
 	"github.com/oschwald/geoip2-golang"
 )
 
-// Databases holds open GeoLite2 readers. A nil field means that edition
-// wasn't configured. A nil *Databases means geoip is disabled; all methods
-// are nil-safe no-ops so callers need not branch.
+// Databases holds open GeoLite2 City + ASN readers.
 type Databases struct {
 	City *geoip2.Reader
 	ASN  *geoip2.Reader
@@ -22,9 +20,8 @@ type Databases struct {
 // GeoIP.conf with credentials is available), and opens the readers.
 //
 //   - confPath=""  → auto-discover from DefaultConfPaths
-//   - conf found   → auto-download; cityPath/asnPath override default locations
+//   - conf found   → auto-download to cityPath/asnPath
 //   - no conf      → cityPath and asnPath must point to existing .mmdb files
-//   - no conf and no paths → returns nil, nil (geoip disabled)
 func OpenDatabases(confPath, cityPath, asnPath string) (*Databases, error) {
 	if confPath == "" {
 		for _, p := range DefaultConfPaths() {
@@ -40,20 +37,8 @@ func OpenDatabases(confPath, cityPath, asnPath string) (*Databases, error) {
 		if err != nil {
 			return nil, fmt.Errorf("geoip-conf: %w", err)
 		}
-		dbDir := cfg.DatabaseDirectory
-		if dbDir == "" {
-			if dbDir, err = DefaultCacheDir(); err != nil {
-				return nil, fmt.Errorf("geoip cache dir: %w", err)
-			}
-		}
-		if err := os.MkdirAll(dbDir, 0o755); err != nil {
-			return nil, fmt.Errorf("mkdir %s: %w", dbDir, err)
-		}
-		if cityPath == "" {
-			cityPath = filepath.Join(dbDir, CityEdition+".mmdb")
-		}
-		if asnPath == "" {
-			asnPath = filepath.Join(dbDir, ASNEdition+".mmdb")
+		if err := os.MkdirAll(filepath.Dir(cityPath), 0o755); err != nil {
+			return nil, err
 		}
 		dl := New(cfg.AccountID, cfg.LicenseKey)
 		if _, err := dl.NewCacher(CityEdition, cityPath).Fetch(); err != nil {
@@ -62,60 +47,30 @@ func OpenDatabases(confPath, cityPath, asnPath string) (*Databases, error) {
 		if _, err := dl.NewCacher(ASNEdition, asnPath).Fetch(); err != nil {
 			return nil, fmt.Errorf("fetch %s: %w", ASNEdition, err)
 		}
-		return Open(cityPath, asnPath)
-	}
-
-	if cityPath == "" && asnPath == "" {
-		return nil, nil
 	}
 	return Open(cityPath, asnPath)
 }
 
-// Open opens city and ASN .mmdb files from the given paths. Empty paths are
-// treated as unconfigured (the corresponding field stays nil).
+// Open opens city and ASN .mmdb files from the given paths.
 func Open(cityPath, asnPath string) (*Databases, error) {
-	d := &Databases{}
-	if cityPath != "" {
-		r, err := geoip2.Open(cityPath)
-		if err != nil {
-			return nil, fmt.Errorf("open %s: %w", cityPath, err)
-		}
-		d.City = r
+	city, err := geoip2.Open(cityPath)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", cityPath, err)
 	}
-	if asnPath != "" {
-		r, err := geoip2.Open(asnPath)
-		if err != nil {
-			if d.City != nil {
-				_ = d.City.Close()
-			}
-			return nil, fmt.Errorf("open %s: %w", asnPath, err)
-		}
-		d.ASN = r
+	asn, err := geoip2.Open(asnPath)
+	if err != nil {
+		_ = city.Close()
+		return nil, fmt.Errorf("open %s: %w", asnPath, err)
 	}
-	return d, nil
+	return &Databases{City: city, ASN: asn}, nil
 }
 
-// Close closes any open readers. No-op on nil receiver.
+// Close closes the city and ASN readers.
 func (d *Databases) Close() error {
-	if d == nil {
-		return nil
-	}
-	var errs []error
-	if d.City != nil {
-		if err := d.City.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if d.ASN != nil {
-		if err := d.ASN.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	return errors.Join(d.City.Close(), d.ASN.Close())
 }
 
-// Info is the structured result of a GeoIP lookup. Zero-valued fields mean
-// the database didn't return a value (or wasn't configured).
+// Info is the structured result of a GeoIP lookup.
 type Info struct {
 	City       string `json:"city,omitempty"`
 	Region     string `json:"region,omitempty"`
@@ -125,37 +80,29 @@ type Info struct {
 	ASNOrg     string `json:"asn_org,omitempty"`
 }
 
-// Lookup returns city + ASN info for ip. Returns a zero Info on nil receiver,
-// unparseable IP, or database miss.
+// Lookup returns city + ASN info for ip. Returns a zero Info on unparseable
+// IP or database miss.
 func (d *Databases) Lookup(ip string) Info {
 	var info Info
-	if d == nil {
-		return info
-	}
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
 		return info
 	}
 	stdIP := addr.AsSlice()
 
-	if d.City != nil {
-		if rec, err := d.City.City(stdIP); err == nil {
-			info.City = rec.City.Names["en"]
-			info.Country = rec.Country.Names["en"]
-			info.CountryISO = rec.Country.IsoCode
-			if len(rec.Subdivisions) > 0 {
-				if sub := rec.Subdivisions[0].Names["en"]; sub != "" && sub != info.City {
-					info.Region = sub
-				}
+	if rec, err := d.City.City(stdIP); err == nil {
+		info.City = rec.City.Names["en"]
+		info.Country = rec.Country.Names["en"]
+		info.CountryISO = rec.Country.IsoCode
+		if len(rec.Subdivisions) > 0 {
+			if sub := rec.Subdivisions[0].Names["en"]; sub != "" && sub != info.City {
+				info.Region = sub
 			}
 		}
 	}
-	if d.ASN != nil {
-		if rec, err := d.ASN.ASN(stdIP); err == nil {
-			info.ASN = rec.AutonomousSystemNumber
-			info.ASNOrg = rec.AutonomousSystemOrganization
-		}
+	if rec, err := d.ASN.ASN(stdIP); err == nil {
+		info.ASN = rec.AutonomousSystemNumber
+		info.ASNOrg = rec.AutonomousSystemOrganization
 	}
 	return info
 }
-
