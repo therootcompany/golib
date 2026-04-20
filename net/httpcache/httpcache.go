@@ -1,6 +1,7 @@
 package httpcache
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -11,8 +12,8 @@ import (
 )
 
 const (
-	defaultConnTimeout = 5 * time.Second  // TCP connect + TLS handshake
-	defaultTimeout     = 5 * time.Minute  // overall including body read
+	defaultConnTimeout = 5 * time.Second // TCP connect + TLS handshake
+	defaultTimeout     = 5 * time.Minute // overall including body read
 )
 
 // Syncer is implemented by any value that can fetch a remote resource and
@@ -37,8 +38,12 @@ func (NopSyncer) Fetch() (bool, error) { return false, nil }
 //   - MinInterval: skips if Fetch was called within this duration (in-memory).
 //     Guards against tight poll loops hammering a rate-limited API.
 //
-// Auth — AuthHeader/AuthValue set a request header on every attempt, including
-// redirects. Use any scheme: "Authorization"/"Bearer token",
+// Caching — ETag and Last-Modified values are persisted to a <path>.meta
+// sidecar file so conditional GETs survive process restarts.
+//
+// Auth — AuthHeader/AuthValue set a request header on every attempt. Auth is
+// stripped before following redirects so presigned targets (e.g. S3/R2 URLs)
+// never receive credentials. Use any scheme: "Authorization"/"Bearer token",
 // "X-API-Key"/"secret", "Authorization"/"Basic base64(user:pass)", etc.
 //
 // Transform — if set, called with the response body instead of the default
@@ -59,6 +64,44 @@ type Cacher struct {
 	etag        string
 	lastMod     string
 	lastChecked time.Time
+	metaLoaded  bool
+}
+
+// cacheMeta is the sidecar format persisted alongside the downloaded file.
+type cacheMeta struct {
+	ETag    string `json:"etag,omitempty"`
+	LastMod string `json:"last_modified,omitempty"`
+}
+
+func (c *Cacher) metaPath() string { return c.Path + ".meta" }
+
+// loadMeta reads etag/lastMod from the sidecar file. Errors are silently
+// ignored — a missing or corrupt sidecar just means a full download next time.
+func (c *Cacher) loadMeta() {
+	data, err := os.ReadFile(c.metaPath())
+	if err != nil {
+		return
+	}
+	var m cacheMeta
+	if err := json.Unmarshal(data, &m); err != nil {
+		return
+	}
+	c.etag = m.ETag
+	c.lastMod = m.LastMod
+}
+
+// saveMeta writes etag/lastMod to the sidecar file atomically.
+func (c *Cacher) saveMeta() {
+	m := cacheMeta{ETag: c.etag, LastMod: c.lastMod}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	tmp := c.metaPath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return
+	}
+	os.Rename(tmp, c.metaPath())
 }
 
 // New creates a Cacher that fetches URL and writes it to path.
@@ -82,6 +125,12 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Load sidecar once so conditional GETs work after a process restart.
+	if !c.metaLoaded {
+		c.loadMeta()
+		c.metaLoaded = true
+	}
 
 	// MinInterval: in-memory last-checked gate.
 	if c.MinInterval > 0 && !c.lastChecked.IsZero() {
@@ -176,6 +225,7 @@ func (c *Cacher) Fetch() (updated bool, err error) {
 	if lm := resp.Header.Get("Last-Modified"); lm != "" {
 		c.lastMod = lm
 	}
+	c.saveMeta()
 
 	return true, nil
 }
