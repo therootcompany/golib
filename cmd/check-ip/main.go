@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +30,31 @@ const (
 	refreshInterval      = 47 * time.Minute
 	version              = "dev"
 )
+
+// commafy formats n with comma thousands separators (e.g. 3406727 -> "3,406,727").
+func commafy(n int) string {
+	s := strconv.Itoa(n)
+	neg := ""
+	if n < 0 {
+		neg, s = "-", s[1:]
+	}
+	if len(s) <= 3 {
+		return neg + s
+	}
+	var b strings.Builder
+	head := len(s) % 3
+	if head > 0 {
+		b.WriteString(s[:head])
+		b.WriteByte(',')
+	}
+	for i := head; i < len(s); i += 3 {
+		b.WriteString(s[i : i+3])
+		if i+3 < len(s) {
+			b.WriteByte(',')
+		}
+	}
+	return neg + b.String()
+}
 
 // IPCheck holds the parsed CLI config and the loaded data sources used by
 // the HTTP handler.
@@ -140,10 +167,10 @@ func main() {
 		fmt.Fprintln(os.Stderr)
 		log.Fatalf("blocklists: %v", err)
 	}
-	fmt.Fprintf(os.Stderr, "%s (inbound=%d, outbound=%d)\n",
+	fmt.Fprintf(os.Stderr, "%s (inbound=%s, outbound=%s)\n",
 		time.Since(t).Round(time.Millisecond),
-		cfg.inbound.Value().Size(),
-		cfg.outbound.Value().Size(),
+		commafy(cfg.inbound.Value().Size()),
+		commafy(cfg.outbound.Value().Size()),
 	)
 
 	// GeoIP: download the City + ASN tar.gz archives via httpcache
@@ -201,9 +228,9 @@ func main() {
 			fmt.Fprintln(os.Stderr)
 			log.Fatalf("whitelist: %v", err)
 		}
-		fmt.Fprintf(os.Stderr, "%s (entries=%d)\n",
+		fmt.Fprintf(os.Stderr, "%s (entries=%s)\n",
 			time.Since(t).Round(time.Millisecond),
-			cfg.whitelist.Value().Size(),
+			commafy(cfg.whitelist.Value().Size()),
 		)
 	}
 

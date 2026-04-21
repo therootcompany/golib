@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,30 @@ import (
 )
 
 const version = "dev"
+
+func commafy(n int) string {
+	s := strconv.Itoa(n)
+	neg := ""
+	if n < 0 {
+		neg, s = "-", s[1:]
+	}
+	if len(s) <= 3 {
+		return neg + s
+	}
+	var b strings.Builder
+	head := len(s) % 3
+	if head > 0 {
+		b.WriteString(s[:head])
+		b.WriteByte(',')
+	}
+	for i := head; i < len(s); i += 3 {
+		b.WriteString(s[i : i+3])
+		if i+3 < len(s) {
+			b.WriteByte(',')
+		}
+	}
+	return neg + b.String()
+}
 
 type Config struct {
 	IP string
@@ -95,9 +120,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
-	fmt.Fprintf(os.Stderr, "%s (entries=%d)\n",
+	fmt.Fprintf(os.Stderr, "%s (entries=%s)\n",
 		time.Since(t).Round(time.Millisecond),
-		cohort.Size(),
+		commafy(cohort.Size()),
 	)
 
 	if len(ips) == 0 {
