@@ -208,6 +208,7 @@ func (fm *FormMailer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormSize)
 	if err := r.ParseMultipartForm(maxFormSize); err != nil {
 		http.Error(w, "form too large or invalid", http.StatusBadRequest)
 		return
