@@ -1,6 +1,9 @@
+// geoip-update downloads GeoLite2 edition tarballs listed in GeoIP.conf
+// via conditional HTTP GETs, writing them to the configured directory.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -12,26 +15,58 @@ import (
 	"github.com/therootcompany/golib/net/httpcache"
 )
 
+const version = "dev"
+
+type Config struct {
+	ConfPath  string
+	Dir       string
+	FreshDays int
+}
+
 func main() {
-	configPath := flag.String("config", "GeoIP.conf", "path to GeoIP.conf")
-	dir := flag.String("dir", "", "directory to store .tar.gz files (overrides DatabaseDirectory in config)")
-	freshDays := flag.Int("fresh-days", 3, "skip download if file is younger than N days")
-	flag.Parse()
+	cfg := Config{}
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	fs.StringVar(&cfg.ConfPath, "config", "GeoIP.conf", "path to GeoIP.conf")
+	fs.StringVar(&cfg.Dir, "dir", "", "directory to store .tar.gz files (overrides DatabaseDirectory in config)")
+	fs.IntVar(&cfg.FreshDays, "fresh-days", 3, "skip download if file is younger than N days")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n", os.Args[0])
+		fs.PrintDefaults()
+	}
 
-	data, err := os.ReadFile(*configPath)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-V", "-version", "--version", "version":
+			fmt.Fprintf(os.Stdout, "geoip-update %s\n", version)
+			os.Exit(0)
+		case "help", "-help", "--help":
+			fmt.Fprintf(os.Stdout, "geoip-update %s\n\n", version)
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			os.Exit(0)
+		}
+	}
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		os.Exit(1)
+	}
+
+	data, err := os.ReadFile(cfg.ConfPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	cfg, err := geoip.ParseConf(string(data))
+	conf, err := geoip.ParseConf(string(data))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
-	outDir := *dir
+	outDir := cfg.Dir
 	if outDir == "" {
-		outDir = cfg.DatabaseDirectory
+		outDir = conf.DatabaseDirectory
 	}
 	if outDir == "" {
 		outDir = "."
@@ -41,16 +76,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(cfg.EditionIDs) == 0 {
-		fmt.Fprintf(os.Stderr, "error: no EditionIDs found in %s\n", *configPath)
+	if len(conf.EditionIDs) == 0 {
+		fmt.Fprintf(os.Stderr, "error: no EditionIDs found in %s\n", cfg.ConfPath)
 		os.Exit(1)
 	}
 
-	authHeader := http.Header{"Authorization": []string{httpcache.BasicAuth(cfg.AccountID, cfg.LicenseKey)}}
-	maxAge := time.Duration(*freshDays) * 24 * time.Hour
+	authHeader := http.Header{"Authorization": []string{httpcache.BasicAuth(conf.AccountID, conf.LicenseKey)}}
+	maxAge := time.Duration(cfg.FreshDays) * 24 * time.Hour
 
 	exitCode := 0
-	for _, edition := range cfg.EditionIDs {
+	for _, edition := range conf.EditionIDs {
 		path := filepath.Join(outDir, geoip.TarGzName(edition))
 		cacher := &httpcache.Cacher{
 			URL:    geoip.DownloadBase + "/" + edition + "/download?suffix=tar.gz",
@@ -58,18 +93,22 @@ func main() {
 			MaxAge: maxAge,
 			Header: authHeader,
 		}
+		fmt.Fprintf(os.Stderr, "Fetching %s... ", edition)
+		t := time.Now()
 		updated, err := cacher.Fetch()
 		if err != nil {
+			fmt.Fprintln(os.Stderr)
 			fmt.Fprintf(os.Stderr, "error: %s: %v\n", edition, err)
 			exitCode = 1
 			continue
 		}
-		info, _ := os.Stat(path)
-		state := "fresh:  "
+		state := "fresh"
 		if updated {
-			state = "updated:"
+			state = "updated"
 		}
-		fmt.Printf("%s %s -> %s (%s)\n", state, edition, path, info.ModTime().Format("2006-01-02"))
+		fmt.Fprintf(os.Stderr, "%s (%s)\n", time.Since(t).Round(time.Millisecond), state)
+		info, _ := os.Stat(path)
+		fmt.Printf("%-10s %s -> %s (%s)\n", state+":", edition, path, info.ModTime().Format("2006-01-02"))
 	}
 	os.Exit(exitCode)
 }

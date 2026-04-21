@@ -1,73 +1,92 @@
-// git-shallow-sync is a simple CLI tool to synchronize a shallow git repository
-// using the github.com/therootcompany/golib/net/gitshallow package.
+// git-shallow-sync syncs a shallow git clone at the given local path,
+// cloning on first run and fetching + hard-resetting on subsequent runs.
 //
 // Usage:
 //
 //	git-shallow-sync <repository-url> <local-path>
-//
-// Example:
-//
-//	git-shallow-sync git@github.com:bitwire-it/ipblocklist.git ~/srv/app/ipblocklist
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/therootcompany/golib/net/gitshallow"
 )
 
-const (
-	defaultDepth  = 1  // shallow by default
-	defaultBranch = "" // empty = default branch + --single-branch
-)
+const version = "dev"
+
+type Config struct {
+	Depth  int
+	Branch string
+}
 
 func main() {
-	if len(os.Args) != 3 {
-		name := filepath.Base(os.Args[0])
-		fmt.Fprintf(os.Stderr, "Usage: %s <repository-url> <local-path>\n", name)
-		fmt.Fprintf(os.Stderr, "Example:\n")
-		fmt.Fprintf(os.Stderr, "  %s git@github.com:bitwire-it/ipblocklist.git ~/srv/app/ipblocklist\n", name)
+	cfg := Config{}
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	fs.IntVar(&cfg.Depth, "depth", 1, "clone/fetch depth (-1 for full history)")
+	fs.StringVar(&cfg.Branch, "branch", "", "branch to track (empty: remote default)")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <repository-url> <local-path>\n", os.Args[0])
+		fs.PrintDefaults()
+	}
+
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-V", "-version", "--version", "version":
+			fmt.Fprintf(os.Stdout, "git-shallow-sync %s\n", version)
+			os.Exit(0)
+		case "help", "-help", "--help":
+			fmt.Fprintf(os.Stdout, "git-shallow-sync %s\n\n", version)
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			os.Exit(0)
+		}
+	}
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
 		os.Exit(1)
 	}
 
-	url := os.Args[1]
-	path := os.Args[2]
+	args := fs.Args()
+	if len(args) != 2 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	url := args[0]
+	path := args[1]
 
-	// Expand ~ to home directory
-	if path[0] == '~' {
+	if len(path) > 0 && path[0] == '~' {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to get home directory: %v\n", err)
+			fmt.Fprintf(os.Stderr, "error: resolve home: %v\n", err)
 			os.Exit(1)
 		}
 		path = filepath.Join(home, path[1:])
 	}
-
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Invalid path: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: invalid path: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Syncing repository:\n")
-	fmt.Printf("  URL:  %s\n", url)
-	fmt.Printf("  Path: %s\n", absPath)
-
-	repo := gitshallow.New(url, absPath, defaultDepth, defaultBranch)
-
+	fmt.Fprintf(os.Stderr, "Syncing %s -> %s... ", url, absPath)
+	t := time.Now()
+	repo := gitshallow.New(url, absPath, cfg.Depth, cfg.Branch)
 	updated, err := repo.Sync()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Sync failed: %v\n", err)
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintf(os.Stderr, "error: sync: %v\n", err)
 		os.Exit(1)
 	}
-
+	state := "already up to date"
 	if updated {
-		fmt.Println("Repository was updated (new commits pulled).")
-	} else {
-		fmt.Println("Repository is already up to date.")
+		state = "updated"
 	}
-
-	fmt.Println("Sync complete.")
+	fmt.Fprintf(os.Stderr, "%s (%s)\n", time.Since(t).Round(time.Millisecond), state)
 }

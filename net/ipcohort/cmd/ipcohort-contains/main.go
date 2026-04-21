@@ -4,48 +4,68 @@
 // Usage:
 //
 //	ipcohort-contains [flags] <file>... -- <ip>...
-//	ipcohort-contains [flags] -ip <ip> <file>...
-//
-// Examples:
-//
-//	ipcohort-contains networks.txt single_ips.txt -- 1.2.3.4 5.6.7.8
-//	ipcohort-contains -ip 1.2.3.4 single_ips.txt
-//	echo "1.2.3.4" | ipcohort-contains networks.txt
+//	ipcohort-contains [flags] --ip <ip> <file>...
+//	echo "<ip>" | ipcohort-contains <file>...
 //
 // Exit code: 0 if all queried IPs are found, 1 if any are not found, 2 on error.
 package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
+const version = "dev"
+
+type Config struct {
+	IP string
+}
+
 func main() {
-	ipFlag := flag.String("ip", "", "IP address to check (alternative to -- separator)")
-	flag.Usage = func() {
+	cfg := Config{}
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	fs.StringVar(&cfg.IP, "ip", "", "IP address to check (alternative to -- separator)")
+	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <file>... -- <ip>...\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "       %s -ip <ip> <file>...\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "       %s --ip <ip> <file>...\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "       echo <ip> | %s <file>...\n", os.Args[0])
-		fmt.Fprintln(os.Stderr, "Flags:")
-		flag.PrintDefaults()
+		fs.PrintDefaults()
 		fmt.Fprintln(os.Stderr, "Exit: 0=all found, 1=not found, 2=error")
 	}
-	flag.Parse()
 
-	args := flag.Args()
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-V", "-version", "--version", "version":
+			fmt.Fprintf(os.Stdout, "ipcohort-contains %s\n", version)
+			os.Exit(0)
+		case "help", "-help", "--help":
+			fmt.Fprintf(os.Stdout, "ipcohort-contains %s\n\n", version)
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			os.Exit(0)
+		}
+	}
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		os.Exit(2)
+	}
+
+	args := fs.Args()
 	var filePaths, ips []string
-
 	switch {
-	case *ipFlag != "":
+	case cfg.IP != "":
 		filePaths = args
-		ips = []string{*ipFlag}
+		ips = []string{cfg.IP}
 	default:
-		// Split args at "--"
 		sep := -1
 		for i, a := range args {
 			if a == "--" {
@@ -63,17 +83,23 @@ func main() {
 
 	if len(filePaths) == 0 {
 		fmt.Fprintln(os.Stderr, "error: at least one file path required")
-		flag.Usage()
+		fs.Usage()
 		os.Exit(2)
 	}
 
+	fmt.Fprint(os.Stderr, "Loading cohort... ")
+	t := time.Now()
 	cohort, err := ipcohort.LoadFiles(filePaths...)
 	if err != nil {
+		fmt.Fprintln(os.Stderr)
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
+	fmt.Fprintf(os.Stderr, "%s (entries=%d)\n",
+		time.Since(t).Round(time.Millisecond),
+		cohort.Size(),
+	)
 
-	// If no IPs from flags/args, read from stdin.
 	if len(ips) == 0 {
 		sc := bufio.NewScanner(os.Stdin)
 		for sc.Scan() {
@@ -89,14 +115,14 @@ func main() {
 
 	if len(ips) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no IP addresses to check")
-		flag.Usage()
+		fs.Usage()
 		os.Exit(2)
 	}
 
+	fmt.Fprintln(os.Stderr)
 	allFound := true
 	for _, ip := range ips {
-		found := cohort.Contains(ip)
-		if found {
+		if cohort.Contains(ip) {
 			fmt.Printf("%s\tFOUND\n", ip)
 		} else {
 			fmt.Printf("%s\tNOT FOUND\n", ip)
