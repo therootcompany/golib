@@ -263,10 +263,10 @@ func main() {
 	fmt.Fprintf(os.Stderr, "%s\n", time.Since(tGeo).Round(time.Millisecond))
 
 	fm := &formmailer.FormMailer{
-		SMTPHost:    cfg.smtpHost,
-		SMTPFrom:    cfg.smtpFrom,
-		SMTPTo:      strings.Split(cfg.smtpToList, ","),
-		SMTPUser:    cfg.smtpUser,
+		SMTPHost:        cfg.smtpHost,
+		SMTPFrom:        cfg.smtpFrom,
+		SMTPTo:          strings.Split(cfg.smtpToList, ","),
+		SMTPUser:        cfg.smtpUser,
 		SMTPPass:        cfg.smtpPass,
 		Subject:         cfg.smtpSubject,
 		SuccessBody:     successBody, // fallback if read fails
@@ -276,8 +276,8 @@ func main() {
 		// Legacy behavior: bot/blacklist rejections render {.SupportEmail}
 		// as "[REDACTED]" rather than leaving it blank.
 		HiddenSupportValue: "[REDACTED]",
-		Blacklist:   blacklist,
-		Geo:         geo,
+		Blacklist:          blacklist,
+		Geo:                geo,
 		// North America + unknown. Unknown ("") is always allowed by formmailer.
 		AllowedCountries: []string{"US", "CA", "MX", "CR", "VI"},
 		Fields: []formmailer.Field{
@@ -301,19 +301,43 @@ func main() {
 		log.Printf("geoip refresh: %v", err)
 	})
 
+	mux := http.NewServeMux()
 	contact := silentDropRU(fm, successBody, cfg.responseType)
-	http.Handle("POST /contact", contact)
-	http.Handle("POST /contact/", contact)
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /contact", contact)
+	mux.Handle("POST /contact/", contact)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintln(w, "form2email server running. POST form data to /contact")
 	})
+
+	srv := &http.Server{Addr: cfg.listenAddr, Handler: mux}
 
 	fmt.Printf("form2email listening on http://%s\n", cfg.listenAddr)
 	fmt.Printf("Forwarding submissions from %s → %s via %s\n", cfg.smtpFrom, cfg.smtpToList, cfg.smtpHost)
 	fmt.Printf("Rate limit: ~%d req/min per IP (burst %d)\n", requestsPerMinute, burstSize)
 	fmt.Println("CTRL+C to stop")
 
-	log.Fatal(http.ListenAndServe(cfg.listenAddr, nil))
+	serveErr := make(chan error, 1)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- err
+		}
+		close(serveErr)
+	}()
+
+	select {
+	case <-ctx.Done():
+		log.Printf("shutdown: %v", ctx.Err())
+	case err := <-serveErr:
+		if err != nil {
+			log.Fatalf("listen: %v", err)
+		}
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
 }
 
 // silentDropRU returns a handler that silently returns the success body for
