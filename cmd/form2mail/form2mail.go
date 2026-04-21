@@ -272,11 +272,16 @@ func main() {
 		// format, missing field) still show the real support email so users
 		// know where to write in.
 		HiddenSupportValue: "[REDACTED]",
-		// Only honor X-Forwarded-For from loopback (our reverse proxy runs
-		// on the same host). Prevents spoofing rate limits and geo-gating.
+		// Honor X-Forwarded-For from loopback (dev/ssh-tunnel) and RFC1918
+		// ranges (the TLS router lives on a private 10.x / 172.16.x address
+		// and fronts this service). Any other peer has XFF ignored, so a
+		// direct public request can't forge its origin IP.
 		TrustedProxies: []netip.Prefix{
 			netip.MustParsePrefix("127.0.0.0/8"),
 			netip.MustParsePrefix("::1/128"),
+			netip.MustParsePrefix("10.0.0.0/8"),
+			netip.MustParsePrefix("172.16.0.0/12"),
+			netip.MustParsePrefix("192.168.0.0/16"),
 		},
 		Blacklist: blacklist,
 		Geo:       geo,
