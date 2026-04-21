@@ -347,6 +347,7 @@ func (fm *FormMailer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to send — please try again later", http.StatusInternalServerError)
 		return
 	}
+	log.Printf("contact form: sent ip=%s from=%q to=%s", ipStr, email, strings.Join(fm.SMTPTo, ","))
 
 	w.Header().Set("Content-Type", fm.contentType())
 	_, _ = w.Write(fm.successBody())
