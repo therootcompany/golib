@@ -45,6 +45,7 @@ import (
 	"net/mail"
 	"net/netip"
 	"net/smtp"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -132,27 +133,41 @@ type FormMailer struct {
 	SMTPUser string
 	SMTPPass string
 	Subject  string // may contain {.Email}
+	// LocalName is the hostname the client announces in EHLO. Zero uses
+	// os.Hostname(). Matters for relay (port 25) where receivers may reject
+	// EHLO names that don't reverse-resolve; on submission (587) it's
+	// informational. NEVER the peer's name — that's TLS SNI / auth binding.
+	LocalName string
+	// TLSConfig overrides the StartTLS tls.Config. Zero uses
+	// &tls.Config{ServerName: <host from SMTPHost>}. Set to supply a custom
+	// root CA bundle, to disable verification (in tests), or to pin a cert.
+	TLSConfig *tls.Config
 
 	// SMTPTimeout bounds the entire connect+auth+send cycle. Zero uses 5s.
 	SMTPTimeout time.Duration
 	// MXTimeout bounds the per-submission MX lookup. Zero uses 2s.
 	MXTimeout time.Duration
 
-	// SuccessBody and ErrorBody are the response bodies sent to the client.
-	// ErrorBody may contain {.Error} and {.SupportEmail} placeholders.
-	SuccessBody []byte
-	ErrorBody   []byte
-	// SuccessBodyFunc / ErrorBodyFunc, if set, are called per request and
-	// override SuccessBody / ErrorBody. Use for hot-reloadable templates
-	// (e.g. re-read an HTML file on every request).
-	SuccessBodyFunc func() []byte
-	ErrorBodyFunc   func() []byte
-	ContentType     string // inferred from SuccessBody if empty
+	// SuccessBody and ErrorBody are called per request and return the response
+	// body sent to the client. Callers typically build them as closures that
+	// re-read an HTML file each invocation (hot-reload) with a baked-in fallback
+	// to a copy read at startup. ErrorBody output may contain {.Error} and
+	// {.SupportEmail} placeholders.
+	SuccessBody func() []byte
+	ErrorBody   func() []byte
+	ContentType string // inferred from a probe of SuccessBody() if empty
 
-	// HiddenSupportValue replaces {.SupportEmail} on error responses for
-	// requests that should not learn the operator's address (blacklist / bot
-	// rejections). Zero value "" hides the placeholder entirely.
+	// HiddenSupportValue replaces {.SupportEmail} in ErrorBody output when the
+	// request should not learn the operator's real address — i.e. bot and
+	// blacklist rejections. Legitimate validation errors see the real support
+	// email. Zero value "" strips the placeholder entirely.
 	HiddenSupportValue string
+
+	// TrustedProxies — list of CIDRs whose X-Forwarded-For header we honor.
+	// Empty means never trust XFF (use r.RemoteAddr as-is). Without this,
+	// any client could forge their IP to bypass rate limiting, blacklist,
+	// and country gating.
+	TrustedProxies []netip.Prefix
 
 	// Blacklist — if set, matching IPs are rejected before any other processing.
 	Blacklist *dataset.View[ipcohort.Cohort]
@@ -204,27 +219,24 @@ func (fm *FormMailer) init() {
 }
 
 func (fm *FormMailer) successBody() []byte {
-	if fm.SuccessBodyFunc != nil {
-		return fm.SuccessBodyFunc()
+	if fm.SuccessBody == nil {
+		return nil
 	}
-	return fm.SuccessBody
+	return fm.SuccessBody()
 }
 
 func (fm *FormMailer) errorBody() []byte {
-	if fm.ErrorBodyFunc != nil {
-		return fm.ErrorBodyFunc()
+	if fm.ErrorBody == nil {
+		return nil
 	}
-	return fm.ErrorBody
+	return fm.ErrorBody()
 }
 
 func (fm *FormMailer) contentType() string {
 	if fm.ContentType != "" {
 		return fm.ContentType
 	}
-	probe := fm.SuccessBody
-	if len(probe) == 0 && fm.SuccessBodyFunc != nil {
-		probe = fm.SuccessBodyFunc()
-	}
+	probe := fm.successBody()
 	if bytes.Contains(probe[:min(512, len(probe))], []byte("<html")) {
 		return "text/html; charset=utf-8"
 	}
@@ -248,7 +260,7 @@ func (fm *FormMailer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ipStr := clientIP(r)
+	ipStr := fm.clientIP(r)
 	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
 		fm.writeError(w, fmt.Errorf("malformed client IP"), true)
@@ -377,15 +389,34 @@ func (fm *FormMailer) sendMail(ctx context.Context, msg []byte) error {
 	if err != nil {
 		hostname = fm.SMTPHost
 	}
+	// NewClient sets the peer name used for AUTH binding and TLS SNI — that
+	// must be the SMTP server's hostname. Hello() overrides the *client*
+	// identity announced in EHLO; stdlib conflates these into one API but
+	// they're semantically distinct.
 	c, err := smtp.NewClient(conn, hostname)
 	if err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("smtp client: %w", err)
 	}
 	defer func() { _ = c.Close() }()
+	localName := fm.LocalName
+	if localName == "" {
+		if h, err := os.Hostname(); err == nil {
+			localName = h
+		} else {
+			localName = "localhost"
+		}
+	}
+	if err := c.Hello(localName); err != nil {
+		return fmt.Errorf("ehlo: %w", err)
+	}
 
 	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err := c.StartTLS(&tls.Config{ServerName: hostname}); err != nil {
+		tlsCfg := fm.TLSConfig
+		if tlsCfg == nil {
+			tlsCfg = &tls.Config{ServerName: hostname}
+		}
+		if err := c.StartTLS(tlsCfg); err != nil {
 			return fmt.Errorf("starttls: %w", err)
 		}
 	}
@@ -500,14 +531,27 @@ func validatePhone(phone string) error {
 	return nil
 }
 
-// clientIP returns the originating IP, preferring X-Forwarded-For.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		first, _, _ := strings.Cut(xff, ",")
-		return strings.TrimSpace(first)
+// clientIP returns the originating IP. If the immediate peer (r.RemoteAddr)
+// is inside TrustedProxies, the left-most X-Forwarded-For entry is used
+// instead. Without TrustedProxies, XFF is ignored — otherwise any client
+// could forge their address to bypass rate limits and geo gating.
+func (fm *FormMailer) clientIP(r *http.Request) string {
+	remote := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remote = host
 	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+	peer, err := netip.ParseAddr(remote)
+	if err != nil {
+		return remote
 	}
-	return r.RemoteAddr
+	for _, cidr := range fm.TrustedProxies {
+		if cidr.Contains(peer) {
+			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+				first, _, _ := strings.Cut(xff, ",")
+				return strings.TrimSpace(first)
+			}
+			break
+		}
+	}
+	return remote
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -135,31 +136,18 @@ func main() {
 
 	// Verify templates are readable at startup; re-read on each request so
 	// operators can edit HTML without restarting (matches legacy behavior).
-	successBody, err := os.ReadFile(cfg.successFile)
+	successFallback, err := os.ReadFile(cfg.successFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: couldn't read success response file %q: %v\n\n", cfg.successFile, err)
 		os.Exit(1)
 	}
-	if _, err := os.ReadFile(cfg.errorFile); err != nil {
+	errorFallback, err := os.ReadFile(cfg.errorFile)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nError: couldn't read error response file %q: %v\n\n", cfg.errorFile, err)
 		os.Exit(1)
 	}
-	successBodyFn := func() []byte {
-		b, err := os.ReadFile(cfg.successFile)
-		if err != nil {
-			log.Printf("success-file read: %v", err)
-			return successBody
-		}
-		return b
-	}
-	errorBodyFn := func() []byte {
-		b, err := os.ReadFile(cfg.errorFile)
-		if err != nil {
-			log.Printf("error-file read: %v", err)
-			return nil
-		}
-		return b
-	}
+	successBody := hotReload(cfg.successFile, successFallback)
+	errorBody := hotReload(cfg.errorFile, errorFallback)
 
 	if cfg.smtpUser == "" {
 		cfg.smtpUser = cfg.smtpFrom
@@ -262,33 +250,41 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "%s\n", time.Since(tGeo).Round(time.Millisecond))
 
+	fields := []formmailer.Field{
+		{Label: "Name", FormName: "input_1", Kind: formmailer.KindText},
+		{Label: "Email", FormName: "input_3", Kind: formmailer.KindEmail},
+		{Label: "Phone", FormName: "input_4", Kind: formmailer.KindPhone},
+		{Label: "Company", FormName: "input_5", Kind: formmailer.KindText},
+		{Label: "Message", FormName: "input_7", Kind: formmailer.KindMessage},
+	}
 	fm := &formmailer.FormMailer{
-		SMTPHost:        cfg.smtpHost,
-		SMTPFrom:        cfg.smtpFrom,
-		SMTPTo:          strings.Split(cfg.smtpToList, ","),
-		SMTPUser:        cfg.smtpUser,
-		SMTPPass:        cfg.smtpPass,
-		Subject:         cfg.smtpSubject,
-		SuccessBody:     successBody, // fallback if read fails
-		SuccessBodyFunc: successBodyFn,
-		ErrorBodyFunc:   errorBodyFn,
-		ContentType:     cfg.responseType,
-		// Legacy behavior: bot/blacklist rejections render {.SupportEmail}
-		// as "[REDACTED]" rather than leaving it blank.
+		SMTPHost:    cfg.smtpHost,
+		SMTPFrom:    cfg.smtpFrom,
+		SMTPTo:      strings.Split(cfg.smtpToList, ","),
+		SMTPUser:    cfg.smtpUser,
+		SMTPPass:    cfg.smtpPass,
+		Subject:     cfg.smtpSubject,
+		SuccessBody: successBody,
+		ErrorBody:   errorBody,
+		ContentType: cfg.responseType,
+		// Bot/blacklist rejections render {.SupportEmail} as "[REDACTED]"
+		// rather than leaking the real address. Validation errors (wrong
+		// format, missing field) still show the real support email so users
+		// know where to write in.
 		HiddenSupportValue: "[REDACTED]",
-		Blacklist:          blacklist,
-		Geo:                geo,
+		// Only honor X-Forwarded-For from loopback (our reverse proxy runs
+		// on the same host). Prevents spoofing rate limits and geo-gating.
+		TrustedProxies: []netip.Prefix{
+			netip.MustParsePrefix("127.0.0.0/8"),
+			netip.MustParsePrefix("::1/128"),
+		},
+		Blacklist: blacklist,
+		Geo:       geo,
 		// North America + unknown. Unknown ("") is always allowed by formmailer.
 		AllowedCountries: []string{"US", "CA", "MX", "CR", "VI"},
-		Fields: []formmailer.Field{
-			{Label: "Name", FormName: "input_1", Kind: formmailer.KindText},
-			{Label: "Email", FormName: "input_3", Kind: formmailer.KindEmail},
-			{Label: "Phone", FormName: "input_4", Kind: formmailer.KindPhone},
-			{Label: "Company", FormName: "input_5", Kind: formmailer.KindText},
-			{Label: "Message", FormName: "input_7", Kind: formmailer.KindMessage},
-		},
-		RPM:   requestsPerMinute,
-		Burst: burstSize,
+		Fields:           fields,
+		RPM:              requestsPerMinute,
+		Burst:            burstSize,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -302,7 +298,14 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	contact := silentDropRU(fm, successBody, cfg.responseType)
+	emailFormName := ""
+	for _, f := range fields {
+		if f.Kind == formmailer.KindEmail {
+			emailFormName = f.FormName
+			break
+		}
+	}
+	contact := silentDropRU(fm, emailFormName, successBody, cfg.responseType)
 	mux.Handle("POST /contact", contact)
 	mux.Handle("POST /contact/", contact)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -341,24 +344,38 @@ func main() {
 }
 
 // silentDropRU returns a handler that silently returns the success body for
-// submissions whose "input_3" email ends with ".ru" — legacy spam-trap
-// behavior from the original form2mail. All other submissions fall through
-// to fm.
-func silentDropRU(fm http.Handler, successBody []byte, contentType string) http.Handler {
+// submissions whose email (emailFormName form input) ends with ".ru" —
+// legacy spam-trap behavior from the original form2mail. All other
+// submissions fall through to fm.
+func silentDropRU(fm http.Handler, emailFormName string, successBody func() []byte, contentType string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// ParseMultipartForm is safe to call twice; formmailer will see the
 		// already-parsed form. Use a bounded reader to match formmailer's cap.
 		r.Body = http.MaxBytesReader(w, r.Body, 10*1024)
 		if err := r.ParseMultipartForm(10 * 1024); err == nil {
-			email := strings.ToLower(strings.TrimSpace(r.FormValue("input_3")))
+			email := strings.ToLower(strings.TrimSpace(r.FormValue(emailFormName)))
 			if strings.HasSuffix(email, ".ru") {
 				w.Header().Set("Content-Type", contentType)
-				_, _ = w.Write(successBody)
+				_, _ = w.Write(successBody())
 				return
 			}
 		}
 		fm.ServeHTTP(w, r)
 	})
+}
+
+// hotReload returns a function that re-reads path on each call, falling back
+// to the provided bytes on read error (logged). Used for templates that
+// operators may edit out-of-band.
+func hotReload(path string, fallback []byte) func() []byte {
+	return func() []byte {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			log.Printf("%s read: %v", path, err)
+			return fallback
+		}
+		return b
+	}
 }
 
 func inferContentType(path string) string {
