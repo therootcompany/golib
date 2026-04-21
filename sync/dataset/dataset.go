@@ -186,9 +186,14 @@ func (v *View[T]) reload(ctx context.Context) error {
 	// Close the replaced value if it holds OS resources (open file handles,
 	// network connections). Geoip readers and similar wrappers implement
 	// io.Closer; cohort and other pure-in-memory values don't — the type
-	// assertion filters to only the ones that need it.
-	if closer, ok := any(prev).(io.Closer); ok && closer != nil {
-		_ = closer.Close()
+	// assertion filters to only the ones that need it. The `prev != nil`
+	// guard is required because any(typedNilPtr) is a non-nil interface
+	// wrapping a nil pointer — the type assertion succeeds and we'd
+	// call Close on a nil receiver.
+	if prev != nil {
+		if closer, ok := any(prev).(io.Closer); ok {
+			_ = closer.Close()
+		}
 	}
 	now := time.Now()
 	v.loadedAt.Store(&now)

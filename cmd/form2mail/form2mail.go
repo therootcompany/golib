@@ -33,7 +33,7 @@ const (
 	licenseOwner = "AJ ONeal"
 	licenseType  = "CC0-1.0"
 
-	defaultBlocklistRepo = "git@github.com:bitwire-it/ipblocklist.git"
+	defaultBlocklistRepo = "https://github.com/bitwire-it/ipblocklist.git"
 	refreshInterval      = 47 * time.Minute
 
 	requestsPerMinute = 5
