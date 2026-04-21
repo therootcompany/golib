@@ -7,8 +7,8 @@
 // Typical lifecycle:
 //
 //	s := dataset.NewSet(repo) // *gitshallow.Repo satisfies Fetcher
-//	inbound  := dataset.Add(s, func() (*ipcohort.Cohort, error) { ... })
-//	outbound := dataset.Add(s, func() (*ipcohort.Cohort, error) { ... })
+//	inbound  := dataset.Add(s, func(ctx context.Context) (*ipcohort.Cohort, error) { ... })
+//	outbound := dataset.Add(s, func(ctx context.Context) (*ipcohort.Cohort, error) { ... })
 //	if err := s.Load(ctx); err != nil { ... }       // initial populate
 //	go s.Tick(ctx, 47*time.Minute, onError)         // background refresh
 //	current := inbound.Value()                      // lock-free read
@@ -95,7 +95,7 @@ type Set struct {
 
 // reloader is a type-erased handle to a View's reload function.
 type reloader interface {
-	reload() error
+	reload(ctx context.Context) error
 }
 
 // NewSet creates a Set backed by fetchers. All fetchers are called on every
@@ -129,7 +129,7 @@ func (s *Set) Load(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := v.reload(); err != nil {
+		if err := v.reload(ctx); err != nil {
 			return err
 		}
 	}
@@ -157,7 +157,7 @@ func (s *Set) Tick(ctx context.Context, interval time.Duration, onError func(err
 
 // View is a read-only handle to one dataset inside a Set.
 type View[T any] struct {
-	loader   func() (*T, error)
+	loader   func(ctx context.Context) (*T, error)
 	ptr      atomic.Pointer[T]
 	loadedAt atomic.Pointer[time.Time] // nil until first successful reload
 }
@@ -177,8 +177,8 @@ func (v *View[T]) LoadedAt() time.Time {
 	return time.Time{}
 }
 
-func (v *View[T]) reload() error {
-	t, err := v.loader()
+func (v *View[T]) reload(ctx context.Context) error {
+	t, err := v.loader(ctx)
 	if err != nil {
 		return err
 	}
@@ -197,7 +197,9 @@ func (v *View[T]) reload() error {
 
 // Add registers a new view in s and returns it. Call after NewSet and before
 // the first Load. View.Value() returns nil until Set.Load succeeds.
-func Add[T any](s *Set, loader func() (*T, error)) *View[T] {
+// The loader receives the ctx passed to Set.Load, so long-running parses
+// should honor ctx.Err() to support graceful shutdown.
+func Add[T any](s *Set, loader func(ctx context.Context) (*T, error)) *View[T] {
 	v := &View[T]{loader: loader}
 	s.views = append(s.views, v)
 	return v
@@ -208,7 +210,7 @@ func Add[T any](s *Set, loader func() (*T, error)) *View[T] {
 // Load completes. Use when the initial state is benign (e.g. an empty
 // cohort matches nothing) and you want to start serving before the
 // first load finishes.
-func AddInitial[T any](s *Set, initial *T, loader func() (*T, error)) *View[T] {
+func AddInitial[T any](s *Set, initial *T, loader func(ctx context.Context) (*T, error)) *View[T] {
 	v := &View[T]{loader: loader}
 	v.ptr.Store(initial)
 	s.views = append(s.views, v)

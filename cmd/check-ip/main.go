@@ -152,19 +152,19 @@ func main() {
 	repo.MaxAge = refreshInterval
 	blocklists := dataset.NewSet(repo)
 	asyncServe := cfg.AsyncLoad && cfg.Bind != ""
-	addCohort := func(s *dataset.Set, loader func() (*ipcohort.Cohort, error)) *dataset.View[ipcohort.Cohort] {
+	addCohort := func(s *dataset.Set, loader func(context.Context) (*ipcohort.Cohort, error)) *dataset.View[ipcohort.Cohort] {
 		if asyncServe {
 			return dataset.AddInitial(s, ipcohort.New(), loader)
 		}
 		return dataset.Add(s, loader)
 	}
-	cfg.inbound = addCohort(blocklists, func() (*ipcohort.Cohort, error) {
+	cfg.inbound = addCohort(blocklists, func(_ context.Context) (*ipcohort.Cohort, error) {
 		return ipcohort.LoadFiles(
 			repo.FilePath("tables/inbound/single_ips.txt"),
 			repo.FilePath("tables/inbound/networks.txt"),
 		)
 	})
-	cfg.outbound = addCohort(blocklists, func() (*ipcohort.Cohort, error) {
+	cfg.outbound = addCohort(blocklists, func(_ context.Context) (*ipcohort.Cohort, error) {
 		return ipcohort.LoadFiles(
 			repo.FilePath("tables/outbound/single_ips.txt"),
 			repo.FilePath("tables/outbound/networks.txt"),
@@ -220,7 +220,7 @@ func main() {
 			Header: authHeader,
 		},
 	)
-	cfg.geo = dataset.Add(geoSet, func() (*geoip.Databases, error) {
+	cfg.geo = dataset.Add(geoSet, func(_ context.Context) (*geoip.Databases, error) {
 		return geoip.Open(maxmindDir)
 	})
 	fmt.Fprint(os.Stderr, "Loading geoip... ")
@@ -238,7 +238,7 @@ func main() {
 	var loadWhitelist func()
 	if cfg.WhitelistPath != "" {
 		whitelistSet = dataset.NewSet(dataset.PollFiles(cfg.WhitelistPath))
-		cfg.whitelist = addCohort(whitelistSet, func() (*ipcohort.Cohort, error) {
+		cfg.whitelist = addCohort(whitelistSet, func(_ context.Context) (*ipcohort.Cohort, error) {
 			return ipcohort.LoadFile(cfg.WhitelistPath)
 		})
 		loadWhitelist = func() {
