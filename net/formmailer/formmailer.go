@@ -8,7 +8,8 @@
 //
 // Typical setup:
 //
-//	blacklist := dataset.Add(set, func() (*ipcohort.Cohort, error) { ... })
+//	blacklist := dataset.Add(set, func(ctx context.Context) (*ipcohort.Cohort, error) { ... })
+//	geo := dataset.Add(geoSet, func(ctx context.Context) (*geoip.Databases, error) { ... })
 //
 //	fm := &formmailer.FormMailer{
 //	    SMTPHost: "smtp.example.com:587",
@@ -49,9 +50,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/phuslu/iploc"
 	"golang.org/x/time/rate"
 
+	"github.com/therootcompany/golib/net/geoip"
 	"github.com/therootcompany/golib/net/ipcohort"
 	"github.com/therootcompany/golib/sync/dataset"
 )
@@ -145,8 +146,12 @@ type FormMailer struct {
 	// Blacklist — if set, matching IPs are rejected before any other processing.
 	Blacklist *dataset.View[ipcohort.Cohort]
 
+	// Geo — required when AllowedCountries is set. Provides the GeoLite2
+	// City/ASN databases used for country lookup.
+	Geo *dataset.View[geoip.Databases]
+
 	// AllowedCountries — if non-nil, only requests from listed ISO codes are
-	// accepted. Unknown country ("") is always allowed.
+	// accepted. Unknown country ("") is always allowed. Requires Geo to be set.
 	AllowedCountries []string
 
 	// Fields declares the form inputs in display order. Exactly one entry
@@ -229,10 +234,12 @@ func (fm *FormMailer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fm.AllowedCountries != nil {
-		country := string(iploc.IPCountry(ip))
-		if country != "" && !slices.Contains(fm.AllowedCountries, country) {
-			fm.writeError(w, fmt.Errorf("submissions from your region are not accepted; please email us directly"), true)
-			return
+		if geo := fm.Geo.Value(); geo != nil {
+			country := geo.Lookup(ipStr).CountryISO
+			if country != "" && !slices.Contains(fm.AllowedCountries, country) {
+				fm.writeError(w, fmt.Errorf("submissions from your region are not accepted; please email us directly"), true)
+				return
+			}
 		}
 	}
 
