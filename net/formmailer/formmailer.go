@@ -43,6 +43,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/therootcompany/golib/net/ipcohort"
+	"github.com/therootcompany/golib/sync/dataset"
 )
 
 const (
@@ -55,8 +56,8 @@ const (
 
 	defaultRPM         = 5
 	defaultBurst       = 3
-	defaultSMTPTimeout = 15 * time.Second
-	defaultMXTimeout   = 3 * time.Second
+	defaultSMTPTimeout = 5 * time.Second
+	defaultMXTimeout   = 2 * time.Second
 
 	limiterTTL        = 10 * time.Minute
 	limiterSweepEvery = 1024 // sweep once every N handler invocations
@@ -71,12 +72,6 @@ var (
 
 	phoneRe = regexp.MustCompile(`^[0-9+\-\(\) ]{7,20}$`)
 )
-
-// CohortSource returns the current cohort snapshot, or nil if not yet loaded.
-// *dataset.View[ipcohort.Cohort] satisfies this interface directly.
-type CohortSource interface {
-	Value() *ipcohort.Cohort
-}
 
 // FormFields maps logical field names to the HTML form field names.
 // Zero values use GravityForms-compatible defaults (input_1, input_3, etc.).
@@ -119,8 +114,8 @@ type FormMailer struct {
 	ContentType string // inferred from SuccessBody if empty
 
 	// Blacklist — if set, matching IPs are rejected before any other processing.
-	// *dataset.View[ipcohort.Cohort] satisfies this interface.
-	Blacklist CohortSource
+	// Value() returns nil before the first successful load (no blocks applied).
+	Blacklist *dataset.View[ipcohort.Cohort]
 
 	// AllowedCountries — if non-nil, only requests from listed ISO codes are
 	// accepted. Unknown country ("") is always allowed.
