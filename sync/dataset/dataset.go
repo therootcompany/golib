@@ -16,6 +16,7 @@ package dataset
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"sync"
@@ -137,6 +138,23 @@ func (s *Set) Load(ctx context.Context) error {
 	return nil
 }
 
+// Close closes every view's currently-held value. Call on shutdown to
+// release any OS resources held by the final snapshots (file handles,
+// network connections). Safe to call on a Set that hasn't been loaded
+// or whose views hold pure in-memory values — non-Closer values are
+// skipped. Returns joined errors from any Close failures.
+func (s *Set) Close() error {
+	var errs []error
+	for _, v := range s.views {
+		if c, ok := v.(io.Closer); ok {
+			if err := c.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // Tick calls Load every interval until ctx is done. Load errors are passed to
 // onError (if non-nil) and do not stop the loop; callers choose whether to log,
 // count, page, or ignore. Run in a goroutine: `go s.Tick(ctx, d, onError)`.
@@ -175,6 +193,19 @@ func (v *View[T]) LoadedAt() time.Time {
 		return *t
 	}
 	return time.Time{}
+}
+
+// Close clears the view and closes the currently-held value if it
+// implements io.Closer. Idempotent — subsequent calls are no-ops.
+func (v *View[T]) Close() error {
+	prev := v.ptr.Swap(nil)
+	if prev == nil {
+		return nil
+	}
+	if closer, ok := any(prev).(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 func (v *View[T]) reload(ctx context.Context) error {

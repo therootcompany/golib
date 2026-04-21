@@ -293,6 +293,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer func() { _ = geoSet.Close() }()
 	go blocklistSet.Tick(ctx, refreshInterval, func(err error) {
 		log.Printf("blocklist refresh: %v", err)
 	})
