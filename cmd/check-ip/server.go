@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/net/geoip"
+	"github.com/therootcompany/golib/net/ipcohort"
+	"github.com/therootcompany/golib/sync/dataset"
 )
 
 // Result is the JSON verdict for a single IP.
@@ -106,15 +108,67 @@ func (c *IPCheck) handle(w http.ResponseWriter, r *http.Request) {
 	c.writeText(w, res)
 }
 
+type dsStatus struct {
+	Loaded   bool      `json:"loaded"`
+	Size     int       `json:"size,omitzero"`
+	LoadedAt time.Time `json:"loaded_at,omitzero"`
+}
+
+// healthz reports per-dataset load state and an overall ready flag.
+// Returns 200 when all required sets (inbound, outbound, geoip) are
+// loaded, 503 while any are still empty.
+func (c *IPCheck) healthz(w http.ResponseWriter, _ *http.Request) {
+	cohortStatus := func(v *dataset.View[ipcohort.Cohort]) dsStatus {
+		s := dsStatus{LoadedAt: v.LoadedAt()}
+		if cur := v.Value(); cur != nil {
+			s.Loaded, s.Size = true, cur.Size()
+		}
+		return s
+	}
+
+	datasets := map[string]dsStatus{
+		"inbound":  cohortStatus(c.inbound),
+		"outbound": cohortStatus(c.outbound),
+		"geoip": {
+			Loaded:   c.geo.Value() != nil,
+			LoadedAt: c.geo.LoadedAt(),
+		},
+	}
+	if c.whitelist != nil {
+		datasets["whitelist"] = cohortStatus(c.whitelist)
+	}
+
+	ready := datasets["inbound"].Loaded && datasets["outbound"].Loaded && datasets["geoip"].Loaded
+	resp := struct {
+		Ready    bool                `json:"ready"`
+		Version  string              `json:"version"`
+		Datasets map[string]dsStatus `json:"datasets"`
+	}{ready, version, datasets}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if !ready {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(resp)
+}
+
 func (c *IPCheck) serve(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /check", c.handle)
+	mux.HandleFunc("GET /healthz", c.healthz)
 	mux.HandleFunc("GET /{$}", c.handle)
 
 	srv := &http.Server{
-		Addr:        c.Bind,
-		Handler:     mux,
-		BaseContext: func(_ net.Listener) context.Context { return ctx },
+		Addr:              c.Bind,
+		Handler:           mux,
+		BaseContext:       func(_ net.Listener) context.Context { return ctx },
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 16, // 64KB
 	}
 	go func() {
 		<-ctx.Done()
