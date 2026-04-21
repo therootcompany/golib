@@ -36,6 +36,7 @@ package formmailer
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -384,7 +385,7 @@ func (fm *FormMailer) sendMail(ctx context.Context, msg []byte) error {
 	defer func() { _ = c.Close() }()
 
 	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err := c.StartTLS(nil); err != nil {
+		if err := c.StartTLS(&tls.Config{ServerName: hostname}); err != nil {
 			return fmt.Errorf("starttls: %w", err)
 		}
 	}
