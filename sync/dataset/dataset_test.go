@@ -1,6 +1,7 @@
 package dataset_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"sync/atomic"
@@ -26,12 +27,12 @@ func TestSet_LoadPopulatesAllViews(t *testing.T) {
 	g := dataset.NewSet(f)
 
 	var aCalls, bCalls int
-	a := dataset.Add(g, func() (*string, error) {
+	a := dataset.Add(g, func(_ context.Context) (*string, error) {
 		aCalls++
 		v := "a"
 		return &v, nil
 	})
-	b := dataset.Add(g, func() (*int, error) {
+	b := dataset.Add(g, func(_ context.Context) (*int, error) {
 		bCalls++
 		v := 42
 		return &v, nil
@@ -58,7 +59,7 @@ func TestSet_SecondLoadSkipsUnchanged(t *testing.T) {
 	f := &countFetcher{updated: false}
 	g := dataset.NewSet(f)
 	calls := 0
-	dataset.Add(g, func() (*string, error) {
+	dataset.Add(g, func(_ context.Context) (*string, error) {
 		calls++
 		v := "x"
 		return &v, nil
@@ -81,7 +82,7 @@ func TestSet_LoadOnUpdateSwaps(t *testing.T) {
 	f := &countFetcher{updated: true}
 	g := dataset.NewSet(f)
 	n := 0
-	v := dataset.Add(g, func() (*int, error) {
+	v := dataset.Add(g, func(_ context.Context) (*int, error) {
 		n++
 		return &n, nil
 	})
@@ -98,7 +99,7 @@ func TestSet_LoadOnUpdateSwaps(t *testing.T) {
 
 func TestSet_ValueBeforeLoad(t *testing.T) {
 	g := dataset.NewSet(dataset.NopFetcher{})
-	v := dataset.Add(g, func() (*string, error) {
+	v := dataset.Add(g, func(_ context.Context) (*string, error) {
 		s := "x"
 		return &s, nil
 	})
@@ -110,7 +111,7 @@ func TestSet_ValueBeforeLoad(t *testing.T) {
 func TestSet_FetchError(t *testing.T) {
 	f := &countFetcher{err: errors.New("offline")}
 	g := dataset.NewSet(f)
-	dataset.Add(g, func() (*string, error) {
+	dataset.Add(g, func(_ context.Context) (*string, error) {
 		s := "x"
 		return &s, nil
 	})
@@ -121,7 +122,7 @@ func TestSet_FetchError(t *testing.T) {
 
 func TestSet_LoaderError(t *testing.T) {
 	g := dataset.NewSet(dataset.NopFetcher{})
-	dataset.Add(g, func() (*string, error) {
+	dataset.Add(g, func(_ context.Context) (*string, error) {
 		return nil, errors.New("parse fail")
 	})
 	if err := g.Load(t.Context()); err == nil {
