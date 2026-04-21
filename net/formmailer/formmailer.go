@@ -141,7 +141,17 @@ type FormMailer struct {
 	// ErrorBody may contain {.Error} and {.SupportEmail} placeholders.
 	SuccessBody []byte
 	ErrorBody   []byte
-	ContentType string // inferred from SuccessBody if empty
+	// SuccessBodyFunc / ErrorBodyFunc, if set, are called per request and
+	// override SuccessBody / ErrorBody. Use for hot-reloadable templates
+	// (e.g. re-read an HTML file on every request).
+	SuccessBodyFunc func() []byte
+	ErrorBodyFunc   func() []byte
+	ContentType     string // inferred from SuccessBody if empty
+
+	// HiddenSupportValue replaces {.SupportEmail} on error responses for
+	// requests that should not learn the operator's address (blacklist / bot
+	// rejections). Zero value "" hides the placeholder entirely.
+	HiddenSupportValue string
 
 	// Blacklist — if set, matching IPs are rejected before any other processing.
 	Blacklist *dataset.View[ipcohort.Cohort]
@@ -192,14 +202,32 @@ func (fm *FormMailer) init() {
 	}
 }
 
+func (fm *FormMailer) successBody() []byte {
+	if fm.SuccessBodyFunc != nil {
+		return fm.SuccessBodyFunc()
+	}
+	return fm.SuccessBody
+}
+
+func (fm *FormMailer) errorBody() []byte {
+	if fm.ErrorBodyFunc != nil {
+		return fm.ErrorBodyFunc()
+	}
+	return fm.ErrorBody
+}
+
 func (fm *FormMailer) contentType() string {
 	if fm.ContentType != "" {
 		return fm.ContentType
 	}
-	if bytes.Contains(fm.SuccessBody[:min(512, len(fm.SuccessBody))], []byte("<html")) {
+	probe := fm.SuccessBody
+	if len(probe) == 0 && fm.SuccessBodyFunc != nil {
+		probe = fm.SuccessBodyFunc()
+	}
+	if bytes.Contains(probe[:min(512, len(probe))], []byte("<html")) {
 		return "text/html; charset=utf-8"
 	}
-	if bytes.HasPrefix(bytes.TrimSpace(fm.SuccessBody), []byte("{")) {
+	if bytes.HasPrefix(bytes.TrimSpace(probe), []byte("{")) {
 		return "application/json"
 	}
 	return "text/plain; charset=utf-8"
@@ -321,7 +349,7 @@ func (fm *FormMailer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", fm.contentType())
-	_, _ = w.Write(fm.SuccessBody)
+	_, _ = w.Write(fm.successBody())
 }
 
 // sendMail dials SMTPHost with a bounded timeout and writes the message.
@@ -392,9 +420,9 @@ func (fm *FormMailer) writeError(w http.ResponseWriter, err error, showSupport b
 	w.WriteHeader(http.StatusBadRequest)
 	support := fm.SMTPFrom
 	if !showSupport {
-		support = ""
+		support = fm.HiddenSupportValue
 	}
-	b := bytes.ReplaceAll(fm.ErrorBody, []byte("{.Error}"), []byte(err.Error()))
+	b := bytes.ReplaceAll(fm.errorBody(), []byte("{.Error}"), []byte(err.Error()))
 	b = bytes.ReplaceAll(b, []byte("{.SupportEmail}"), []byte(support))
 	_, _ = w.Write(b)
 }

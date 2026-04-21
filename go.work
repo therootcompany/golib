@@ -3,6 +3,7 @@ go 1.26.1
 use (
 	.
 	./cmd/check-ip
+	./cmd/form2mail
 	./net/formmailer
 	./net/geoip
 	./net/gitshallow
