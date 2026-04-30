@@ -1,0 +1,22 @@
+go 1.26.1
+
+use (
+	.
+	./cmd/check-ip
+	./cmd/form2mail
+	./net/formmailer
+	./net/geoip
+	./net/gitshallow
+	./net/httpcache
+	./net/ipcohort
+	./sync/dataset
+)
+
+replace (
+	github.com/therootcompany/golib/net/formmailer v0.0.0 => ./net/formmailer
+	github.com/therootcompany/golib/net/geoip v0.0.0 => ./net/geoip
+	github.com/therootcompany/golib/net/gitshallow v0.0.0 => ./net/gitshallow
+	github.com/therootcompany/golib/net/httpcache v0.0.0 => ./net/httpcache
+	github.com/therootcompany/golib/net/ipcohort v0.0.0 => ./net/ipcohort
+	github.com/therootcompany/golib/sync/dataset v0.0.0 => ./sync/dataset
+)
