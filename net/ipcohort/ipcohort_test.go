@@ -103,7 +103,6 @@ func TestContains_FailClosed(t *testing.T) {
 	}
 }
 
-
 func TestContains_Empty(t *testing.T) {
 	c, err := ipcohort.Parse(nil)
 	if err != nil {
@@ -163,4 +162,3 @@ func TestLoadFiles_Merge(t *testing.T) {
 		t.Error("missing merged CIDR member")
 	}
 }
-

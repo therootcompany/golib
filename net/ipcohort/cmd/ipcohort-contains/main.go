@@ -12,6 +12,8 @@ package main
 
 import (
 	"bufio"
+	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/therootcompany/golib/net/ipcohort"
 )
@@ -50,13 +54,87 @@ func commafy(n int) string {
 }
 
 type Config struct {
-	IP string
+	IP     string
+	Format string
+}
+
+const (
+	formatPretty = "pretty"
+	formatTSV    = "tsv"
+	formatCSV    = "csv"
+	formatJSON   = "json"
+)
+
+func parseFormat(s string) (string, error) {
+	switch s {
+	case "":
+		if term.IsTerminal(int(os.Stdout.Fd())) {
+			return formatPretty, nil
+		}
+		return formatTSV, nil
+	case formatPretty, formatTSV, formatCSV, formatJSON:
+		return s, nil
+	default:
+		return "", fmt.Errorf("unknown format %q (want pretty, tsv, csv, json)", s)
+	}
+}
+
+type result struct {
+	IP    string `json:"ip"`
+	Found bool   `json:"found"`
+}
+
+func writeResults(format string, results []result) error {
+	switch format {
+	case formatPretty:
+		w := 0
+		for _, r := range results {
+			if len(r.IP) > w {
+				w = len(r.IP)
+			}
+		}
+		for _, r := range results {
+			status := "NOT FOUND"
+			if r.Found {
+				status = "FOUND"
+			}
+			fmt.Printf("%-*s  %s\n", w, r.IP, status)
+		}
+	case formatTSV:
+		for _, r := range results {
+			status := "NOT FOUND"
+			if r.Found {
+				status = "FOUND"
+			}
+			fmt.Printf("%s\t%s\n", r.IP, status)
+		}
+	case formatCSV:
+		cw := csv.NewWriter(os.Stdout)
+		_ = cw.Write([]string{"ip", "status"})
+		for _, r := range results {
+			status := "NOT FOUND"
+			if r.Found {
+				status = "FOUND"
+			}
+			if err := cw.Write([]string{r.IP, status}); err != nil {
+				return err
+			}
+		}
+		cw.Flush()
+		return cw.Error()
+	case formatJSON:
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(results)
+	}
+	return nil
 }
 
 func main() {
 	cfg := Config{}
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	fs.StringVar(&cfg.IP, "ip", "", "IP address to check (alternative to -- separator)")
+	fs.StringVar(&cfg.Format, "format", "", "output format: pretty, tsv, csv, json (default: auto)")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <file>... -- <ip>...\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "       %s --ip <ip> <file>...\n", os.Args[0])
@@ -145,14 +223,25 @@ func main() {
 	}
 
 	fmt.Fprintln(os.Stderr)
+
+	format, err := parseFormat(cfg.Format)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
+
+	results := make([]result, 0, len(ips))
 	allFound := true
 	for _, ip := range ips {
-		if cohort.Contains(ip) {
-			fmt.Printf("%s\tFOUND\n", ip)
-		} else {
-			fmt.Printf("%s\tNOT FOUND\n", ip)
+		found := cohort.Contains(ip)
+		results = append(results, result{IP: ip, Found: found})
+		if !found {
 			allFound = false
 		}
+	}
+	if err := writeResults(format, results); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
 	}
 
 	if !allFound {
