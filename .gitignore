@@ -12,6 +12,7 @@ env.*
 dist/
 auth/csvauth/cmd/csvauth/csvauth
 cmd/auth-proxy/auth-proxy
+cmd/check-ip/check-ip
 cmd/httplog/httplog
 cmd/jsonl/jsonl
 cmd/sendsms/sendsms
