@@ -23,11 +23,58 @@ if cohort.Contains("92.255.85.72") {
 fmt.Println("allowed")
 ```
 
-## Update the list periodically: git (shallow)
+`Cohort.Contains(string)` parses the address each call. If you already have
+a `netip.Addr` (e.g. from `netip.ParseAddr` on a request peer), use
+`Cohort.ContainsAddr(netip.Addr)` to skip the parse.
+
+## Recommended: hot-swap with `sync/dataset`
+
+`sync/dataset` wraps the `atomic.Pointer` + refresh-loop boilerplate so live
+requests see the new list without locks or restarts. Pair it with either
+`gitshallow` (best when you want incremental updates and don't mind a `git`
+binary in the runtime image) or `httpcache` (best for minimal images that
+just need a single file over HTTPS).
+
+```go
+import (
+    "context"
+    "time"
+
+    "github.com/therootcompany/golib/net/gitshallow"
+    "github.com/therootcompany/golib/net/ipcohort"
+    "github.com/therootcompany/golib/sync/dataset"
+)
+
+repo := gitshallow.New(
+    "https://github.com/bitwire-it/ipblocklist.git",
+    "/srv/data/ipblocklist", 1, "",
+)
+set := dataset.NewSet(repo)
+
+view := dataset.Add(set, func(ctx context.Context) (*ipcohort.Cohort, error) {
+    return ipcohort.LoadFile(repo.FilePath("tables/inbound/single_ips.txt"))
+})
+
+if err := set.Load(ctx); err != nil {
+    log.Fatalf("initial load: %v", err)
+}
+go set.Tick(ctx, 47*time.Minute, func(err error) { log.Printf("refresh: %v", err) })
+
+// in a request handler:
+if view.Value().Contains(peerIP) {
+    http.Error(w, "blocked", http.StatusForbidden)
+    return
+}
+```
+
+## Manual hot-swap: git (shallow)
+
+Without `sync/dataset` if you want to keep the dependency surface small:
 
 ```go
 import (
     "sync/atomic"
+    "time"
 
     "github.com/therootcompany/golib/net/gitshallow"
     "github.com/therootcompany/golib/net/ipcohort"
@@ -38,10 +85,10 @@ var cohort atomic.Pointer[ipcohort.Cohort]
 repo := gitshallow.New("https://github.com/bitwire-it/ipblocklist.git", "/srv/data/ipblocklist", 1, "")
 
 // Init: clone if missing, pull, load.
-if _, err := repo.Init(false); err != nil {
+if _, err := repo.Init(); err != nil {
     log.Fatalf("init: %v", err)
 }
-c, err := ipcohort.LoadFile("/srv/data/ipblocklist/tables/inbound/single_ips.txt")
+c, err := ipcohort.LoadFile(repo.FilePath("tables/inbound/single_ips.txt"))
 if err != nil {
     log.Fatalf("load: %v", err)
 }
@@ -49,10 +96,8 @@ cohort.Store(c)
 
 // Background: pull and reload when HEAD changes.
 go func() {
-    ticker := time.NewTicker(47 * time.Minute)
-    defer ticker.Stop()
-    for range ticker.C {
-        updated, err := repo.Sync(false)
+    for range time.Tick(47 * time.Minute) {
+        updated, err := repo.Sync()
         if err != nil {
             log.Printf("sync: %v", err)
             continue
@@ -60,22 +105,26 @@ go func() {
         if !updated {
             continue
         }
-        c, err := ipcohort.LoadFile("/srv/data/ipblocklist/tables/inbound/single_ips.txt")
+        c, err := ipcohort.LoadFile(repo.FilePath("tables/inbound/single_ips.txt"))
         if err != nil {
             log.Printf("reload: %v", err)
             continue
         }
         cohort.Store(c)
-        log.Printf("reloaded %d entries", cohort.Load().Size())
+        log.Printf("reloaded %d entries", c.Size())
     }
 }()
 ```
 
-## Update the list periodically: HTTP (cache)
+## Manual hot-swap: HTTP (cache)
+
+Same pattern with `httpcache` for minimal runtime images that don't have
+`git`:
 
 ```go
 import (
     "sync/atomic"
+    "time"
 
     "github.com/therootcompany/golib/net/httpcache"
     "github.com/therootcompany/golib/net/ipcohort"
@@ -99,9 +148,7 @@ cohort.Store(c)
 
 // Background: conditional GET, reload only when content changes.
 go func() {
-    ticker := time.NewTicker(47 * time.Minute)
-    defer ticker.Stop()
-    for range ticker.C {
+    for range time.Tick(47 * time.Minute) {
         updated, err := cacher.Fetch()
         if err != nil {
             log.Printf("fetch: %v", err)
@@ -116,7 +163,7 @@ go func() {
             continue
         }
         cohort.Store(c)
-        log.Printf("reloaded %d entries", cohort.Load().Size())
+        log.Printf("reloaded %d entries", c.Size())
     }
 }()
 ```
