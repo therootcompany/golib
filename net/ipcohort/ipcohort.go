@@ -158,13 +158,13 @@ func ParseIPv4(raw string) (ipv4net IPv4Net, err error) {
 	), nil
 }
 
-// LoadFile reads path and parses it into a Cohort. On open or read
-// errors, returns nil + error. On parse errors only, returns the partial
-// cohort + a joined error.
+// LoadFile reads path and parses it into a Cohort. Always returns a
+// non-nil Cohort (empty on error) so callers can use the zero value
+// as an empty set without nil checks.
 func LoadFile(path string) (*Cohort, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("could not load %q: %w", path, err)
+		return &Cohort{}, fmt.Errorf("could not load %q: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 	return ParseCSV(f)
@@ -173,21 +173,17 @@ func LoadFile(path string) (*Cohort, error) {
 // LoadFiles loads and merges multiple files into one Cohort. Useful when
 // hosts and networks are stored in separate files.
 //
-// On open or read errors, returns nil + error. On parse errors only,
-// returns the partial cohort + a joined error so callers can choose to
-// proceed with what loaded.
+// Always returns a non-nil Cohort. On errors, the cohort contains
+// whatever loaded successfully; the caller decides whether to proceed.
 func LoadFiles(paths ...string) (*Cohort, error) {
 	var hosts []uint32
 	var nets []IPv4Net
-	var parseErrs []error
+	var errs []error
 
 	for _, path := range paths {
 		c, err := LoadFile(path)
-		if c == nil {
-			return nil, err
-		}
 		if err != nil {
-			parseErrs = append(parseErrs, fmt.Errorf("%s: %w", path, err))
+			errs = append(errs, fmt.Errorf("%s: %w", path, err))
 		}
 		hosts = append(hosts, c.hosts...)
 		nets = append(nets, c.nets...)
@@ -197,8 +193,8 @@ func LoadFiles(paths ...string) (*Cohort, error) {
 	sortNets(nets)
 
 	c := &Cohort{hosts: hosts, nets: nets}
-	if len(parseErrs) > 0 {
-		return c, errors.Join(parseErrs...)
+	if len(errs) > 0 {
+		return c, errors.Join(errs...)
 	}
 	return c, nil
 }
@@ -225,7 +221,8 @@ func ReadAll(r *csv.Reader) (*Cohort, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("csv read error: %w", err)
+			c := &Cohort{hosts: hosts, nets: nets}
+			return c, fmt.Errorf("csv read error: %w", err)
 		}
 
 		if len(record) == 0 {
