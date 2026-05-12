@@ -19,7 +19,7 @@ import (
 type Repo struct {
 	URL    string
 	Path   string
-	Depth  int    // 0 defaults to 1, -1 for all
+	Depth  int    // 0 defaults to 3, -1 for all
 	Branch string // Optional: specific branch to clone/pull
 
 	// MaxAge skips the git fetch when .git/FETCH_HEAD is younger than this
@@ -28,10 +28,12 @@ type Repo struct {
 	// hammer the remote. 0 defaults to 1 minute; -1 disables.
 	MaxAge time.Duration
 
-	// GCInterval controls explicit aggressive GC after pulls.
-	//   0 (default) — no explicit gc; git runs gc.auto on its own schedule
-	//   1           — aggressive gc after every pull
-	//   N           — aggressive gc after every Nth pull
+	// GCInterval controls explicit GC after fetches. Shallow clones
+	// accumulate loose objects quickly, so the default is to gc after
+	// every fetch.
+	//   0 (default) — gc after every fetch
+	//   N           — gc after every Nth fetch
+	//  -1           — no explicit gc; git runs gc.auto on its own schedule
 	GCInterval int
 
 	sf        singleflight.Group
@@ -67,11 +69,13 @@ func (r *Repo) validateArgs() error {
 	return nil
 }
 
-// effectiveDepth returns the depth to use for clone/pull.
-// 0 means unset — defaults to 1. -1 means full history.
+// effectiveDepth returns the depth to use for clone and fetch.
+// 0 means unset — defaults to 3 (enough overlap that the server can
+// delta-compress even if the remote pushes 2 commits between fetches).
+// -1 means full history.
 func (r *Repo) effectiveDepth() int {
 	if r.Depth == 0 {
-		return 1
+		return 3
 	}
 	return r.Depth
 }
@@ -187,7 +191,6 @@ func (r *Repo) pull(ctx context.Context) (updated bool, err error) {
 	if depth := r.effectiveDepth(); depth >= 0 {
 		fetchArgs = append(fetchArgs, "--depth", fmt.Sprintf("%d", depth))
 	}
-	// `--` separates flags from positional remote/branch.
 	fetchArgs = append(fetchArgs, "--", "origin", branch)
 	if _, err := r.runGit(ctx, fetchArgs...); err != nil {
 		return false, err
@@ -208,7 +211,13 @@ func (r *Repo) gc(ctx context.Context) error {
 	if !r.exists() {
 		return fmt.Errorf("repository does not exist at %s", r.Path)
 	}
-	_, err := r.runGit(ctx, "gc", "--aggressive", "--prune=now")
+	if _, err := r.runGit(ctx, "reflog", "expire", "--expire=all", "--all"); err != nil {
+		return err
+	}
+	if _, err := r.runGit(ctx, "prune"); err != nil {
+		return err
+	}
+	_, err := r.runGit(ctx, "gc", "--prune=now")
 	return err
 }
 
@@ -252,17 +261,23 @@ func (r *Repo) fetch(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	if r.GCInterval > 0 {
+	if r.GCInterval >= 0 {
+		interval := r.GCInterval
+		if interval == 0 {
+			interval = 1
+		}
 		r.mu.Lock()
 		r.pullCount++
-		shouldGC := r.pullCount%r.GCInterval == 0
+		shouldGC := r.pullCount%interval == 0
 		r.mu.Unlock()
 		if shouldGC {
-			return true, r.gc(ctx)
+			if gcErr := r.gc(ctx); gcErr != nil {
+				return updated, gcErr
+			}
 		}
 	}
 
-	return true, nil
+	return updated, nil
 }
 
 // FilePath returns the absolute path to relPath within this repo.
