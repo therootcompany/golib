@@ -266,7 +266,7 @@ func main() {
 	authHeader := http.Header{"Authorization": []string{cfg.GeoIPBasicAuth}}
 	downloadBase := geoip.DownloadBase
 	if cfg.GeoIPURL != "" {
-		downloadBase = cfg.GeoIPURL
+		downloadBase = strings.TrimRight(cfg.GeoIPURL, "/")
 	}
 	cityCacher := httpcache.New(
 		downloadBase+"/GeoLite2-City/download?suffix=tar.gz",
