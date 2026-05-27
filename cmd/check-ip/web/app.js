@@ -8,13 +8,15 @@
   const loading   = document.querySelector(".loading");
   const errorEl   = document.querySelector(".error-msg");
   const resultEl  = document.querySelector(".result");
+  let myIpVisible = false;
 
   function show(el) { el.classList.add("visible"); }
   function hide(el) { el.classList.remove("visible"); }
 
-  function render(result) {
+  function render(result, isMyIp) {
     hide(errorEl);
     hide(resultEl);
+    if (isMyIp) myIpVisible = true;
 
     const host = result.ip;
     const resolvedFrom = result.resolved_from || "";
@@ -151,6 +153,7 @@
     hide(resultEl);
     show(loading);
     btn.disabled = true;
+    var isMyIp = host === "";
 
     fetch("/check?host=" + encodeURIComponent(host) + "&format=json")
       .then(function (r) {
@@ -159,7 +162,7 @@
       })
       .then(function (data) {
         hide(loading);
-        render(data);
+        render(data, isMyIp);
       })
       .catch(function (err) {
         hide(loading);
@@ -178,7 +181,14 @@
 
   myIpLink.addEventListener("click", function (e) {
     e.preventDefault();
-    submitHost("");
+    if (myIpVisible) {
+      hide(resultEl);
+      myIpLink.textContent = "Show my IP Info";
+      myIpVisible = false;
+    } else {
+      myIpLink.textContent = "Hide my IP Info";
+      submitHost("");
+    }
   });
 
   // Pre-fill from URL query param or hash fragment and auto-submit
