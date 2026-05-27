@@ -1,13 +1,21 @@
 (function () {
   "use strict";
 
-  const form      = document.querySelector(".search-form");
-  const input     = form.querySelector('input[type="text"]');
-  const btn       = form.querySelector("button");
-  const myIpLink  = document.getElementById("my-ip-link");
-  const loading   = document.querySelector(".loading");
-  const errorEl   = document.querySelector(".error-msg");
-  const resultEl  = document.querySelector(".result");
+  function $(sel, $parent) {
+    return ($parent || document).querySelector(sel);
+  }
+
+  function $$(sel, $parent) {
+    return Array.from(($parent || document).querySelectorAll(sel));
+  }
+
+  const form      = $(".search-form");
+  const input     = $("input[type=\"text\"]", form);
+  const btn       = $("button", form);
+  const myIpLink  = $("#my-ip-link");
+  const loading   = $(".loading");
+  const errorEl   = $(".error-msg");
+  const resultEl  = $(".result");
   let myIpVisible = false;
 
   function show(el) { el.classList.add("visible"); }
