@@ -10,6 +10,8 @@ require (
 	github.com/therootcompany/golib/sync/dataset v0.5.0
 )
 
+replace github.com/therootcompany/golib/net/geoip => ../../net/geoip
+
 require (
 	github.com/oschwald/geoip2-golang v1.13.0 // indirect
 	github.com/oschwald/maxminddb-golang v1.13.0 // indirect

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
@@ -28,6 +29,9 @@ import (
 	"github.com/therootcompany/golib/net/ipcohort"
 	"github.com/therootcompany/golib/sync/dataset"
 )
+
+//go:embed web/**
+var webFS embed.FS
 
 // Replaced by goreleaser / ldflags at build time.
 var (

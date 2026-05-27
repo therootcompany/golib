@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oschwald/geoip2-golang"
 	"github.com/therootcompany/golib/net/geoip"
 	"github.com/therootcompany/golib/net/ipcohort"
 	"github.com/therootcompany/golib/sync/dataset"
@@ -21,6 +23,7 @@ import (
 // Result is the JSON verdict for a single IP.
 type Result struct {
 	IP              string     `json:"ip"`
+	ResolvedFrom    string     `json:"resolved_from,omitzero"`
 	Blocked         bool       `json:"blocked"`
 	BlockedInbound  bool       `json:"blocked_inbound"`
 	BlockedOutbound bool       `json:"blocked_outbound"`
@@ -47,6 +50,16 @@ func (c *IPCheck) lookup(ip string) Result {
 	res.BlockedOutbound = c.outbound.Value().ContainsAddr(addr)
 	res.Blocked = res.BlockedInbound || res.BlockedOutbound
 	return res
+}
+
+// lookupRaw returns the raw geoip.Info for an IP.
+func (c *IPCheck) lookupRaw(ip string) geoip.Info {
+	return c.geo.Value().Lookup(ip)
+}
+
+// lookupRawCity returns the raw *geoip2.City record for an IP.
+func (c *IPCheck) lookupRawCity(ip string) *geoip2.City {
+	return c.geo.Value().LookupRaw(ip)
 }
 
 // writePretty renders res as space-aligned plain text.
@@ -82,18 +95,36 @@ func (c *IPCheck) writePretty(w io.Writer, res Result) {
 }
 
 func (c *IPCheck) handle(w http.ResponseWriter, r *http.Request) {
-	ip := strings.TrimSpace(r.URL.Query().Get("ip"))
-	if ip == "" {
+	query := strings.TrimSpace(r.URL.Query().Get("host"))
+	if query == "" {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			first, _, _ := strings.Cut(xff, ",")
-			ip = strings.TrimSpace(first)
+			query = strings.TrimSpace(first)
 		} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			ip = host
+			query = host
 		} else {
-			ip = r.RemoteAddr
+			query = r.RemoteAddr
 		}
 	}
+
+	// Resolve hostname to IP if needed.
+	ip := query
+	if net.ParseIP(ip) == nil {
+		addrs, err := net.LookupHost(ip)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		ip = addrs[0]
+	}
+
 	res := c.lookup(ip)
+	res.IP = ip
+	if query != ip {
+		res.ResolvedFrom = query
+	}
 
 	if r.URL.Query().Get("format") == "json" ||
 		strings.Contains(r.Header.Get("Accept"), "application/json") {
@@ -106,6 +137,32 @@ func (c *IPCheck) handle(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	c.writePretty(w, res)
+}
+
+func (c *IPCheck) debugRaw(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("host"))
+	if query == "" {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "?host= required"})
+		return
+	}
+	ip := query
+	if net.ParseIP(ip) == nil {
+		addrs, err := net.LookupHost(ip)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		ip = addrs[0]
+	}
+	rec := c.lookupRawCity(ip)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(rec)
 }
 
 type dsStatus struct {
@@ -158,7 +215,11 @@ func (c *IPCheck) serve(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /check", c.handle)
 	mux.HandleFunc("GET /healthz", c.healthz)
-	mux.HandleFunc("GET /{$}", c.handle)
+	mux.HandleFunc("GET /api/raw", c.debugRaw)
+
+	// Serve embedded web files.
+	webSub, _ := fs.Sub(webFS, "web")
+	mux.Handle("/", http.FileServer(http.FS(webSub)))
 
 	srv := &http.Server{
 		Addr:              c.Bind,

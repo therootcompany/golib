@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IP Location & Status</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>IP Location & Status</h1>
+    <p class="subtitle">Look up an IP address, domain, or your own IP against blocklists and GeoIP databases.</p>
+
+    <form class="search-form" autocomplete="off">
+      <input type="text" name="host" placeholder="Enter IP or domain…">
+      <button type="submit">Check</button>
+    </form>
+
+    <a href="#" class="my-ip-link" id="my-ip-link">Show my IP Info</a>
+
+    <div class="loading">
+      <span class="spinner"></span> Resolving and checking…
+    </div>
+
+    <div class="error-msg"></div>
+
+    <div class="result"></div>
+
+    <footer>
+      <a href="/healthz">/healthz</a>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
