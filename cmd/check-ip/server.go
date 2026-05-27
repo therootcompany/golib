@@ -200,7 +200,7 @@ func (c *IPCheck) healthz(w http.ResponseWriter, _ *http.Request) {
 		Ready    bool                `json:"ready"`
 		Version  string              `json:"version"`
 		Datasets map[string]dsStatus `json:"datasets"`
-	}{ready, version, datasets}
+	}{ready, versionFromGit(), datasets}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if !ready {

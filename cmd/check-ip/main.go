@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -44,6 +45,31 @@ var (
 	licenseType = "MPL-2.0"
 )
 
+// versionFromGit returns a tag scoped to this subdirectory, falling back to a short commit hash.
+func versionFromGit() string {
+	if version != "0.0.0-dev" {
+		return version
+	}
+	out, err := runGit("describe", "--tags", "--match", "cmd/check-ip/*", "--always")
+	if err == nil && out != "" {
+		return out
+	}
+	out, err = runGit("rev-parse", "--short", "HEAD")
+	if err == nil && out != "" {
+		return "v0.0.0-" + out
+	}
+	return "0.0.0-dev"
+}
+
+func runGit(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 const (
 	defaultBlocklistRepo = "https://github.com/bitwire-it/ipblocklist.git"
 	refreshInterval      = 47 * time.Minute
@@ -51,7 +77,7 @@ const (
 
 // printVersion writes version, copyright, and license info to w.
 func printVersion(w io.Writer) {
-	_, _ = fmt.Fprintf(w, "%s v%s %s (%s)\n", name, version, commit[:7], date)
+	_, _ = fmt.Fprintf(w, "%s v%s %s (%s)\n", name, versionFromGit(), commit[:7], date)
 	_, _ = fmt.Fprintf(w, "Copyright (C) %s %s\n", licenseYear, licenseOwner)
 	_, _ = fmt.Fprintf(w, "Licensed under %s\n", licenseType)
 }
