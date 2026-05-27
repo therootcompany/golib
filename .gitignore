@@ -41,8 +41,5 @@ worktrees.git
 .*.sw*
 
 # Agent session files
-agents/TASKS.md
-agents/REVIEW.md
-agents/HANDOFF.md
-agents/issues.d/
-agents/tmp/
+agents/
+LOCAL.md
