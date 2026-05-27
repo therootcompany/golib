@@ -3,33 +3,88 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>IP Location & Status</title>
+  <title>IP Location &amp; Status</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="container">
-    <h1>IP Location & Status</h1>
+  <main class="container" data-app>
+    <h1>IP Location &amp; Status</h1>
     <p class="subtitle">Look up an IP address, domain, or your own IP against blocklists and GeoIP databases.</p>
 
-    <form class="search-form" autocomplete="off">
-      <input type="text" name="host" placeholder="Enter IP or domain…">
-      <button type="submit">Check</button>
+    <form class="search-form" data-form autocomplete="off" onsubmit="App.submit(window.event)">
+      <input type="text" name="host" placeholder="Enter IP or domain…" data-input>
+      <button type="submit" data-submit-btn>Check</button>
     </form>
 
-    <a href="#" class="my-ip-link" id="my-ip-link">Show my IP Info</a>
+    <a href="#" class="my-ip-link" data-my-ip-link onclick="App.toggleIpInfo(window.event)">Show my IP Info</a>
 
-    <div class="loading">
-      <span class="spinner"></span> Resolving and checking…
+    <div class="loading" data-state="loading" hidden>
+      <span class="spinner"></span>
+      Resolving and checking…
     </div>
 
-    <div class="error-msg"></div>
+    <div class="error-msg" data-state="error" hidden>
+      <span>Error: </span>
+      <span data-error-text></span>
+    </div>
 
-    <div class="result"></div>
+    <div class="result" data-state="result" hidden>
+      <div class="result-header">
+        <span data-verdict-badge>
+          <span data-verdict="whitelist" hidden class="verdict verdict-whitelist">ALLOWED (whitelist)</span>
+          <span data-verdict="blocked-inbound-outbound" hidden class="verdict verdict-blocked">BLOCKED (inbound + outbound)</span>
+          <span data-verdict="blocked-inbound" hidden class="verdict verdict-blocked">BLOCKED (inbound)</span>
+          <span data-verdict="blocked-outbound" hidden class="verdict verdict-blocked">BLOCKED (outbound)</span>
+          <span data-verdict="allowed" hidden class="verdict verdict-allowed">ALLOWED</span>
+        </span>
+        <span class="host" data-value="ip"></span>
+        <span data-resolved-from hidden class="resolved">→ <span data-value="resolved-from"></span></span>
+      </div>
+      <div class="result-body">
+        <div class="result-section" data-section="location" hidden>
+          <h3>Location</h3>
+          <p class="mono" data-value="location"></p>
+        </div>
+        <div class="result-section" data-section="coordinates" hidden>
+          <h3>Coordinates</h3>
+          <p class="mono" data-value="coordinates"></p>
+        </div>
+        <div class="result-section" data-section="details" hidden>
+          <h3>Details</h3>
+          <p class="mono" data-value="details"></p>
+        </div>
+        <div class="result-section" data-section="traits" hidden>
+          <h3>Traits</h3>
+          <div class="block-list">
+            <span data-trait="anycast" hidden class="trait-badge anycast">anycast</span>
+            <span data-trait="anonymous" hidden class="trait-badge anonymous">anonymous proxy</span>
+            <span data-trait="satellite" hidden class="trait-badge satellite">satellite</span>
+            <span data-trait="eu" hidden class="trait-badge eu">EU</span>
+          </div>
+        </div>
+        <div class="result-section" data-section="registered-country" hidden>
+          <h3>Registered Country</h3>
+          <p class="mono" data-value="registered-country"></p>
+        </div>
+        <div class="result-section" data-section="asn">
+          <h3>ASN</h3>
+          <p class="mono" data-value="asn">—</p>
+        </div>
+        <div class="result-section" data-section="blocklist">
+          <h3>Blocklist</h3>
+          <div class="block-list">
+            <span data-block="inbound" hidden class="block-badge">inbound</span>
+            <span data-block="outbound" hidden class="block-badge">outbound</span>
+            <span data-block="clean" hidden class="block-badge clean">clean</span>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <footer>
       <a href="/healthz">/healthz</a>
     </footer>
-  </div>
+  </main>
 
   <script src="/app.js"></script>
 </body>
