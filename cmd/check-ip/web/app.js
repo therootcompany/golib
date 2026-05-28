@@ -24,6 +24,7 @@ const App = {
         document.querySelector('[data-state="loading"]').hidden = true;
         document.querySelector('[data-state="result"]').hidden = false;
         App.render(data);
+        window.history.replaceState(null, '', '#/?host=' + encodeURIComponent(data.ip));
       })
       .catch(function(err) {
         document.querySelector('[data-state="loading"]').hidden = true;
