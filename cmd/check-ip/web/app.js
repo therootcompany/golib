@@ -181,7 +181,9 @@ const App = {
         host = new URLSearchParams(hashQuery).get('host');
       }
     }
-    if (host) {
+    if (host === 'myip') {
+      this.check('');
+    } else if (host) {
       document.querySelector('[data-input]').value = host;
       this.check(host);
     } else {
