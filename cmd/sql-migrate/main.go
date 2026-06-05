@@ -749,8 +749,20 @@ func (state *State) parseAndFixupBatches(text string) error {
 	state.Lines = strings.Split(text, "\n")
 	for i := range state.Lines {
 		line := strings.TrimSpace(state.Lines[i])
-		migration := commentStartRe.ReplaceAllString(line, "")
+		migration := line
+		// strip comments (before tab-split so trailing comments on data lines are handled)
+		migration = commentStartRe.ReplaceAllString(migration, "")
 		migration = strings.TrimSpace(migration)
+		// strip leading id\t prefix from new log format (id<tab>name)
+		// ignore any additional tab-delimited fields for future-proofing
+		parts := strings.Split(migration, "\t")
+		if len(parts) >= 2 {
+			migration = parts[1]
+		} else if len(parts) == 1 {
+			migration = parts[0]
+		} else {
+			continue
+		}
 		if migration != "" {
 			up, down, warn, err := fixupMigration(state.MigrationsDir, migration)
 			if warn != nil {
