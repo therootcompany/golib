@@ -46,21 +46,21 @@ func ParseFormat(s string) (Format, error) {
 }
 
 var formatAliases = map[string]Format{
-	"":              FormatFlatPaths,
-	"paths":         FormatFlatPaths,
-	"json-paths":    FormatFlatPaths,
-	"go":            FormatGo,
-	"typescript":    FormatTypeScript,
-	"ts":            FormatTypeScript,
-	"jsdoc":         FormatJSDoc,
-	"zod":           FormatZod,
-	"python":        FormatPython,
-	"py":            FormatPython,
-	"sql":           FormatSQL,
-	"jsonschema":    FormatJSONSchema,
-	"json-schema":   FormatJSONSchema,
-	"typedef":       FormatTypedef,
-	"json-typedef":  FormatTypedef,
+	"":             FormatFlatPaths,
+	"paths":        FormatFlatPaths,
+	"json-paths":   FormatFlatPaths,
+	"go":           FormatGo,
+	"typescript":   FormatTypeScript,
+	"ts":           FormatTypeScript,
+	"jsdoc":        FormatJSDoc,
+	"zod":          FormatZod,
+	"python":       FormatPython,
+	"py":           FormatPython,
+	"sql":          FormatSQL,
+	"jsonschema":   FormatJSONSchema,
+	"json-schema":  FormatJSONSchema,
+	"typedef":      FormatTypedef,
+	"json-typedef": FormatTypedef,
 }
 
 // Generate renders formatted paths into the given output format.

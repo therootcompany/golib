@@ -166,10 +166,10 @@ func TestAnalyzeEmptyObject(t *testing.T) {
 
 func TestHeuristicsMapDetection(t *testing.T) {
 	tests := []struct {
-		name      string
-		keys      []string
-		wantMap   bool
-		wantConf  bool
+		name     string
+		keys     []string
+		wantMap  bool
+		wantConf bool
 	}{
 		{"numeric keys", []string{"1", "2", "3"}, true, true},
 		{"uuid keys", []string{"a1b2c3d4-e5f6", "b2c3d4e5-f6a7", "c3d4e5f6-a7b8"}, true, false},
@@ -444,9 +444,9 @@ func TestAnalyzeFullSample(t *testing.T) {
 func TestDifferentTypesViaResolver(t *testing.T) {
 	a := New(AnalyzerConfig{
 		Resolver: scriptedResolver(
-			Response{IsNewType: true},       // different types for shapes
-			Response{Name: "FileField"},     // name for shape 1
-			Response{Name: "FeatureField"},  // name for shape 2
+			Response{IsNewType: true},      // different types for shapes
+			Response{Name: "FileField"},    // name for shape 1
+			Response{Name: "FeatureField"}, // name for shape 2
 		),
 	})
 
