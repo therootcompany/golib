@@ -20,20 +20,24 @@ import (
 	"github.com/therootcompany/golib/tools/jsontypes"
 )
 
-const (
-	name        = "jsonpaths"
-	description = "Infer types from JSON. Generate code."
-)
+const description = "Infer types from JSON. Generate code."
 
+// Replaced by goreleaser / ldflags at build time.
 var (
-	version = "0.0.0-dev"
-	commit  = "0000000"
-	date    = "0001-01-01"
+	name         = "jsonpaths"
+	version      = "0.0.0-dev"
+	commit       = "0000000"
+	date         = "0001-01-01"
+	licenseYear  = "2024"
+	licenseOwner = "The Root Company"
+	licenseType  = "CC0-1.0"
 )
 
 func printVersion(w io.Writer) {
-	fmt.Fprintf(w, "%s v%s %s (%s)\n", name, version, commit[:7], date)
-	fmt.Fprintf(w, "%s\n", description)
+	_, _ = fmt.Fprintf(w, "%s v%s %s (%s)\n", name, version, commit[:7], date)
+	_, _ = fmt.Fprintf(w, "Copyright (C) %s %s\n", licenseYear, licenseOwner)
+	_, _ = fmt.Fprintf(w, "Licensed under %s\n", licenseType)
+	_, _ = fmt.Fprintf(w, "%s\n", description)
 }
 
 // headerList implements flag.Value for repeatable -H flags.
@@ -48,6 +52,19 @@ func (h *headerList) Set(val string) error {
 	return nil
 }
 
+type mainConfig struct {
+	headers   headerList
+	anonymous bool
+	askTypes  bool
+	bearer    string
+	cookie    string
+	cookieJar string
+	format    string
+	timeout   time.Duration
+	noCache   bool
+	user      string
+}
+
 func main() {
 	// Exit cleanly on Ctrl+C
 	sig := make(chan os.Signal, 1)
@@ -58,43 +75,48 @@ func main() {
 		os.Exit(130)
 	}()
 
-	var headers headerList
-	flag.Var(&headers, "H", "add HTTP header (repeatable, e.g. -H 'X-API-Key: abc')")
-	anonymous := flag.Bool("anonymous", false, "skip all prompts; use heuristics and auto-inferred names")
-	askTypes := flag.Bool("ask-types", false, "prompt for each type name instead of auto-inferring")
-	bearer := flag.String("bearer", "", "set Authorization: Bearer token")
-	cookie := flag.String("cookie", "", "send cookie (name=value or Set-Cookie format)")
-	cookieJar := flag.String("cookie-jar", "", "read cookies from Netscape cookie jar file")
-	format := flag.String("format", "json-paths", "output format: json-paths, go, json-schema, json-typedef, typescript, jsdoc, zod, python, sql")
-	timeout := flag.Duration("timeout", 20*time.Second, "HTTP request timeout for URL inputs")
-	noCache := flag.Bool("no-cache", false, "skip local cache for URL inputs")
-	user := flag.String("user", "", "HTTP basic auth (user:password, like curl)")
+	cfg := mainConfig{}
 
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "USAGE\n  %s [flags] [file | url]\n\n", name)
-		fmt.Fprintf(os.Stderr, "FLAGS\n")
-		flag.PrintDefaults()
-	}
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	fs.Var(&cfg.headers, "H", "add HTTP header (repeatable, e.g. -H 'X-API-Key: abc')")
+	fs.BoolVar(&cfg.anonymous, "anonymous", false, "skip all prompts; use heuristics and auto-inferred names")
+	fs.BoolVar(&cfg.askTypes, "ask-types", false, "prompt for each type name instead of auto-inferring")
+	fs.StringVar(&cfg.bearer, "bearer", "", "set Authorization: Bearer token")
+	fs.StringVar(&cfg.cookie, "cookie", "", "send cookie (name=value or Set-Cookie format)")
+	fs.StringVar(&cfg.cookieJar, "cookie-jar", "", "read cookies from Netscape cookie jar file")
+	fs.StringVar(&cfg.format, "format", "json-paths", "output format: json-paths, go, json-schema, json-typedef, typescript, jsdoc, zod, python, sql")
+	fs.DurationVar(&cfg.timeout, "timeout", 20*time.Second, "HTTP request timeout for URL inputs")
+	fs.BoolVar(&cfg.noCache, "no-cache", false, "skip local cache for URL inputs")
+	fs.StringVar(&cfg.user, "user", "", "HTTP basic auth (user:password, like curl)")
 
 	// Handle version/help before flag parse
 	if len(os.Args) > 1 {
-		arg := os.Args[1]
-		if arg == "-V" || arg == "--version" || arg == "version" {
+		switch os.Args[1] {
+		case "-V", "-version", "--version", "version":
 			printVersion(os.Stdout)
 			os.Exit(0)
-		}
-		if arg == "help" || arg == "-help" || arg == "--help" {
+		case "help", "-help", "--help":
 			printVersion(os.Stdout)
 			fmt.Fprintln(os.Stdout)
-			flag.CommandLine.SetOutput(os.Stdout)
-			flag.Usage()
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
 			os.Exit(0)
 		}
 	}
 
-	flag.Parse()
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		os.Exit(1)
+	}
 
-	outFormat, err := jsontypes.ParseFormat(*format)
+	if fs.NArg() > 1 {
+		fmt.Fprintf(os.Stderr, "error: too many arguments\n")
+		os.Exit(1)
+	}
+
+	outFormat, err := jsontypes.ParseFormat(cfg.format)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -105,24 +127,24 @@ func main() {
 	inputIsStdin := true
 	// Build extra HTTP headers from flags
 	var extraHeaders http.Header
-	if *bearer != "" || *user != "" || *cookie != "" || *cookieJar != "" || len(headers) > 0 {
+	if cfg.bearer != "" || cfg.user != "" || cfg.cookie != "" || cfg.cookieJar != "" || len(cfg.headers) > 0 {
 		extraHeaders = make(http.Header)
 	}
-	for _, h := range headers {
+	for _, h := range cfg.headers {
 		name, value, _ := strings.Cut(h, ":")
 		extraHeaders.Add(strings.TrimSpace(name), strings.TrimSpace(value))
 	}
-	if *bearer != "" {
-		extraHeaders.Set("Authorization", "Bearer "+*bearer)
+	if cfg.bearer != "" {
+		extraHeaders.Set("Authorization", "Bearer "+cfg.bearer)
 	}
-	if *user != "" {
-		extraHeaders.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(*user)))
+	if cfg.user != "" {
+		extraHeaders.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(cfg.user)))
 	}
-	if *cookie != "" {
-		extraHeaders.Add("Cookie", parseCookieFlag(*cookie))
+	if cfg.cookie != "" {
+		extraHeaders.Add("Cookie", parseCookieFlag(cfg.cookie))
 	}
-	if *cookieJar != "" {
-		cookies, err := readCookieJar(*cookieJar)
+	if cfg.cookieJar != "" {
+		cookies, err := readCookieJar(cfg.cookieJar)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error reading cookie jar: %v\n", err)
 			os.Exit(1)
@@ -132,10 +154,10 @@ func main() {
 		}
 	}
 
-	if args := flag.Args(); len(args) > 0 && args[0] != "-" {
+	if args := fs.Args(); len(args) > 0 && args[0] != "-" {
 		arg := args[0]
 		if strings.HasPrefix(arg, "https://") || strings.HasPrefix(arg, "http://") {
-			r, err := fetchOrCache(arg, *timeout, *noCache, extraHeaders)
+			r, err := fetchOrCache(arg, cfg.timeout, cfg.noCache, extraHeaders)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
@@ -168,7 +190,7 @@ func main() {
 
 	var formatted []string
 	var pr *prompter
-	if *anonymous {
+	if cfg.anonymous {
 		// Pipeline mode: RawPaths → Coalesce → Generate (deterministic, no prompts).
 		raw := jsontypes.RawPaths(data)
 		formatted = jsontypes.Coalesce(raw)
@@ -186,7 +208,7 @@ func main() {
 		resolver := newCLIResolver(pr)
 		a := jsontypes.New(jsontypes.AnalyzerConfig{
 			Resolver: resolver,
-			AskTypes: *askTypes,
+			AskTypes: cfg.askTypes,
 		})
 		rawPaths := a.Analyze(".", data)
 		formatted = jsontypes.FormatPaths(rawPaths)
