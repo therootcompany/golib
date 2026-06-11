@@ -89,6 +89,15 @@ func main() {
 	fs.BoolVar(&cfg.noCache, "no-cache", false, "skip local cache for URL inputs")
 	fs.StringVar(&cfg.user, "user", "", "HTTP basic auth (user:password, like curl)")
 
+	// Auto-enable anonymous mode when there's no TTY (piped input, CI, etc.).
+	if !cfg.anonymous {
+		if f, err := os.Open("/dev/tty"); err != nil {
+			cfg.anonymous = true
+		} else {
+			f.Close()
+		}
+	}
+
 	// Handle version/help before flag parse
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
