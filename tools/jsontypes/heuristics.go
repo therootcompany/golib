@@ -382,6 +382,40 @@ func capitalize(s string) string {
 }
 
 // singularize does a naive singularization for common English plurals.
+// shouldMergeObjects decides whether a pool of objects should be treated as
+// one struct type with optional fields, rather than multiple distinct types.
+//
+// Heuristic: if ≥ 2 keys appear in more than half the objects, the objects
+// likely share a common shape with optional fields. This catches the common
+// case of API responses where every record has the same core fields but some
+// records have extra ones (e.g. pagination results).
+func shouldMergeObjects(objects []map[string]any) bool {
+	n := len(objects)
+	if n < 2 {
+		return false
+	}
+
+	// Count how many objects contain each key.
+	keyCount := make(map[string]int)
+	for _, obj := range objects {
+		for k := range obj {
+			keyCount[k]++
+		}
+	}
+
+	// Count keys that appear in a majority of objects.
+	threshold := n / 2
+	highFreq := 0
+	for _, count := range keyCount {
+		if count > threshold {
+			highFreq++
+		}
+	}
+
+	// Two or more high-frequency keys means the objects share a common core.
+	return highFreq >= 2
+}
+
 func singularize(s string) string {
 	// Uncountable / already-singular words ending in -s.
 	switch strings.ToLower(s) {
