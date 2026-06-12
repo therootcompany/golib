@@ -271,8 +271,8 @@ func stripTrailingDigits(name string) string {
 	return name[:i+1]
 }
 
-// detectNullablePaths returns the set of paths where {null} appears
-// alongside at least one concrete type.
+// detectNullablePaths returns the set of paths where {null} or {undefined}
+// appears alongside at least one concrete type.
 func detectNullablePaths(lines []rawLine) map[string]bool {
 	pathTypes := make(map[string][]string)
 	for _, line := range lines {
@@ -281,16 +281,16 @@ func detectNullablePaths(lines []rawLine) map[string]bool {
 
 	nullables := make(map[string]bool)
 	for path, typeVals := range pathTypes {
-		hasNull := false
+		hasAbsent := false
 		hasOther := false
 		for _, tv := range typeVals {
-			if tv == "null" {
-				hasNull = true
-			} else if tv != "undefined" && tv != "empty" {
+			if tv == "null" || tv == "undefined" {
+				hasAbsent = true
+			} else if tv != "empty" {
 				hasOther = true
 			}
 		}
-		if hasNull && hasOther {
+		if hasAbsent && hasOther {
 			nullables[path] = true
 		}
 	}
@@ -306,8 +306,9 @@ func emitCoalesced(lines []rawLine, nameMap map[string]string, nullables map[str
 	for i < len(lines) {
 		line := lines[i]
 
-		// Skip standalone {null} lines at nullable paths (merged into ?).
-		if line.typeVal == "null" && nullables[line.path] {
+		// Skip standalone {null} and {undefined} lines at nullable paths
+		// (merged into ? on the concrete type line).
+		if (line.typeVal == "null" || line.typeVal == "undefined") && nullables[line.path] {
 			i++
 			continue
 		}

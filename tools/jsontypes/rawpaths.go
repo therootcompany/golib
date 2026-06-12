@@ -208,18 +208,43 @@ func (w *rawWalker) walkCollection(prefix string, values []any) {
 		w.emit(prefix + "{null}")
 	}
 
-	// Emit each object shape. If a shape has exactly one instance and it
-	// looks like a map, walk it as a map instead of a struct.
-	for _, shape := range shapes {
-		if len(shape.instances) == 1 {
-			obj := shape.instances[0]
-			isMap, _ := looksLikeMap(obj)
-			if isMap {
-				w.walkMap(prefix, obj)
-				continue
+	// If multiple shapes share a common core (≥ 2 keys in > 50% of objects),
+	// treat them as one struct with optional fields.
+	if len(shapes) > 1 {
+		var allObjs []map[string]any
+		for _, s := range shapes {
+			allObjs = append(allObjs, s.instances...)
+		}
+		if shouldMergeObjects(allObjs) {
+			// Merge all into one struct — absent fields become optional.
+			w.walkStruct(prefix, allObjs)
+		} else {
+			// No common core — emit each shape separately.
+			for _, shape := range shapes {
+				if len(shape.instances) == 1 {
+					obj := shape.instances[0]
+					isMap, _ := looksLikeMap(obj)
+					if isMap {
+						w.walkMap(prefix, obj)
+						continue
+					}
+				}
+				w.walkStruct(prefix, shape.instances)
 			}
 		}
-		w.walkStruct(prefix, shape.instances)
+	} else {
+		// Single shape (or none) — emit directly.
+		for _, shape := range shapes {
+			if len(shape.instances) == 1 {
+				obj := shape.instances[0]
+				isMap, _ := looksLikeMap(obj)
+				if isMap {
+					w.walkMap(prefix, obj)
+					continue
+				}
+			}
+			w.walkStruct(prefix, shape.instances)
+		}
 	}
 
 	// Emit primitive/array types (deduplicated).
@@ -343,4 +368,38 @@ func joinPath(prefix, field string) string {
 		return "." + field
 	}
 	return prefix + "." + field
+}
+
+// shouldMergeObjects decides whether a pool of objects should be treated as
+// one struct type with optional fields, rather than multiple distinct types.
+//
+// Heuristic: if ≥ 2 keys appear in more than half the objects, the objects
+// likely share a common shape with optional fields. This catches the common
+// case of API responses where every record has the same core fields but some
+// records have extra ones (e.g. pagination results).
+func shouldMergeObjects(objects []map[string]any) bool {
+	n := len(objects)
+	if n < 2 {
+		return false
+	}
+
+	// Count how many objects contain each key.
+	keyCount := make(map[string]int)
+	for _, obj := range objects {
+		for k := range obj {
+			keyCount[k]++
+		}
+	}
+
+	// Count keys that appear in a majority of objects.
+	threshold := n / 2
+	highFreq := 0
+	for _, count := range keyCount {
+		if count > threshold {
+			highFreq++
+		}
+	}
+
+	// Two or more high-frequency keys means the objects share a common core.
+	return highFreq >= 2
 }

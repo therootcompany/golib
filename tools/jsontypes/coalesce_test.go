@@ -105,7 +105,7 @@ func TestCoalesceDedupManyNames(t *testing.T) {
 	t.Logf("output (%d lines):\n%s", len(got), strings.Join(got, "\n"))
 }
 
-func TestCoalesceUndefinedPreserved(t *testing.T) {
+func TestCoalesceUndefinedCollapses(t *testing.T) {
 	input := []string{
 		"[]{RootItem0}",
 		"[].name{string}",
@@ -115,16 +115,15 @@ func TestCoalesceUndefinedPreserved(t *testing.T) {
 
 	got := Coalesce(input)
 
-	// {undefined} should be preserved (not collapsed into ?).
-	assertLineContains(t, got, "[].email{undefined}")
-	// {string} should NOT be nullable (undefined ≠ null).
-	assertLineContains(t, got, "[].email{string}")
-	assertLineNotContains(t, got, "[].email{string?}")
+	// {undefined} collapses into ? on the concrete type (same as null).
+	assertLineContains(t, got, "[].email{string?}")
+	assertLineNotContains(t, got, "[].email{undefined}")
+	assertLineNotContains(t, got, "[].email{string}")
 
 	t.Logf("output (%d lines):\n%s", len(got), strings.Join(got, "\n"))
 }
 
-func TestCoalesceNullAndUndefined(t *testing.T) {
+func TestCoalesceNullAndUndefinedBothCollapse(t *testing.T) {
 	input := []string{
 		"[]{RootItem0}",
 		"[].email{undefined}",
@@ -134,10 +133,9 @@ func TestCoalesceNullAndUndefined(t *testing.T) {
 
 	got := Coalesce(input)
 
-	// {undefined} preserved
-	assertLineContains(t, got, "[].email{undefined}")
-	// {null} collapsed into {string?}
+	// Both {undefined} and {null} collapse into {string?}.
 	assertLineContains(t, got, "[].email{string?}")
+	assertLineNotContains(t, got, "[].email{undefined}")
 	assertLineNotContains(t, got, "[].email{null}")
 
 	t.Logf("output (%d lines):\n%s", len(got), strings.Join(got, "\n"))

@@ -204,16 +204,40 @@ func (s *sampler) walkCollection(prefix string, values []any) {
 		s.emit(prefix + "{null}")
 	}
 
-	for _, shape := range shapes {
-		if len(shape.instances) == 1 {
-			obj := shape.instances[0]
-			isMap, _ := looksLikeMap(obj)
-			if isMap {
-				s.walkMap(prefix, obj)
-				continue
+	// If multiple shapes share a common core (≥ 2 keys in > 50% of objects),
+	// treat them as one struct with optional fields.
+	if len(shapes) > 1 {
+		var allObjs []map[string]any
+		for _, s := range shapes {
+			allObjs = append(allObjs, s.instances...)
+		}
+		if shouldMergeObjects(allObjs) {
+			s.walkStruct(prefix, allObjs)
+		} else {
+			for _, shape := range shapes {
+				if len(shape.instances) == 1 {
+					obj := shape.instances[0]
+					isMap, _ := looksLikeMap(obj)
+					if isMap {
+						s.walkMap(prefix, obj)
+						continue
+					}
+				}
+				s.walkStruct(prefix, shape.instances)
 			}
 		}
-		s.walkStruct(prefix, shape.instances)
+	} else {
+		for _, shape := range shapes {
+			if len(shape.instances) == 1 {
+				obj := shape.instances[0]
+				isMap, _ := looksLikeMap(obj)
+				if isMap {
+					s.walkMap(prefix, obj)
+					continue
+				}
+			}
+			s.walkStruct(prefix, shape.instances)
+		}
 	}
 
 	// Emit one sample per primitive type (not per value).
