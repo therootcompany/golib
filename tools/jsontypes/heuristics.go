@@ -385,10 +385,11 @@ func capitalize(s string) string {
 // shouldMergeObjects decides whether a pool of objects should be treated as
 // one struct type with optional fields, rather than multiple distinct types.
 //
-// Heuristic: if ≥ 2 keys appear in more than half the objects, the objects
+// Heuristic: if ≥ 1 key appears in more than half the objects, the objects
 // likely share a common shape with optional fields. This catches the common
 // case of API responses where every record has the same core fields but some
-// records have extra ones (e.g. pagination results).
+// records have extra ones (e.g. pagination results). Objects with no shared
+// keys are left as separate types.
 func shouldMergeObjects(objects []map[string]any) bool {
 	n := len(objects)
 	if n < 2 {
@@ -412,8 +413,8 @@ func shouldMergeObjects(objects []map[string]any) bool {
 		}
 	}
 
-	// Two or more high-frequency keys means the objects share a common core.
-	return highFreq >= 2
+	// One or more high-frequency keys means the objects share a common core.
+	return highFreq >= 1
 }
 
 func singularize(s string) string {
