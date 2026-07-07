@@ -45,31 +45,35 @@ const (
 	defaultLogPath        = "../migrations.log"
 	sqlCommandPSQL        = `psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --tuples-only --file %s`
 	sqlCommandMariaDB     = `mariadb --defaults-extra-file="$MY_CNF" --silent --skip-column-names --raw < %s`
+	sqlCommandMariaDBAlt  = `mariadb --defaults-extra-file="$MY_CNF" -s -N --raw < %s`
 	sqlCommandMySQL       = `mysql --defaults-extra-file="$MY_CNF" --silent --skip-column-names --raw < %s`
+	sqlCommandMySQLAlt    = `mysql --defaults-extra-file="$MY_CNF" -s -N --raw < %s`
 	sqlCommandSQLite      = `sqlite3 "$SQLITE_PATH" < %s`
 	sqlCommandSQLCmd      = `sqlcmd --exit-on-error --headers -1 --trim-spaces --encrypt-connection strict --input-file %s`
 	LOG_QUERY_NAME        = "_migrations.sql"
+	defaultTableName      = "_migrations"
 	M_MIGRATOR_NAME       = "0001-01-01-001000_init-migrations"
 	M_MIGRATOR_UP_NAME    = "0001-01-01-001000_init-migrations.up.sql"
 	M_MIGRATOR_DOWN_NAME  = "0001-01-01-001000_init-migrations.down.sql"
 	defaultMigratorUpTmpl = `-- Config variables for sql-migrate (do not delete)
 -- sql_command: %s
 -- migrations_log: %s
+-- migrations_table: %s
 --
 
-CREATE TABLE IF NOT EXISTS _migrations (
+CREATE TABLE IF NOT EXISTS __MIGRATIONS_TABLE__ (
    id CHAR(8) PRIMARY KEY,
    name VARCHAR(80) NULL UNIQUE,
    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- note: to enable text-based tools to grep and sort we put 'name' before 'id'
---       grep -r 'INSERT INTO _migrations' ./sql/migrations/ | cut -d':' -f2 | sort
-INSERT INTO _migrations (name, id) VALUES ('0001-01-01-001000_init-migrations', '00000001');
+--       grep -r 'INSERT INTO __MIGRATIONS_TABLE__' ./sql/migrations/ | cut -d':' -f2 | sort
+INSERT INTO __MIGRATIONS_TABLE__ (name, id) VALUES ('0001-01-01-001000_init-migrations', '00000001');
 `
-	defaultMigratorDown = `DELETE FROM _migrations WHERE id = '00000001';
+	defaultMigratorDown = `DELETE FROM __MIGRATIONS_TABLE__ WHERE id = '00000001';
 
-DROP TABLE IF EXISTS _migrations;
+DROP TABLE IF EXISTS __MIGRATIONS_TABLE__;
 `
 	// Used for detection during auto-upgrade.
 	logMigrationsQueryPrev2_2_0 = `SELECT name FROM _migrations ORDER BY name;`
@@ -122,6 +126,13 @@ NOTES
 	The initial migration file contains configuration variables:
 		-- migrations_log: ./sql/migrations.log
 		-- sql_command: psql "$PG_URL" -v ON_ERROR_STOP=on --no-align --tuples-only --file %s
+		-- migrations_table: _migrations
+
+	Use --table on init to use a different table name (default: _migrations).
+	This is useful when you need multiple migration tables (e.g., per-tenant schemas
+	or shared databases with multiple apps).
+
+	The log is generated on each migration file contains a list of all migrations:
 
 	The log is generated on each migration file contains a list of all migrations:
       0001-01-01-001000_init-migrations.up.sql
@@ -176,9 +187,9 @@ var (
 	commentStartRe = regexp.MustCompile(`(^|\s+)#.*`)
 )
 
-// logMigrationsSelect returns the DB-specific SELECT line for _migrations.
+// logMigrationsSelect returns the DB-specific SELECT line for the migrations table.
 // The output format is "id<tab>name" per row, compatible with shmigrate.Applied().
-func logMigrationsSelect(sqlCommand string) string {
+func logMigrationsSelect(sqlCommand, tableName string) string {
 	var selectExpr string
 	switch {
 	case strings.Contains(sqlCommand, "psql"):
@@ -190,15 +201,16 @@ func logMigrationsSelect(sqlCommand string) string {
 	case strings.Contains(sqlCommand, "sqlcmd"):
 		selectExpr = "id + CHAR(9) + name"
 	default:
-		fmt.Fprintf(os.Stderr, "Error: unrecognized --sql-command %q; cannot generate _migrations.sql\n", sqlCommand)
+		fmt.Fprintf(os.Stderr, "Error: unrecognized --sql-command %q; cannot generate %s.sql\n", sqlCommand, tableName)
 		os.Exit(1)
 	}
-	return fmt.Sprintf("SELECT %s FROM _migrations ORDER BY name;", selectExpr)
+	return fmt.Sprintf("SELECT %s FROM %s ORDER BY name;", selectExpr, tableName)
 }
 
 type State struct {
 	Date          time.Time
 	SQLCommand    string
+	TableName     string
 	Lines         []string
 	Migrated      []string
 	MigrationsDir string
@@ -209,6 +221,7 @@ type MainConfig struct {
 	migrationsDir string
 	logPath       string
 	sqlCommand    string
+	tableName     string
 }
 
 func main() {
@@ -258,6 +271,7 @@ func main() {
 		fsSub = flag.NewFlagSet("init", flag.ExitOnError)
 		fsSub.StringVar(&cfg.logPath, "migrations-log", "", fmt.Sprintf("migration log file (default: %s) relative to and saved in %s", defaultLogPath, M_MIGRATOR_NAME))
 		fsSub.StringVar(&cfg.sqlCommand, "sql-command", sqlCommandPSQL, "construct scripts with this to execute SQL files: 'psql', 'mysql', 'mariadb', 'sqlite', 'sqlcmd', or custom arguments")
+		fsSub.StringVar(&cfg.tableName, "table", defaultTableName, "name of the migrations tracking table")
 	case "create", "sync", "up", "down", "status", "list":
 		fsSub = flag.NewFlagSet(subcmd, flag.ExitOnError)
 	default:
@@ -327,14 +341,14 @@ func main() {
 		Date:          today,
 		MigrationsDir: cfg.migrationsDir,
 	}
-	state.SQLCommand, state.LogPath, err = extractVars(mMigratorUpPath)
+	state.SQLCommand, state.LogPath, state.TableName, err = extractVars(mMigratorUpPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: couldn't read config from initial migration: %v\n", err)
 		os.Exit(1)
 	}
 
 	// auto-upgrade _migrations.sql to include id in output
-	maybeUpgradeLogQuery(logQueryPath, state.SQLCommand)
+	maybeUpgradeLogQuery(logQueryPath, state.SQLCommand, state.TableName)
 
 	logText, err := os.ReadFile(state.LogPath)
 	if err != nil {
@@ -538,6 +552,14 @@ func mustInit(cfg *MainConfig) {
 	fmt.Fprintf(os.Stderr, "Initializing %q ...\n", cfg.migrationsDir)
 
 	var resolvedLogPath = cfg.logPath
+	tableName := cfg.tableName
+	if tableName == "" {
+		tableName = defaultTableName
+	}
+	if !regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`).MatchString(tableName) {
+		fmt.Fprintf(os.Stderr, "Error: --table %q is not a valid SQL identifier\n", tableName)
+		os.Exit(1)
+	}
 	if cfg.sqlCommand != "" && !strings.Contains(cfg.sqlCommand, "%s") {
 		fmt.Fprintf(os.Stderr, "Error: --sql-command must contain a literal '%%s' to accept the path to the SQL file\n")
 		os.Exit(1)
@@ -578,7 +600,10 @@ func mustInit(cfg *MainConfig) {
 			// }
 		}
 
-		migratorUpQuery := fmt.Sprintf(defaultMigratorUpTmpl, cfg.sqlCommand, resolvedLogPath)
+		migratorUpQuery := strings.ReplaceAll(
+			fmt.Sprintf(defaultMigratorUpTmpl, cfg.sqlCommand, resolvedLogPath, tableName),
+			"__MIGRATIONS_TABLE__", tableName,
+		)
 		if created, err := initFile(mMigratorUpPath, migratorUpQuery); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: init couldn't create initial up migration: %v\n", err)
 			os.Exit(1)
@@ -590,7 +615,7 @@ func mustInit(cfg *MainConfig) {
 	state := State{
 		MigrationsDir: cfg.migrationsDir,
 	}
-	state.SQLCommand, state.LogPath, err = extractVars(mMigratorUpPath)
+	state.SQLCommand, state.LogPath, state.TableName, err = extractVars(mMigratorUpPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: init couldn't read config from initial migration: %v\n", err)
 		os.Exit(1)
@@ -609,11 +634,18 @@ func mustInit(cfg *MainConfig) {
 		)
 		os.Exit(1)
 	}
+	if cfg.tableName != "" && cfg.tableName != state.TableName {
+		fmt.Fprintf(os.Stderr,
+			"--table %q does not match %q from %q\n(drop the --table flag, or update the init migrations file)\n",
+			cfg.tableName, state.TableName, mMigratorUpPath,
+		)
+		os.Exit(1)
+	}
 
 	if slices.Contains(downs, M_MIGRATOR_NAME) {
 		fmt.Fprintf(os.Stderr, "     found %s\n", filepathUnclean(mMigratorDownPath))
 	} else {
-		migratorDownQuery := defaultMigratorDown
+		migratorDownQuery := strings.ReplaceAll(defaultMigratorDown, "__MIGRATIONS_TABLE__", state.TableName)
 		if created, err := initFile(mMigratorDownPath, migratorDownQuery); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: init couldn't create initial up migration: %v\n", err)
 			os.Exit(1)
@@ -627,7 +659,7 @@ func mustInit(cfg *MainConfig) {
 	if strings.Contains(state.SQLCommand, "sqlcmd") {
 		queryHeader += logMigrationsQuerySQLCmdNote
 	}
-	if created, err := initFile(logQueryPath, queryHeader+logMigrationsSelect(state.SQLCommand)+"\n"); err != nil {
+	if created, err := initFile(logQueryPath, queryHeader+logMigrationsSelect(state.SQLCommand, state.TableName)+"\n"); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: init couldn't create migrations query: %v\n", err)
 		os.Exit(1)
 	} else if created {
@@ -643,10 +675,10 @@ func mustInit(cfg *MainConfig) {
 	}
 }
 
-// maybeUpgradeLogQuery replaces the old name-only SELECT in _migrations.sql
+// maybeUpgradeLogQuery replaces the old name-only SELECT in the log query file
 // with the new id+name SELECT. Only the matching line is replaced; comments
 // and other customizations are preserved.
-func maybeUpgradeLogQuery(path, sqlCommand string) {
+func maybeUpgradeLogQuery(path, sqlCommand, tableName string) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return
@@ -655,7 +687,7 @@ func maybeUpgradeLogQuery(path, sqlCommand string) {
 	var lines []string
 	for line := range strings.SplitSeq(string(b), "\n") {
 		if !replaced && strings.TrimSpace(line) == logMigrationsQueryPrev2_2_0 {
-			line = logMigrationsSelect(sqlCommand)
+			line = logMigrationsSelect(sqlCommand, tableName)
 			replaced = true
 		}
 		lines = append(lines, line)
@@ -683,10 +715,10 @@ func initFile(path, contents string) (bool, error) {
 	return true, nil
 }
 
-func extractVars(curMigrationPath string) (sqlCommand string, logPath string, err error) {
+func extractVars(curMigrationPath string) (sqlCommand string, logPath string, tableName string, err error) {
 	f, err := os.Open(curMigrationPath)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	defer f.Close()
 
@@ -695,6 +727,7 @@ func extractVars(curMigrationPath string) (sqlCommand string, logPath string, er
 	var logPathRel string
 	var logPathPrefix = "-- migrations_log:"
 	var commandPrefix = "-- sql_command:"
+	var tablePrefix = "-- migrations_table:"
 	for scanner.Scan() {
 		txt := scanner.Text()
 		txt = strings.TrimSpace(txt)
@@ -704,20 +737,23 @@ func extractVars(curMigrationPath string) (sqlCommand string, logPath string, er
 		} else if strings.HasPrefix(txt, commandPrefix) {
 			sqlCommand = strings.TrimSpace(txt[len(commandPrefix):])
 			continue
+		} else if strings.HasPrefix(txt, tablePrefix) {
+			tableName = strings.TrimSpace(txt[len(tablePrefix):])
+			continue
 		}
 	}
 
 	if logPathRel == "" {
-		return "", "", fmt.Errorf("Could not find '-- migrations_log: <relative-path>' in %q", curMigrationPath)
+		return "", "", "", fmt.Errorf("Could not find '-- migrations_log: <relative-path>' in %q", curMigrationPath)
 	}
 	if sqlCommand == "" {
-		return "", "", fmt.Errorf("Could not find '-- sql_command: <args>' in %q", curMigrationPath)
+		return "", "", "", fmt.Errorf("Could not find '-- sql_command: <args>' in %q", curMigrationPath)
+	}
+	if tableName == "" {
+		tableName = defaultTableName
 	}
 
-	// migrationsDir := filepath.Dir(curMigrationPath)
-	// logPath = filepath.Join(migrationsDir, logPathRel)
-	// return sqlCommand, logPath, nil
-	return sqlCommand, logPathRel, nil
+	return sqlCommand, logPathRel, tableName, nil
 }
 
 func migrationsLogInit(state *State, subcmd string) error {
@@ -764,7 +800,7 @@ func (state *State) parseAndFixupBatches(text string) error {
 			continue
 		}
 		if migration != "" {
-			up, down, warn, err := fixupMigration(state.MigrationsDir, migration)
+			up, down, warn, err := fixupMigration(state.MigrationsDir, migration, state.TableName)
 			if warn != nil {
 				fmt.Fprintf(os.Stderr, "Warn: %s\n", warn)
 			}
@@ -782,14 +818,14 @@ func (state *State) parseAndFixupBatches(text string) error {
 		}
 		state.Lines[i] = line
 	}
-	showFixes(fixedUp, fixedDown)
+	showFixes(fixedUp, fixedDown, state.TableName)
 
 	return nil
 }
 
-func showFixes(fixedUp, fixedDown []string) {
+func showFixes(fixedUp, fixedDown []string, tableName string) {
 	if len(fixedUp) > 0 {
-		fmt.Fprintf(os.Stderr, "Fixup: appended missing 'INSERT INTO _migrations ...' to:\n")
+		fmt.Fprintf(os.Stderr, "Fixup: appended missing 'INSERT INTO %s ...' to:\n", tableName)
 		for _, up := range fixedUp {
 			fmt.Fprintf(os.Stderr, "   %s\n", up)
 		}
@@ -797,7 +833,7 @@ func showFixes(fixedUp, fixedDown []string) {
 	}
 
 	if len(fixedDown) > 0 {
-		fmt.Fprintf(os.Stderr, "Fixup: appended missing 'DELETE FROM _migrations ...' to:\n")
+		fmt.Fprintf(os.Stderr, "Fixup: appended missing 'DELETE FROM %s ...' to:\n", tableName)
 		for _, down := range fixedDown {
 			fmt.Fprintf(os.Stderr, "   %s\n", down)
 		}
@@ -871,10 +907,11 @@ func create(state *State, desc string) error {
 	// Little Bobby Drop Tables says:
 	// We trust the person running the migrations to not use malicious names.
 	// (we don't want to embed db-specific logic here, and SQL doesn't define escaping)
-	migrationInsert := fmt.Sprintf("INSERT INTO _migrations (name, id) VALUES ('%s', '%s');", basename, id)
+	tableName := state.TableName
+	migrationInsert := fmt.Sprintf("INSERT INTO %s (name, id) VALUES ('%s', '%s');", tableName, basename, id)
 	upContent := fmt.Appendf(nil, "-- %s (up)\nSELECT 'place your UP migration here';\n\n-- leave this as the last line\n%s\n", desc, migrationInsert)
 	_ = os.WriteFile(upPath, upContent, 0644)
-	migrationDelete := fmt.Sprintf("DELETE FROM _migrations WHERE id = '%s';", id)
+	migrationDelete := fmt.Sprintf("DELETE FROM %s WHERE id = '%s';", tableName, id)
 	downContent := fmt.Appendf(nil, "-- %s (down)\nSELECT 'place your DOWN migration here';\n\n-- leave this as the last line\n%s\n", desc, migrationDelete)
 	_ = os.WriteFile(downPath, downContent, 0644)
 
@@ -901,7 +938,7 @@ func RandomHex(n int) (string, error) {
 }
 
 // attempts to add missing INSERT and DELETE without breaking what already works
-func fixupMigration(dir string, basename string) (up, down bool, warn error, err error) {
+func fixupMigration(dir string, basename, tableName string) (up, down bool, warn error, err error) {
 	var id string
 
 	var insertsOnUp bool
@@ -916,7 +953,7 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 		txt := scanner.Text()
 		txt = strings.TrimSpace(txt)
 		txt = strings.ToLower(txt)
-		if strings.HasPrefix(txt, "insert into _migrations") {
+		if strings.HasPrefix(txt, "insert into "+strings.ToLower(tableName)) {
 			insertsOnUp = true
 			break
 		}
@@ -926,14 +963,14 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 		upScan.Close()
 		upBytes, err := os.ReadFile(upPath)
 		if err != nil {
-			warn = fmt.Errorf("failed to add 'INSERT INTO _migrations ...' to %s: %w", upPath, err)
+			warn = fmt.Errorf("failed to add 'INSERT INTO %s ...' to %s: %w", tableName, upPath, err)
 			return false, false, warn, nil
 		}
 
-		migrationInsertLn := fmt.Sprintf("\n-- leave this as the last line\nINSERT INTO _migrations (name, id) VALUES ('%s', '%s');\n", basename, id)
+		migrationInsertLn := fmt.Sprintf("\n-- leave this as the last line\nINSERT INTO %s (name, id) VALUES ('%s', '%s');\n", tableName, basename, id)
 		upBytes = append(upBytes, []byte(migrationInsertLn)...)
 		if err = os.WriteFile(upPath, upBytes, 0644); err != nil {
-			warn = fmt.Errorf("failed to append 'INSERT INTO _migrations ...' to %s: %w", upPath, err)
+			warn = fmt.Errorf("failed to append 'INSERT INTO %s ...' to %s: %w", tableName, upPath, err)
 			return false, false, warn, nil
 		}
 		up = true
@@ -951,27 +988,27 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 		txt := scanner.Text()
 		txt = strings.TrimSpace(txt)
 		txt = strings.ToLower(txt)
-		if strings.HasPrefix(txt, "delete from _migrations") {
+		if strings.HasPrefix(txt, "delete from "+strings.ToLower(tableName)) {
 			deletesOnDown = true
 			break
 		}
 	}
 	if !deletesOnDown {
 		if id == "" {
-			return false, false, fmt.Errorf("must manually append \"DELETE FROM _migrations WHERE id = '<id>'\" to %s with id from %s", downPath, basename+".up.sql"), nil
+			return false, false, fmt.Errorf("must manually append \"DELETE FROM %s WHERE id = '<id>'\" to %s with id from %s", tableName, downPath, basename+".up.sql"), nil
 		}
 		downScan.Close()
 		downFile, err := os.OpenFile(downPath, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
-			warn = fmt.Errorf("failed to append 'DELETE FROM _migrations ...' to %s: %v", downPath, err)
+			warn = fmt.Errorf("failed to append 'DELETE FROM %s ...' to %s: %v", tableName, downPath, err)
 			return false, false, warn, nil
 		}
 		defer downFile.Close()
 
-		migrationInsertLn := fmt.Sprintf("\nDELETE FROM _migrations WHERE id = '%s';\n", id)
+		migrationInsertLn := fmt.Sprintf("\nDELETE FROM %s WHERE id = '%s';\n", tableName, id)
 		_, err = downFile.Write(([]byte(migrationInsertLn)))
 		if err != nil {
-			warn = fmt.Errorf("failed to add 'DELETE FROM _migrations ...' to %s: %w", downPath, err)
+			warn = fmt.Errorf("failed to add 'DELETE FROM %s ...' to %s: %w", tableName, downPath, err)
 			return false, false, warn, nil
 		}
 		down = true
@@ -993,7 +1030,7 @@ func syncLog(runner *shmigrate.Migrator) {
 
 func cmdUp(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Script, n int) error {
 	// fixup pending migrations before generating the script
-	fixedUp, fixedDown := fixupAll(state.MigrationsDir, state.Migrated, migrations)
+	fixedUp, fixedDown := fixupAll(state.MigrationsDir, state.Migrated, migrations, state.TableName)
 
 	status, err := sqlmigrate.GetStatus(ctx, runner, migrations)
 	if err != nil {
@@ -1022,13 +1059,13 @@ func cmdUp(ctx context.Context, state *State, runner *shmigrate.Migrator, migrat
 
 	fmt.Println("cat", filepathUnclean(runner.LogPath))
 
-	showFixes(fixedUp, fixedDown)
+	showFixes(fixedUp, fixedDown, state.TableName)
 	return nil
 }
 
 func cmdDown(ctx context.Context, state *State, runner *shmigrate.Migrator, migrations []sqlmigrate.Script, n int) error {
 	// fixup applied migrations before generating the script
-	fixedUp, fixedDown := fixupAll(state.MigrationsDir, state.Migrated, migrations)
+	fixedUp, fixedDown := fixupAll(state.MigrationsDir, state.Migrated, migrations, state.TableName)
 
 	status, err := sqlmigrate.GetStatus(ctx, runner, migrations)
 	if err != nil {
@@ -1076,7 +1113,7 @@ func cmdDown(ctx context.Context, state *State, runner *shmigrate.Migrator, migr
 
 	fmt.Println("cat", filepathUnclean(runner.LogPath))
 
-	showFixes(fixedUp, fixedDown)
+	showFixes(fixedUp, fixedDown, state.TableName)
 	return nil
 }
 
@@ -1115,7 +1152,7 @@ func cmdStatus(ctx context.Context, state *State, runner *shmigrate.Migrator, mi
 }
 
 // fixupAll runs fixupMigration on all known migrations (applied + pending).
-func fixupAll(migrationsDir string, applied []string, migrations []sqlmigrate.Script) (fixedUp, fixedDown []string) {
+func fixupAll(migrationsDir string, applied []string, migrations []sqlmigrate.Script, tableName string) (fixedUp, fixedDown []string) {
 	seen := map[string]bool{}
 	var all []string
 	for _, name := range applied {
@@ -1132,7 +1169,7 @@ func fixupAll(migrationsDir string, applied []string, migrations []sqlmigrate.Sc
 	}
 
 	for _, name := range all {
-		up, down, warn, err := fixupMigration(migrationsDir, name)
+		up, down, warn, err := fixupMigration(migrationsDir, name, tableName)
 		if warn != nil {
 			fmt.Fprintf(os.Stderr, "Warn: %s\n", warn)
 		}

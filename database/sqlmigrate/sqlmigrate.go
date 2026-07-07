@@ -30,7 +30,7 @@ var (
 
 // Migration identifies a migration by its name and optional hex ID.
 type Migration struct {
-	ID   string // 8-char hex from INSERT INTO _migrations, parsed by Collect
+	ID   string // hex ID from INSERT INTO migrations table, parsed by Collect
 	Name string // e.g. "2026-04-05-001000_create-todos"
 }
 
@@ -58,22 +58,22 @@ type Migrator interface {
 	// ExecDown runs the down migration SQL.
 	ExecDown(ctx context.Context, m Migration, sql string) error
 
-	// Applied returns all applied migrations from the _migrations table,
+	// Applied returns all applied migrations from the migrations table,
 	// sorted lexicographically by name. Returns an empty slice (not an
 	// error) if the migrations table or log does not exist yet.
 	Applied(ctx context.Context) ([]Migration, error)
 }
 
-// idFromInsert extracts the hex ID from an INSERT INTO _migrations line.
-// Matches: INSERT INTO [schema.]_migrations (name, id) VALUES ('...', '<hex>');
+// idFromInsert extracts the hex ID from an INSERT INTO migrations line.
+// Matches: INSERT INTO [schema.]<table> (name, id) VALUES ('...', '<hex>');
 var idFromInsert = regexp.MustCompile(
-	`(?i)INSERT\s+INTO\s+(?:\w+\.)?_migrations\s*\(\s*name\s*,\s*id\s*\)\s*VALUES\s*\(\s*'[^']*'\s*,\s*'([0-9a-fA-F]+)'\s*\)`,
+	`(?i)INSERT\s+INTO\s+(?:\w+\.)?\w+\s*\(\s*name\s*,\s*id\s*\)\s*VALUES\s*\(\s*'[^']*'\s*,\s*'([0-9a-fA-F]+)'\s*\)`,
 )
 
 // Collect reads .up.sql and .down.sql files from fsys under subpath,
 // pairs them by basename, and returns them sorted lexicographically by name.
 // If subpath is "" or ".", the root of fsys is used.
-// If the up SQL contains an INSERT INTO _migrations line, the hex ID
+// If the up SQL contains an INSERT INTO migrations table line, the hex ID
 // is extracted and stored in Script.ID.
 func Collect(fsys fs.FS, subpath string) ([]Script, error) {
 	if subpath != "" && subpath != "." {
