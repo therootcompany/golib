@@ -688,7 +688,7 @@ func extractVars(curMigrationPath string) (sqlCommand string, logPath string, er
 	if err != nil {
 		return "", "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 
@@ -708,10 +708,10 @@ func extractVars(curMigrationPath string) (sqlCommand string, logPath string, er
 	}
 
 	if logPathRel == "" {
-		return "", "", fmt.Errorf("Could not find '-- migrations_log: <relative-path>' in %q", curMigrationPath)
+		return "", "", fmt.Errorf("could not find '-- migrations_log: <relative-path>' in %q", curMigrationPath)
 	}
 	if sqlCommand == "" {
-		return "", "", fmt.Errorf("Could not find '-- sql_command: <args>' in %q", curMigrationPath)
+		return "", "", fmt.Errorf("could not find '-- sql_command: <args>' in %q", curMigrationPath)
 	}
 
 	// migrationsDir := filepath.Dir(curMigrationPath)
@@ -910,7 +910,7 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 	if err != nil {
 		return false, false, nil, fmt.Errorf("failed (up): %w", err)
 	}
-	defer upScan.Close()
+	defer func() { _ = upScan.Close() }()
 	scanner := bufio.NewScanner(upScan)
 	for scanner.Scan() {
 		txt := scanner.Text()
@@ -923,7 +923,7 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 	}
 	if !insertsOnUp {
 		id = MustRandomHex(4)
-		upScan.Close()
+		_ = upScan.Close()
 		upBytes, err := os.ReadFile(upPath)
 		if err != nil {
 			warn = fmt.Errorf("failed to add 'INSERT INTO _migrations ...' to %s: %w", upPath, err)
@@ -945,7 +945,7 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 	if err != nil {
 		return false, false, fmt.Errorf("failed (down): %w", err), nil
 	}
-	defer downScan.Close()
+	defer func() { _ = downScan.Close() }()
 	scanner = bufio.NewScanner(downScan)
 	for scanner.Scan() {
 		txt := scanner.Text()
@@ -960,13 +960,13 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 		if id == "" {
 			return false, false, fmt.Errorf("must manually append \"DELETE FROM _migrations WHERE id = '<id>'\" to %s with id from %s", downPath, basename+"up.sql"), nil
 		}
-		downScan.Close()
+		_ = downScan.Close()
 		downFile, err := os.OpenFile(downPath, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			warn = fmt.Errorf("failed to append 'DELETE FROM _migrations ...' to %s: %v", downPath, err)
 			return false, false, warn, nil
 		}
-		defer downFile.Close()
+		defer func() { _ = downScan.Close() }()
 
 		migrationInsertLn := fmt.Sprintf("\nDELETE FROM _migrations WHERE id = '%s';\n", id)
 		_, err = downFile.Write(([]byte(migrationInsertLn)))
