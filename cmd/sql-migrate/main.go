@@ -958,7 +958,7 @@ func fixupMigration(dir string, basename string) (up, down bool, warn error, err
 	}
 	if !deletesOnDown {
 		if id == "" {
-			return false, false, fmt.Errorf("must manually append \"DELETE FROM _migrations WHERE id = '<id>'\" to %s with id from %s", downPath, basename+"up.sql"), nil
+			return false, false, fmt.Errorf("must manually append \"DELETE FROM _migrations WHERE id = '<id>'\" to %s with id from %s", downPath, basename+".up.sql"), nil
 		}
 		_ = downScan.Close()
 		downFile, err := os.OpenFile(downPath, os.O_APPEND|os.O_WRONLY, 0o644)
