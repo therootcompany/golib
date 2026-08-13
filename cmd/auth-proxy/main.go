@@ -108,8 +108,8 @@ func main() {
 		QueryParamNames:            nil, // []string{"access_token", "token"},
 	}
 
-	// Peek for --envfile early
-	envPath := peekOption(os.Args[1:], []string{"-envfile", "--envfile"}, ".env")
+	// Peek for --env-file (also accepts --envfile for backwards compatibility)
+	envPath := peekOption(os.Args[1:], []string{"-env-file", "--env-file", "-envfile", "--envfile"}, ".env")
 	_ = godotenv.Load(envPath) // silent if missing
 
 	// Override defaults from env
