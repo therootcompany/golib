@@ -56,6 +56,7 @@ type MainConfig struct {
 	delay       time.Duration
 	verbose     bool
 	confirmed   bool
+	envFile     string
 }
 
 const (
@@ -78,7 +79,11 @@ func main() {
 		maxDelay: 2 * time.Minute,
 	}
 
-	_ = godotenv.Load("./.env")
+	envFileFlag, hasEnvFile := peekOption(os.Args[1:], []string{"-env-file", "--env-file", "-envfile", "--envfile"}, "./.env")
+	if err := godotenv.Load(envFileFlag); err != nil && hasEnvFile {
+		fmt.Fprintf(os.Stderr, "%sError%s: could not load env file %q: %v\n", textErr, textReset, envFileFlag, err)
+		os.Exit(1)
+	}
 
 	// note: we could also use twilio, or whatever
 	var sender SMSSender = androidsmsgateway.New(
@@ -104,6 +109,7 @@ func main() {
 	now := time.Now()
 	zoneName, offset := now.Zone()
 
+	flag.StringVar(&cfg.envFile, "env-file", "", "path to .env file (default: ./.env)")
 	flag.BoolVar(&cfg.confirmed, "y", false, "Confirm without prompting")
 	flag.BoolVar(&cfg.verbose, "verbose", false, "Show parse warnings and other debug info")
 	flag.BoolVar(&cfg.dryRun, "dry-run", false, "Skip sending messages and sleeping, runs without confirmation")
@@ -619,4 +625,18 @@ func parseClock(s string, ref time.Time) (t time.Time, err error) {
 
 	t = time.Date(ref.Year(), ref.Month(), ref.Day(), hour, min, 0, 0, ref.Location())
 	return t, nil
+}
+
+// peekOption looks for a flag value without parsing the full set
+func peekOption(args []string, names []string, def string) (string, bool) {
+	for i := range len(args) {
+		for _, name := range names {
+			if args[i] == name {
+				if i+1 < len(args) {
+					return args[i+1], true
+				}
+			}
+		}
+	}
+	return def, false
 }
