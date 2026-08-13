@@ -133,8 +133,6 @@
 //
 // 3. Algorithms: The fewer the merrier.
 //
-// Only asymmetric (public-key) algorithms are implemented.
-//
 // You should use Ed25519. It's the end-game algorithm - all upside, no known
 // downsides, and it's supported ubiquitously - Go, JavaScript, Web Browsers, Node, Rust,
 // etc.
@@ -143,16 +141,25 @@
 // ECDSA is provided for backwards compatibility with existing systems.
 // RSA is provided only for backwards compatibility - it's larger, slower, with no real benefit.
 //
+// Supported algorithms are derived automatically from the key type - you never configure alg
+// directly.
+//
+// The verification process selects a key by matching the "kid" (KeyID) of token
+// and the key and then checking "alg" before any cryptographic operation is attempted.
+// An alg/key-type mismatch is a hard error.
+//
 //   - EC P-256  => ES256 (ECDSA + SHA-256, RFC 7518 §3.4)
 //   - EC P-384  => ES384 (ECDSA + SHA-384)
 //   - EC P-521  => ES512 (ECDSA + SHA-512)
 //   - RSA       => RS256 (PKCS#1 v1.5 + SHA-256, RFC 7518 §3.3)
 //   - Ed25519   => EdDSA (RFC 8037)
 //
-// Supported algorithms are derived automatically from the key type - you never
-// configure alg directly.
+// HMAC is also provided for backwards compatibility - it's the least secure,
+// most difficult to manage, and should not be used in new software. This implementation is not
+// vulnerable to common misuse as it must be used explicitly and does not allow extremely short
+// secrets which are typical of example code.
 //
-// The verification process selects a key by matching the "kid" (KeyID) of token
-// and the key and then checking "alg" before any cryptographic operation is attempted.
-// An alg/key-type mismatch is a hard error.
+//   - HS256  => HMAC + SHA-256, RFC 2104
+//   - HS384  => HMAC + SHA-384
+//   - HS512  => HMAC + SHA-512
 package jwt
