@@ -39,6 +39,8 @@ type Signer struct {
 	signerIdx atomic.Uint64
 }
 
+var _ jwtsigner[*Verifier] = (*Signer)(nil)
+
 // NewSigner creates a Signer from the provided signing keys.
 //
 // NewSigner normalises each key:
