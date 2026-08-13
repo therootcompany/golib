@@ -36,6 +36,8 @@ type Verifier struct {
 	pubKeys []PublicKey
 }
 
+var _ jwtverifier = (*Verifier)(nil)
+
 // NewVerifier creates a Verifier with an explicit set of public keys.
 //
 // Multiple keys may share the same KID (e.g. during key rotation).
