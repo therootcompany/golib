@@ -1,0 +1,17 @@
+module github.com/therootcompany/golib/cmd/sql-migrate/examples/my-todos
+
+go 1.26.1
+
+require (
+	github.com/go-sql-driver/mysql v1.9.3
+	github.com/joho/godotenv v1.5.1
+	github.com/therootcompany/golib/database/sqlmigrate v1.0.2
+	github.com/therootcompany/golib/database/sqlmigrate/mymigrate v1.0.2
+)
+
+require filippo.io/edwards25519 v1.1.0 // indirect
+
+replace (
+	github.com/therootcompany/golib/database/sqlmigrate => ../../../../database/sqlmigrate
+	github.com/therootcompany/golib/database/sqlmigrate/mymigrate => ../../../../database/sqlmigrate/mymigrate
+)
