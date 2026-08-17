@@ -20,6 +20,8 @@ import (
 	"os"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/therootcompany/golib/https"
 )
 
 const (
@@ -31,8 +33,8 @@ const (
 
 var ErrHTTPGet = errors.New("did not get 200 OK when downloading from URL")
 
-// For mocking for tests
-var httpGet = http.Get
+var httpClient = https.NewDefaultClient()
+var httpGet = httpClient.Get // since Get function is used and this allows mocking
 
 type Reader struct {
 	*csv.Reader
