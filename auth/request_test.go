@@ -200,6 +200,53 @@ func TestAuthenticate_CookiePriorityLowerThanQueryParam(t *testing.T) {
 	}
 }
 
+// --- Tier 3: Broader coverage ---
+
+// TestAuthenticate_BearerAnyScheme verifies that AuthorizationSchemes ["*"]
+// accepts any scheme.
+func TestAuthenticate_BearerAnyScheme(t *testing.T) {
+	mock := &mockAuthenticator{principle: mockPrinciple{id: "user1"}}
+	ra := &auth.BasicRequestAuthenticator{
+		Authenticator:        mock,
+		AuthorizationSchemes: []string{"*"},
+	}
+	r := newRequest("GET", "/")
+	r.Header.Set("Authorization", "Custom abc123")
+
+	_, err := ra.Authenticate(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.lastToken != "abc123" {
+		t.Errorf("expected token %q, got %q", "abc123", mock.lastToken)
+	}
+}
+
+// TestAuthenticate_UnacceptedSchemeReturnsError verifies that an Authorization
+// header with an unaccepted scheme returns ErrNoCredentials rather than
+// falling through to cookies. BasicAuth is enabled so that step 1 is exercised
+// but does not match the Custom scheme.
+func TestAuthenticate_UnacceptedSchemeReturnsError(t *testing.T) {
+	mock := &mockAuthenticator{}
+	ra := &auth.BasicRequestAuthenticator{
+		Authenticator:        mock,
+		BasicAuth:            true,
+		AuthorizationSchemes: []string{"Bearer"},
+		TokenCookies:         []string{"session"},
+	}
+	r := newRequest("GET", "/")
+	r.Header.Set("Authorization", "Custom abc123")
+	r.AddCookie(&http.Cookie{Name: "session", Value: "cookie-token"})
+
+	_, err := ra.Authenticate(r)
+	if err != auth.ErrNoCredentials {
+		t.Fatalf("expected ErrNoCredentials for unaccepted scheme, got %v", err)
+	}
+	if mock.calls != 0 {
+		t.Fatalf("expected 0 calls to authenticator (no fall-through), got %d", mock.calls)
+	}
+}
+
 // TestAuthenticate_BasicAuthPriority verifies that Basic Auth (step 1) takes
 // priority over cookie-based tokens (step 5).
 func TestAuthenticate_BasicAuthPriority(t *testing.T) {
