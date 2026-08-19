@@ -131,6 +131,23 @@ func TestNewReaderFromURL(t *testing.T) {
 	}
 }
 
+func TestReadSkipsEmptyRecords(t *testing.T) {
+	reader := NewReader(strings.NewReader("a,b\n,,\n\"\",\"\"\nvalue,\n"))
+	rows, err := reader.ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"a", "b"}, {"value", ""}}
+	if len(rows) != len(want) {
+		t.Fatalf("rows = %v, want %v", rows, want)
+	}
+	for i := range want {
+		if !slices.Equal(rows[i], want[i]) {
+			t.Fatalf("rows = %v, want %v", rows, want)
+		}
+	}
+}
+
 // TestRead tests the Read method for comment handling.
 func TestRead(t *testing.T) {
 	tests := []struct {
