@@ -213,6 +213,17 @@ func (r *Reader) Read() ([]string, error) {
 			return nil, err
 		}
 
+		allEmpty := true
+		for _, field := range record {
+			if field != "" {
+				allEmpty = false
+				break
+			}
+		}
+		if allEmpty {
+			continue
+		}
+
 		if r.Comment > 0 {
 			if rv, _ := utf8.DecodeRuneInString(record[0]); rv == r.Comment {
 				last := len(record) - 1
