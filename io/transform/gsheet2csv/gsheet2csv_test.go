@@ -1,6 +1,7 @@
 package gsheet2csv
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -16,6 +17,10 @@ type mockHTTPClient struct {
 }
 
 func (m *mockHTTPClient) Get(url string) (*http.Response, error) {
+	return m.resp, m.err
+}
+
+func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return m.resp, m.err
 }
 
@@ -85,7 +90,8 @@ func TestParseIDs(t *testing.T) {
 // TestNewReaderFromURL tests initializing a Reader from a Google Sheets URL.
 func TestNewReaderFromURL(t *testing.T) {
 	originalGet := httpGet
-	defer func() { httpGet = originalGet }()
+	originalDo := httpDo
+	defer func() { httpGet = originalGet; httpDo = originalDo }()
 
 	url := "https://docs.google.com/spreadsheets/d/1KdNsc63pk0QRerWDPcIL9cMnGQlG-9Ue9Jlf0PAAA34/edit?gid=559037238"
 
@@ -96,6 +102,7 @@ func TestNewReaderFromURL(t *testing.T) {
 	}
 	client := &mockHTTPClient{resp: mockResp}
 	httpGet = client.Get
+	httpDo = client.Do
 
 	reader := NewReaderFromURL(url)
 	if reader.err != nil {
@@ -112,6 +119,7 @@ func TestNewReaderFromURL(t *testing.T) {
 	client = &mockHTTPClient{resp: mockResp}
 	client.err = errors.New("network error")
 	httpGet = client.Get
+	httpDo = client.Do
 
 	reader = NewReaderFromURL(url)
 	if reader.err == nil {
@@ -124,10 +132,54 @@ func TestNewReaderFromURL(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader("these aren't the droids you're looking for")),
 	}}
 	httpGet = client.Get
+	httpDo = client.Do
 
 	reader = NewReaderFromURL(url)
 	if reader.err == nil {
 		t.Error("NewReaderFromURL() expected error for non-200 status, got nil")
+	}
+}
+
+// TestNewReaderFromURLWithContext tests context-aware Reader initialization.
+func TestNewReaderFromURLWithContext(t *testing.T) {
+	originalDo := httpDo
+	defer func() { httpDo = originalDo }()
+
+	url := "https://docs.google.com/spreadsheets/d/1KdNsc63pk0QRerWDPcIL9cMnGQlG-9Ue9Jlf0PAAA34/edit?gid=559037238"
+
+	// Test cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client := &mockHTTPClient{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(sampleCSV)),
+		},
+		err: context.Canceled,
+	}
+	httpDo = client.Do
+
+	reader := NewReaderFromURLWithContext(ctx, url)
+	if reader.err == nil {
+		t.Error("NewReaderFromURLWithContext() expected error for cancelled context, got nil")
+	}
+
+	// Test successful context-aware fetch
+	client = &mockHTTPClient{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(sampleCSV)),
+		},
+	}
+	httpDo = client.Do
+
+	reader = NewReaderFromURLWithContext(context.Background(), url)
+	if reader.err != nil {
+		t.Errorf("NewReaderFromURLWithContext() unexpected error: %v", reader.err)
+	}
+	if !reader.close {
+		t.Error("NewReaderFromURLWithContext() did not set close flag")
 	}
 }
 
@@ -232,8 +284,10 @@ func TestNewReaderFromURLWithMalformedCSV(t *testing.T) {
 	}
 	client := &mockHTTPClient{resp: mockResp}
 	originalGet := httpGet
+	originalDo := httpDo
 	httpGet = client.Get
-	defer func() { httpGet = originalGet }()
+	httpDo = client.Do
+	defer func() { httpGet = originalGet; httpDo = originalDo }()
 
 	url := "https://docs.google.com/spreadsheets/d/1KdNsc63pk0QRerWDPcIL9cMnGQlG-9Ue9Jlf0PAAA34/edit?gid=559037238"
 	reader := NewReaderFromURL(url)

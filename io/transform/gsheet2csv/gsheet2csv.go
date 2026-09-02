@@ -12,6 +12,7 @@
 package gsheet2csv
 
 import (
+	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -35,6 +36,7 @@ var ErrHTTPGet = errors.New("did not get 200 OK when downloading from URL")
 
 var httpClient = https.NewDefaultClient()
 var httpGet = httpClient.Get // since Get function is used and this allows mocking
+var httpDo = httpClient.Do   // for context-aware requests
 
 type Reader struct {
 	*csv.Reader
@@ -49,8 +51,12 @@ type Reader struct {
 }
 
 func NewReaderFrom(urlOrPath string) *Reader {
+	return NewReaderFromWithContext(context.Background(), urlOrPath)
+}
+
+func NewReaderFromWithContext(ctx context.Context, urlOrPath string) *Reader {
 	if strings.HasPrefix(urlOrPath, "https://") || strings.HasPrefix(urlOrPath, "http://") {
-		return NewReaderFromURL(urlOrPath)
+		return NewReaderFromURLWithContext(ctx, urlOrPath)
 	}
 
 	urlOrPath = strings.TrimPrefix(urlOrPath, "file://")
@@ -65,13 +71,20 @@ func NewReaderFrom(urlOrPath string) *Reader {
 }
 
 func NewReaderFromURL(url string) *Reader {
-	docid, gid := ParseIDs(url)
+	return NewReaderFromURLWithContext(context.Background(), url)
+}
 
-	return NewReaderFromIDs(docid, gid)
+func NewReaderFromURLWithContext(ctx context.Context, url string) *Reader {
+	docid, gid := ParseIDs(url)
+	return NewReaderFromIDsWithContext(ctx, docid, gid)
 }
 
 func NewReaderFromIDs(docid, gid string) *Reader {
-	resp, err := GetSheet(docid, gid)
+	return NewReaderFromIDsWithContext(context.Background(), docid, gid)
+}
+
+func NewReaderFromIDsWithContext(ctx context.Context, docid, gid string) *Reader {
+	resp, err := GetSheetWithContext(ctx, docid, gid)
 	if err != nil {
 		r := NewReader(nil)
 		r.err = err
@@ -92,9 +105,18 @@ func ToCSVURL(docid, gid string) string {
 }
 
 func GetSheet(docid, gid string) (*http.Response, error) {
+	return GetSheetWithContext(context.Background(), docid, gid)
+}
+
+func GetSheetWithContext(ctx context.Context, docid, gid string) (*http.Response, error) {
 	downloadURL := ToCSVURL(docid, gid)
 
-	resp, err := httpGet(downloadURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := httpDo(req)
 	if err != nil {
 		return nil, err
 	}
