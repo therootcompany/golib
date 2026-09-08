@@ -35,10 +35,12 @@ func printVersion(w io.Writer) {
 	_, _ = fmt.Fprintf(w, "Licensed under %s\n", licenseType)
 }
 
+const defaultFailureBackoff = 6 * time.Hour
+
 type Config struct {
-	ConfPath string
-	Dir      string
-	BaseURL  string
+	ConfPath  string
+	Dir       string
+	BaseURL   string
 	FreshDays int
 }
 
@@ -114,6 +116,7 @@ func main() {
 			path,
 		)
 		cacher.MaxAge = maxAge
+		cacher.FailureBackoff = defaultFailureBackoff
 		cacher.Header = authHeader
 		fmt.Fprintf(os.Stderr, "Fetching %s... ", edition)
 		t := time.Now()
