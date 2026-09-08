@@ -7,7 +7,7 @@ require (
 	github.com/therootcompany/golib/net/formmailer v0.0.0
 	github.com/therootcompany/golib/net/geoip v0.0.0
 	github.com/therootcompany/golib/net/gitshallow v0.0.0
-	github.com/therootcompany/golib/net/httpcache v0.5.0
+	github.com/therootcompany/golib/net/httpcache v0.5.1
 	github.com/therootcompany/golib/net/ipcohort v0.0.0
 	github.com/therootcompany/golib/sync/dataset v0.0.0
 	golang.org/x/term v0.39.0
