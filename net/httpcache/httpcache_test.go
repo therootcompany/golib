@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/therootcompany/golib/net/httpcache"
 )
@@ -151,6 +152,66 @@ func TestCacher_EmptyResponse(t *testing.T) {
 	_, err := c.Fetch(t.Context())
 	if !errors.Is(err, httpcache.ErrEmptyResponse) {
 		t.Errorf("err = %v, want ErrEmptyResponse", err)
+	}
+}
+
+func TestCacher_MaxAgeBacksOffAfterFailure(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "data.txt")
+	c := httpcache.New(srv.URL, path)
+	c.MaxAge = time.Hour
+	if _, err := c.Fetch(t.Context()); !errors.Is(err, httpcache.ErrUnexpectedStatus) {
+		t.Fatalf("first Fetch: %v, want ErrUnexpectedStatus", err)
+	}
+
+	// The failed attempt is persisted, so a new process also waits instead
+	// of retrying immediately against the rate-limited server.
+	fresh := httpcache.New(srv.URL, path)
+	fresh.MaxAge = time.Hour
+	updated, err := fresh.Fetch(t.Context())
+	if err != nil {
+		t.Fatalf("backoff Fetch: %v", err)
+	}
+	if updated {
+		t.Error("backoff Fetch: updated=true, want false")
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("server hits = %d, want 1", got)
+	}
+}
+
+func TestCacher_RetryAfterOverridesFailureBackoff(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Retry-After", "3600")
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "data.txt")
+	c := httpcache.New(srv.URL, path)
+	c.FailureBackoff = time.Second
+	if _, err := c.Fetch(t.Context()); !errors.Is(err, httpcache.ErrUnexpectedStatus) {
+		t.Fatalf("first Fetch: %v, want ErrUnexpectedStatus", err)
+	}
+
+	fresh := httpcache.New(srv.URL, path)
+	updated, err := fresh.Fetch(t.Context())
+	if err != nil {
+		t.Fatalf("Retry-After Fetch: %v", err)
+	}
+	if updated {
+		t.Error("Retry-After Fetch: updated=true, want false")
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("server hits = %d, want 1", got)
 	}
 }
 

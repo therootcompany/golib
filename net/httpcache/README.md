@@ -4,6 +4,8 @@ Conditional HTTP GET to a local file. ETag / Last-Modified are persisted to a
 `<path>.meta` sidecar so 304s survive process restarts.
 
 - skips HTTP when the local file is newer than `MaxAge`
+- backs off failed fetches for `FailureBackoff` (defaults to `MaxAge`)
+- honors a valid server `Retry-After` response over local backoff
 - skips HTTP when the last attempt was within `MinInterval` (in-memory)
 - caps response bodies via `MaxBytes` (defends against fill-disk)
 - `O_EXCL` reservation on `<path>.tmp` for cross-process exclusion;
@@ -20,6 +22,7 @@ c := httpcache.New(
     "/srv/data/blocklist.txt",
 )
 c.MaxAge = time.Hour       // skip HTTP if file is < 1h old
+// c.FailureBackoff = 30 * time.Minute // defaults to MaxAge
 c.MaxBytes = 50 << 20      // 50 MiB cap
 
 updated, err := c.Fetch(ctx)

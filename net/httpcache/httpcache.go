@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -53,11 +55,14 @@ const (
 //   - MaxAge: skips if the local file's mtime is within this duration.
 //     Useful when the remote preserves meaningful timestamps (e.g. MaxMind
 //     encodes the database release date as the tar entry mtime).
+//   - FailureBackoff: skips if the last fetch failure was within this duration.
+//     0 follows MaxAge; negative disables local failure backoff. A valid
+//     Retry-After response always takes precedence.
 //   - MinInterval: skips if Fetch was called within this duration (in-memory).
 //     Guards against tight poll loops hammering a rate-limited API.
 //
-// Caching — ETag and Last-Modified values are persisted to a <path>.meta
-// sidecar file so conditional GETs survive process restarts.
+// Caching — ETag, Last-Modified, and failure retry times are persisted to a
+// <path>.meta sidecar file so conditional GETs and backoff survive restarts.
 //
 // Header — any values in Header are sent on every request. The stdlib
 // http.Client strips Authorization, WWW-Authenticate, and Cookie on
@@ -70,12 +75,13 @@ const (
 // disk fills, since the overall Timeout still allows multi-GB transfers.
 // 0 disables the cap.
 type Cacher struct {
-	URL         string
-	Path        string
-	MaxAge      time.Duration // 0 disables; skip HTTP if file mtime is within this
-	MinInterval time.Duration // 0 disables; skip HTTP if last Fetch attempt was within this
-	MaxBytes    int64         // 0 disables; cap on body bytes read per Fetch (defends against fill-disk)
-	Header      http.Header   // headers sent on every request
+	URL            string
+	Path           string
+	MaxAge         time.Duration // 0 disables; skip HTTP if file mtime is within this
+	FailureBackoff time.Duration // 0 follows MaxAge; <0 disables local failure backoff
+	MinInterval    time.Duration // 0 disables; skip HTTP if last Fetch attempt was within this
+	MaxBytes       int64         // 0 disables; cap on body bytes read per Fetch (defends against fill-disk)
+	Header         http.Header   // headers sent on every request
 
 	sf          singleflight.Group
 	cacheMeta   // embedded: etag/lastMod persisted to sidecar
@@ -86,8 +92,10 @@ type Cacher struct {
 
 // cacheMeta is the sidecar format persisted alongside the downloaded file.
 type cacheMeta struct {
-	ETag    string `json:"etag,omitempty"`
-	LastMod string `json:"last_modified,omitempty"`
+	ETag        string     `json:"etag,omitempty"`
+	LastMod     string     `json:"last_modified,omitempty"`
+	LastFailure *time.Time `json:"last_failure,omitempty"`
+	RetryAt     *time.Time `json:"retry_at,omitempty"`
 }
 
 func (c *Cacher) metaPath() string { return c.Path + ".meta" }
@@ -165,21 +173,12 @@ func NewWith(url, path string, client *http.Client) *Cacher {
 // Fetch sends a conditional GET and writes new content to Path if the server
 // responds with 200. Returns whether the file was updated.
 //
-// Both MaxAge and MinInterval are checked before making any HTTP request.
+// MaxAge, FailureBackoff, and MinInterval are checked before making any HTTP request.
 // ctx cancels the in-flight request and any blocking body read.
 //
 // Safe to call concurrently — concurrent callers share a single in-flight
 // fetch (via singleflight) and all receive the same result.
 func (c *Cacher) Fetch(ctx context.Context) (updated bool, err error) {
-	// MaxAge: file-mtime gate (no lock needed — just a stat).
-	if c.MaxAge > 0 {
-		if info, err := os.Stat(c.Path); err == nil {
-			if time.Since(info.ModTime()) < c.MaxAge {
-				return false, nil
-			}
-		}
-	}
-
 	type result struct {
 		updated bool
 		err     error
@@ -194,13 +193,36 @@ func (c *Cacher) Fetch(ctx context.Context) (updated bool, err error) {
 
 // fetch is the inner serialized work. singleflight ensures only one runs at
 // a time, so the cacheMeta/lastChecked/metaLoaded fields don't need a mutex.
-func (c *Cacher) fetch(ctx context.Context) (bool, error) {
-	// Load sidecar once so conditional GETs work after a process restart.
+func (c *Cacher) fetch(ctx context.Context) (updated bool, err error) {
+	// Load sidecar once so conditional GETs and failure backoff work after a
+	// process restart.
 	if !c.metaLoaded {
 		if err := c.loadMeta(); err != nil {
 			return false, err
 		}
 		c.metaLoaded = true
+	}
+
+	// MaxAge: file-mtime gate.
+	if c.MaxAge > 0 {
+		if info, statErr := os.Stat(c.Path); statErr == nil && time.Since(info.ModTime()) < c.MaxAge {
+			return false, nil
+		}
+	}
+	// FailureBackoff: persisted failure gate. This prevents a stale file from
+	// causing a tight retry loop against a rate-limited server.
+	if c.RetryAt != nil {
+		if time.Now().Before(*c.RetryAt) {
+			return false, nil
+		}
+	} else {
+		failureBackoff := c.FailureBackoff
+		if failureBackoff == 0 {
+			failureBackoff = c.MaxAge
+		}
+		if failureBackoff > 0 && c.LastFailure != nil && time.Since(*c.LastFailure) < failureBackoff {
+			return false, nil
+		}
 	}
 
 	// MinInterval: in-memory last-checked gate.
@@ -210,6 +232,12 @@ func (c *Cacher) fetch(ctx context.Context) (bool, error) {
 		}
 	}
 	c.lastChecked = time.Now()
+	var retryAt *time.Time
+	defer func() {
+		if err != nil {
+			err = c.recordFailure(err, retryAt)
+		}
+	}()
 
 	// Reserve .tmp before any HTTP — O_EXCL gives us cross-process
 	// exclusion (singleflight only covers the in-process case). A peer
@@ -264,9 +292,15 @@ func (c *Cacher) fetch(ctx context.Context) (bool, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotModified {
+		c.LastFailure = nil
+		c.RetryAt = nil
+		if err := c.saveMeta(); err != nil {
+			return false, fmt.Errorf("%w for %s: %w", ErrSaveMeta, c.Path, err)
+		}
 		return false, nil
 	}
 	if resp.StatusCode != http.StatusOK {
+		retryAt = parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 		return false, fmt.Errorf("%w %d fetching %s", ErrUnexpectedStatus, resp.StatusCode, c.safeURL())
 	}
 
@@ -295,9 +329,36 @@ func (c *Cacher) fetch(ctx context.Context) (bool, error) {
 	if lm := resp.Header.Get("Last-Modified"); lm != "" {
 		c.LastMod = lm
 	}
+	c.LastFailure = nil
+	c.RetryAt = nil
 	if err := c.saveMeta(); err != nil {
 		return true, fmt.Errorf("%w for %s: %w", ErrSaveMeta, c.Path, err)
 	}
 
 	return true, nil
+}
+
+func (c *Cacher) recordFailure(err error, retryAt *time.Time) error {
+	now := time.Now()
+	c.LastFailure = &now
+	c.RetryAt = retryAt
+	if saveErr := c.saveMeta(); saveErr != nil {
+		return errors.Join(err, fmt.Errorf("%w for %s: %w", ErrSaveMeta, c.Path, saveErr))
+	}
+	return err
+}
+
+func parseRetryAfter(value string, now time.Time) *time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		t := now.Add(time.Duration(seconds) * time.Second)
+		return &t
+	}
+	if t, err := http.ParseTime(value); err == nil {
+		return &t
+	}
+	return nil
 }
