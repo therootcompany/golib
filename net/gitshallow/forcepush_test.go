@@ -71,8 +71,8 @@ func TestRepo_ForcePushRecovery(t *testing.T) {
 	}
 
 	// Rewrite upstream history with an unrelated commit and force-push.
-	mustGit(t, scratch, "checkout", "--orphan", "fresh")
-	mustGit(t, scratch, "rm", "-rf", ".")
+	mustGit(t, scratch, "switch", "--orphan", "fresh")
+	mustGit(t, scratch, "rm", "-rf", "--ignore-unmatch", ".")
 	if err := os.WriteFile(filepath.Join(scratch, "data.txt"), []byte("v2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
