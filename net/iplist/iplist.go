@@ -52,25 +52,30 @@ const (
 //
 // Each non-URL entry must be an IP address, CIDR range, or domain name.
 // Invalid entries cause an error.
-func Load(ctx context.Context, source, cacheDir string) ([]string, error) {
-	return load(ctx, strings.TrimSpace(source), cacheDir, make(map[string]struct{}), 0)
+// Load reads source using client. A nil client uses the internal client with
+// the package's standard timeout and transport policy.
+func Load(ctx context.Context, source, cacheDir string, client *http.Client) ([]string, error) {
+	if client == nil {
+		client = https.NewInternalClient()
+	}
+	return load(ctx, strings.TrimSpace(source), cacheDir, make(map[string]struct{}), 0, client)
 }
 
-func load(ctx context.Context, source, cacheDir string, seen map[string]struct{}, depth int) ([]string, error) {
+func load(ctx context.Context, source, cacheDir string, seen map[string]struct{}, depth int, client *http.Client) ([]string, error) {
 	if source == "" {
 		return nil, nil
 	}
 	if depth > MaxNestedSources {
 		return nil, fmt.Errorf("source nesting exceeds %d levels", MaxNestedSources)
 	}
-	entries, err := readSource(ctx, source, cacheDir, seen)
+	entries, err := readSource(ctx, source, cacheDir, seen, client)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if isURL(entry) {
-			nested, err := load(ctx, entry, cacheDir, seen, depth+1)
+			nested, err := load(ctx, entry, cacheDir, seen, depth+1, client)
 			if err != nil {
 				return nil, err
 			}
@@ -133,8 +138,8 @@ func isDomain(s string) bool {
 	}
 	// Each label must be non-empty and contain only letters, digits, and
 	// hyphens (RFC 1035).
-	labels := strings.Split(s, ".")
-	for _, label := range labels {
+	labels := strings.SplitSeq(s, ".")
+	for label := range labels {
 		if label == "" {
 			return false
 		}
@@ -147,7 +152,7 @@ func isDomain(s string) bool {
 	return true
 }
 
-func readSource(ctx context.Context, source, cacheDir string, seen map[string]struct{}) ([]string, error) {
+func readSource(ctx context.Context, source, cacheDir string, seen map[string]struct{}, client *http.Client) ([]string, error) {
 	parsed, err := url.Parse(source)
 	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
 		if docid, gid := gsheet2csv.ParseIDs(source); docid != "" {
@@ -192,7 +197,7 @@ func readSource(ctx context.Context, source, cacheDir string, seen map[string]st
 	// the new content can't be parsed, we fall back to (or restore) it.
 	previous, previousErr := os.ReadFile(cachePath)
 
-	cache := httpcache.NewWith(parsed.String(), cachePath, https.NewInternalClient())
+	cache := httpcache.NewWith(parsed.String(), cachePath, client)
 	cache.Header = header
 	cache.MaxAge = defaultMaxAge
 	cache.MaxBytes = defaultMaxBytes
@@ -243,7 +248,7 @@ func Parse(r io.Reader) ([]string, error) {
 // isTSV heuristically detects TSV format by checking whether the first
 // non-empty, non-comment line contains a tab character.
 func isTSV(data []byte) bool {
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		trimmed := bytes.TrimSpace(line)
 		if len(trimmed) == 0 || bytes.HasPrefix(trimmed, []byte("#")) {
 			continue

@@ -55,10 +55,36 @@ func TestLoadRejectsInvalidEntry(t *testing.T) {
 	if err := os.WriteFile(path, []byte("192.0.2.1\nnot valid entry\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Load(t.Context(), path, dir)
+	_, err := Load(t.Context(), path, dir, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid entry, got nil")
 	}
+}
+
+func TestLoadCustomClient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("192.0.2.7\n"))
+	}))
+	defer srv.Close()
+
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		called = true
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+	entries, err := Load(t.Context(), srv.URL, t.TempDir(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || len(entries) != 1 || entries[0] != "192.0.2.7" {
+		t.Fatalf("called=%v entries=%#v", called, entries)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func TestLoadURLAuthCacheAndNested(t *testing.T) {
@@ -74,7 +100,7 @@ func TestLoadURLAuthCacheAndNested(t *testing.T) {
 	defer outer.Close()
 
 	cacheDir := t.TempDir()
-	got, err := Load(t.Context(), strings.Replace(outer.URL, "http://", "http://u:p@", 1), cacheDir)
+	got, err := Load(t.Context(), strings.Replace(outer.URL, "http://", "http://u:p@", 1), cacheDir, nil)
 	if err != nil || !authOK || len(got) != 1 || got[0] != "192.0.2.2" {
 		t.Fatalf("auth=%v entries=%#v err=%v", authOK, got, err)
 	}
@@ -96,7 +122,7 @@ func TestLoadAcceptHeader(t *testing.T) {
 	defer srv.Close()
 
 	cacheDir := t.TempDir()
-	if _, err := Load(t.Context(), srv.URL, cacheDir); err != nil {
+	if _, err := Load(t.Context(), srv.URL, cacheDir, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !acceptOK {
@@ -112,7 +138,7 @@ func TestLoadCSVDetection(t *testing.T) {
 	defer srv.Close()
 
 	cacheDir := t.TempDir()
-	got, err := Load(t.Context(), srv.URL, cacheDir)
+	got, err := Load(t.Context(), srv.URL, cacheDir, nil)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
