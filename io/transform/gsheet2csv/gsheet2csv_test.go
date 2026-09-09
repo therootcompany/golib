@@ -131,20 +131,58 @@ func TestNewReaderFromURL(t *testing.T) {
 	}
 }
 
-func TestReadSkipsEmptyRecords(t *testing.T) {
-	reader := NewReader(strings.NewReader("a,b\n,,\n\"\",\"\"\nvalue,\n"))
-	rows, err := reader.ReadAll()
-	if err != nil {
-		t.Fatal(err)
+// TestReadSkipsEmptyRowsAndComments verifies that ReadAll drops all-empty rows,
+// blank lines, and comment lines, while preserving rows that contain any
+// content (including partially empty rows).
+func TestReadSkipsEmptyRowsAndComments(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected [][]string
+	}{
+		{
+			name:     "all empty rows",
+			input:    "header\n,,\n\"\",\"\"\n",
+			expected: [][]string{{"header"}},
+		},
+		{
+			name:     "empty line",
+			input:    "header\n\nvalue,c\n",
+			expected: [][]string{{"header"}, {"value", "c"}},
+		},
+		{
+			name:     "comment line",
+			input:    "# a comment\nheader\nvalue,c\n",
+			expected: [][]string{{"header"}, {"value", "c"}},
+		},
+		{
+			name:     "quoted comment line",
+			input:    "header\n\"# quoted comment\"\nvalue,c\n",
+			expected: [][]string{{"header"}, {"value", "c"}},
+		},
+		{
+			name:     "partially empty row is kept",
+			input:    "header\nvalue,\n\"\",\"\"\n",
+			expected: [][]string{{"header"}, {"value", ""}},
+		},
 	}
-	want := [][]string{{"a", "b"}, {"value", ""}}
-	if len(rows) != len(want) {
-		t.Fatalf("rows = %v, want %v", rows, want)
-	}
-	for i := range want {
-		if !slices.Equal(rows[i], want[i]) {
-			t.Fatalf("rows = %v, want %v", rows, want)
-		}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := NewReader(strings.NewReader(tt.input))
+			got, err := reader.ReadAll()
+			if err != nil {
+				t.Fatalf("ReadAll() error: %v", err)
+			}
+			if len(got) != len(tt.expected) {
+				t.Fatalf("ReadAll() = %v, want %v", got, tt.expected)
+			}
+			for i := range got {
+				if !slices.Equal(got[i], tt.expected[i]) {
+					t.Errorf("ReadAll() row %d = %v, want %v", i, got[i], tt.expected[i])
+				}
+			}
+		})
 	}
 }
 
