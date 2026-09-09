@@ -51,8 +51,13 @@ type Reader struct {
 
 // NewReaderFromContext is NewReaderFrom with request cancellation.
 func NewReaderFromContext(ctx context.Context, urlOrPath string) *Reader {
+	return NewReaderFromContextWith(ctx, httpClient, urlOrPath)
+}
+
+// NewReaderFromContextWith is NewReaderFromContext with a custom HTTP client.
+func NewReaderFromContextWith(ctx context.Context, client *http.Client, urlOrPath string) *Reader {
 	if strings.HasPrefix(urlOrPath, "https://") || strings.HasPrefix(urlOrPath, "http://") {
-		return NewReaderFromURLContext(ctx, urlOrPath)
+		return NewReaderFromURLWith(ctx, client, urlOrPath)
 	}
 	return NewReaderFrom(urlOrPath)
 }
@@ -74,8 +79,13 @@ func NewReaderFrom(urlOrPath string) *Reader {
 }
 
 func NewReaderFromURLContext(ctx context.Context, url string) *Reader {
+	return NewReaderFromURLWith(ctx, httpClient, url)
+}
+
+// NewReaderFromURLWith is NewReaderFromURLContext with a custom HTTP client.
+func NewReaderFromURLWith(ctx context.Context, client *http.Client, url string) *Reader {
 	docid, gid := ParseIDs(url)
-	return NewReaderFromIDsContext(ctx, httpClient, docid, gid)
+	return NewReaderFromIDsContext(ctx, client, docid, gid)
 }
 
 func NewReaderFromURL(url string) *Reader {
