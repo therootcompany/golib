@@ -32,13 +32,9 @@ const (
 // that are themselves HTTP(S) URLs are recursively expanded up to
 // MaxNestedSources levels. URL responses are cached below cacheDir and the
 // cache remains available across process restarts.
-func Load(ctx context.Context, source, cacheDir string) ([]string, error) {
-	return LoadWithClient(ctx, source, cacheDir, nil)
-}
-
-// LoadWithClient is Load with an optional HTTP client. A nil client uses the
+// Load reads a source with an optional HTTP client. A nil client uses the
 // internal client with the package's standard timeout and transport policy.
-func LoadWithClient(ctx context.Context, source, cacheDir string, client *http.Client) ([]string, error) {
+func Load(ctx context.Context, source, cacheDir string, client *http.Client) ([]string, error) {
 	if client == nil {
 		client = https.NewInternalClient()
 	}

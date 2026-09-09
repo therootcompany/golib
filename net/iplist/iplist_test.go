@@ -28,7 +28,7 @@ func TestLoadWithClient(t *testing.T) {
 		called = true
 		return http.DefaultTransport.RoundTrip(r)
 	})}
-	entries, err := LoadWithClient(context.Background(), server.URL, t.TempDir(), client)
+	entries, err := Load(context.Background(), server.URL, t.TempDir(), client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestLoadURLAuthCacheAndNested(t *testing.T) {
 	defer outer.Close()
 
 	cacheDir := t.TempDir()
-	got, err := Load(context.Background(), strings.Replace(outer.URL, "http://", "http://u:p@", 1), cacheDir)
+	got, err := Load(context.Background(), strings.Replace(outer.URL, "http://", "http://u:p@", 1), cacheDir, nil)
 	if err != nil || !authOK || len(got) != 1 || got[0] != "192.0.2.2" {
 		t.Fatalf("auth=%v entries=%#v err=%v", authOK, got, err)
 	}
