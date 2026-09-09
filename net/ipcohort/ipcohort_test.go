@@ -70,17 +70,17 @@ func TestContains_CIDRRanges(t *testing.T) {
 // search lands on a non-matching neighbor.
 func TestContains_AntiChain(t *testing.T) {
 	c, err := ipcohort.Parse([]string{
-		"9.0.0.0/24",     // narrow, just before the /8
-		"10.0.0.0/8",     // broad
-		"20.0.0.0/24",    // narrow, after the /8
-		"30.0.0.0/16",    // mid
+		"9.0.0.0/24",  // narrow, just before the /8
+		"10.0.0.0/8",  // broad
+		"20.0.0.0/24", // narrow, after the /8
+		"30.0.0.0/16", // mid
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	hits := []string{
 		"9.0.0.50",
-		"10.5.5.5",   // bsearch lands on 10.0.0.0/8 — match
+		"10.5.5.5", // bsearch lands on 10.0.0.0/8 — match
 		"10.255.255.255",
 		"20.0.0.5",
 		"30.0.99.1",
@@ -156,4 +156,3 @@ func TestLoadFiles_Merge(t *testing.T) {
 		t.Error("missing merged CIDR member")
 	}
 }
-
