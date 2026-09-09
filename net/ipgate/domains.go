@@ -3,6 +3,7 @@ package ipgate
 import (
 	"context"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -10,13 +11,21 @@ import (
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
-const domainSetRefreshInterval = 5 * time.Minute
+const DefaultDomainSetRefreshInterval = 5 * time.Minute
 
-type DomainSet struct {
+type domainSources struct {
 	staticPrefixes []string
 	domains        []string
-	resolved       atomic.Pointer[map[string][]string]
-	cohort         atomic.Pointer[ipcohort.Cohort]
+}
+
+type DomainSet struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	sources  atomic.Pointer[domainSources]
+	resolved atomic.Pointer[map[string][]string]
+	cohort   atomic.Pointer[ipcohort.Cohort]
+	start    sync.Once
+	interval time.Duration
 }
 
 func EmptyDomainSet() *DomainSet {
@@ -28,11 +37,16 @@ func EmptyDomainSet() *DomainSet {
 // NewDomainSet creates a DomainSet from pre-parsed inputs.
 // staticPrefixes is a list of CIDRs or bare IPs.
 // domains is a list of hostnames to resolve periodically.
-func NewDomainSet(ctx context.Context, staticPrefixes []string, domains []string) *DomainSet {
-	ds := &DomainSet{
-		staticPrefixes: staticPrefixes,
-		domains:        domains,
+func NewDomainSet(ctx context.Context, staticPrefixes []string, domains []string, interval time.Duration) *DomainSet {
+	if interval <= 0 {
+		interval = DefaultDomainSetRefreshInterval
 	}
+	setCtx, cancel := context.WithCancel(ctx)
+	ds := &DomainSet{ctx: setCtx, cancel: cancel, interval: interval}
+	ds.sources.Store(&domainSources{
+		staticPrefixes: append([]string(nil), staticPrefixes...),
+		domains:        append([]string(nil), domains...),
+	})
 
 	ds.cohort.Store(&ipcohort.Cohort{})
 
@@ -43,9 +57,34 @@ func NewDomainSet(ctx context.Context, staticPrefixes []string, domains []string
 
 	log().Info("domain set loaded", "static", commaify(len(staticPrefixes)), "domains", commaify(len(domains)))
 
-	go ds.refreshLoop(ctx)
+	if len(domains) > 0 {
+		ds.startRefreshLoop()
+	}
 
 	return ds
+}
+
+func (ds *DomainSet) Replace(staticPrefixes, domains []string) {
+	ds.sources.Store(&domainSources{
+		staticPrefixes: append([]string(nil), staticPrefixes...),
+		domains:        append([]string(nil), domains...),
+	})
+	if len(domains) > 0 {
+		ds.startRefreshLoop()
+	}
+	ds.resolveDomains(ds.ctx)
+	ds.rebuildCohort()
+}
+
+func (ds *DomainSet) startRefreshLoop() {
+	ds.start.Do(func() { go ds.refreshLoop(ds.interval) })
+}
+
+func (ds *DomainSet) Close() error {
+	if ds != nil && ds.cancel != nil {
+		ds.cancel()
+	}
+	return nil
 }
 
 func (ds *DomainSet) Contains(addr netip.Addr) bool {
@@ -57,34 +96,35 @@ func (ds *DomainSet) Contains(addr netip.Addr) bool {
 	return cohort.ContainsAddr(addr)
 }
 
-func (ds *DomainSet) refreshLoop(ctx context.Context) {
-	ds.resolveDomains(ctx)
+func (ds *DomainSet) refreshLoop(interval time.Duration) {
+	ds.resolveDomains(ds.ctx)
 	ds.rebuildCohort()
 
-	ticker := time.NewTicker(domainSetRefreshInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-ds.ctx.Done():
 			return
 		case <-ticker.C:
-			ds.resolveDomains(ctx)
+			ds.resolveDomains(ds.ctx)
 			ds.rebuildCohort()
 		}
 	}
 }
 
 func (ds *DomainSet) resolveDomains(ctx context.Context) {
-	if len(ds.domains) == 0 {
+	sources := ds.sources.Load()
+	if sources == nil || len(sources.domains) == 0 {
 		return
 	}
 
 	prev := *ds.resolved.Load()
-	next := make(map[string][]string, len(ds.domains))
+	next := make(map[string][]string, len(sources.domains))
 
 	resolver := dnsresolver.New()
-	for _, domain := range ds.domains {
+	for _, domain := range sources.domains {
 		ips, _, err := resolver.LookupIP(ctx, domain)
 
 		if err != nil || len(ips) == 0 {
@@ -109,7 +149,11 @@ func (ds *DomainSet) resolveDomains(ctx context.Context) {
 
 func (ds *DomainSet) rebuildCohort() {
 	var all []string
-	all = append(all, ds.staticPrefixes...)
+	sources := ds.sources.Load()
+	if sources == nil {
+		return
+	}
+	all = append(all, sources.staticPrefixes...)
 
 	resolved := *ds.resolved.Load()
 	for _, addrs := range resolved {

@@ -12,9 +12,11 @@ import (
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
-const prefixSetRefreshInterval = 47 * time.Minute
+const DefaultPrefixSetRefreshInterval = time.Hour + 57*time.Minute + 13*time.Second
 
 type PrefixSet struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 	repo   *gitshallow.Repo
 	files  []string
 	cohort atomic.Pointer[ipcohort.Cohort]
@@ -26,22 +28,35 @@ func EmptyPrefixSet() *PrefixSet {
 	return ps
 }
 
-func NewPrefixSet(ctx context.Context, repoURL, dataPath string, files []string) (*PrefixSet, error) {
+func NewPrefixSet(ctx context.Context, repoURL, dataPath string, files []string, interval time.Duration) (*PrefixSet, error) {
 	if err := os.MkdirAll(dataPath, 0o755); err != nil {
 		return nil, fmt.Errorf("ipgate: create data dir: %w", err)
 	}
 
+	if interval <= 0 {
+		interval = DefaultPrefixSetRefreshInterval
+	}
+	setCtx, cancel := context.WithCancel(ctx)
 	repo := gitshallow.New(repoURL, dataPath, 0, "")
 
 	ps := &PrefixSet{
-		repo:  repo,
-		files: files,
+		ctx:    setCtx,
+		cancel: cancel,
+		repo:   repo,
+		files:  files,
 	}
 	ps.cohort.Store(&ipcohort.Cohort{})
 
-	go ps.refreshLoop(ctx)
+	go ps.refreshLoop(interval)
 
 	return ps, nil
+}
+
+func (ps *PrefixSet) Close() error {
+	if ps != nil && ps.cancel != nil {
+		ps.cancel()
+	}
+	return nil
 }
 
 func (ps *PrefixSet) Contains(addr netip.Addr) bool {
@@ -95,20 +110,20 @@ func filesPresent(paths []string) bool {
 	return true
 }
 
-func (ps *PrefixSet) refreshLoop(ctx context.Context) {
-	if err := ps.reload(ctx); err != nil {
+func (ps *PrefixSet) refreshLoop(interval time.Duration) {
+	if err := ps.reload(ps.ctx); err != nil {
 		log().Warn("prefix set initial load (will retry)", "err", err)
 	}
 
-	ticker := time.NewTicker(prefixSetRefreshInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-ps.ctx.Done():
 			return
 		case <-ticker.C:
-			if err := ps.reload(ctx); err != nil {
+			if err := ps.reload(ps.ctx); err != nil {
 				log().Warn("prefix set reload failed", "err", err)
 			}
 		}
