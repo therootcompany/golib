@@ -175,9 +175,12 @@ func main() {
 	exitCode := 0
 	for _, edition := range conf.EditionIDs {
 		path := filepath.Join(outDir, geoip.TarGzName(edition))
-		base := geoip.DownloadBase
+		base := conf.BaseURL
 		if cfg.BaseURL != "" {
 			base = cfg.BaseURL
+		}
+		if base == "" {
+			base = geoip.DownloadBase
 		}
 		cacher := httpcache.New(
 			base+"/"+edition+"/download?suffix=tar.gz",
