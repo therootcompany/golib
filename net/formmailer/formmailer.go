@@ -18,7 +18,6 @@
 //	    Subject:       "Contact from {.Email}",
 //	    BlocklistRepo: "https://github.com/bitwire-it/ipblocklist.git",
 //	    CacheDir:      "", // defaults to ~/.cache
-//	    GeoIPConfPath: "", // defaults to ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf
 //	    SuccessBody:   successHTML,
 //	    ErrorBody:     errorHTML,
 //	    Fields: []formmailer.Field{
