@@ -45,7 +45,8 @@ func NewPrefixSet(ctx context.Context, repoURL, dataPath string, files []string)
 }
 
 func (ps *PrefixSet) Contains(addr netip.Addr) bool {
-	return ps.cohort.Load().ContainsAddr(addr)
+	cohort := ps.cohort.Load()
+	return cohort != nil && cohort.ContainsAddr(addr)
 }
 
 func (ps *PrefixSet) reload(ctx context.Context) error {
@@ -53,13 +54,13 @@ func (ps *PrefixSet) reload(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !updated && ps.cohort.Load().Size() > 0 {
-		return nil
-	}
-
 	paths := make([]string, len(ps.files))
 	for i, f := range ps.files {
 		paths[i] = ps.repo.FilePath(f)
+	}
+
+	if cachedCohortValid(updated, ps.cohort.Load(), paths) {
+		return nil
 	}
 
 	cohort, err := ipcohort.LoadFiles(paths...)
@@ -71,6 +72,19 @@ func (ps *PrefixSet) reload(ctx context.Context) error {
 
 	log().Info("prefix set loaded", "entries", commaify(cohort.Size()))
 	return nil
+}
+
+func cachedCohortValid(updated bool, cohort *ipcohort.Cohort, paths []string) bool {
+	return !updated && cohort != nil && cohort.Size() > 0 && filesPresent(paths)
+}
+
+func filesPresent(paths []string) bool {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (ps *PrefixSet) refreshLoop(ctx context.Context) {

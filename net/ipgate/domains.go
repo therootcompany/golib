@@ -47,7 +47,8 @@ func NewDomainSet(ctx context.Context, staticPrefixes []string, domains []string
 }
 
 func (ds *DomainSet) Contains(addr netip.Addr) bool {
-	return ds.cohort.Load().ContainsAddr(addr)
+	cohort := ds.cohort.Load()
+	return cohort != nil && cohort.ContainsAddr(addr)
 }
 
 func (ds *DomainSet) refreshLoop(ctx context.Context) {
@@ -119,4 +120,3 @@ func (ds *DomainSet) rebuildCohort() {
 		ds.cohort.Store(cohort)
 	}
 }
-
