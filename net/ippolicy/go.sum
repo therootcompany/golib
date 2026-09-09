@@ -16,6 +16,8 @@ github.com/therootcompany/golib/net/ipcohort v0.9.0 h1:j3AaoW2u4XQJz1ya6fixv3pb3
 github.com/therootcompany/golib/net/ipcohort v0.9.0/go.mod h1:Ljcnt2xOryVDGIVV5Kzt5hj2LhW4lBAWo5OeeVYU9ys=
 github.com/therootcompany/golib/net/iplist v0.8.5 h1:swn/hcCt6fAG3tYApmxh1OlDak2PjQdczldZWaH1Eus=
 github.com/therootcompany/golib/net/iplist v0.8.5/go.mod h1:vK5Na53RcLdtp/IPM/NX9BudyKhXp+8T+elmWBVWzeU=
+github.com/therootcompany/golib/sync/dataset v0.5.0 h1:4i3+7Izy/vnpK6IW5m9u4UqLA9RM1IjUsedbZo3MW6E=
+github.com/therootcompany/golib/sync/dataset v0.5.0/go.mod h1:HMa25n3eqYnjRcPXny0IUGU2wFKD5/x2g9UUkt3iAmI=
 golang.org/x/mod v0.30.0 h1:fDEXFVZ/fmCKProc/yAXXUijritrDzahmwwefnjoPFk=
 golang.org/x/mod v0.30.0/go.mod h1:lAsf5O2EvJeSFMiBxXDki7sCgAxEUcZHXoXMKT4GJKc=
 golang.org/x/net v0.47.0 h1:Mx+4dIFzqraBXUugkia1OOvlD6LemFo1ALMHjrXDOhY=

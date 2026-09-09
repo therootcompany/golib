@@ -7,6 +7,7 @@ require (
 	github.com/therootcompany/golib/net/gitshallow v0.9.1
 	github.com/therootcompany/golib/net/ipcohort v0.9.0
 	github.com/therootcompany/golib/net/iplist v0.8.5
+	github.com/therootcompany/golib/sync/dataset v0.5.0
 )
 
 require (

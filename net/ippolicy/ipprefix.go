@@ -5,127 +5,109 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
-	"sync/atomic"
 	"time"
 
 	"github.com/therootcompany/golib/net/gitshallow"
 	"github.com/therootcompany/golib/net/ipcohort"
+	"github.com/therootcompany/golib/sync/dataset"
 )
 
 const DefaultPrefixSetRefreshInterval = time.Hour + 57*time.Minute + 13*time.Second
 
+// PrefixSet is a Git-backed IP prefix set. dataset owns fetching, loading,
+// atomic snapshot replacement, and refresh cadence.
 type PrefixSet struct {
 	ctx    context.Context
 	cancel context.CancelFunc
-	repo   *gitshallow.Repo
-	files  []string
-	cohort atomic.Pointer[ipcohort.Cohort]
+	set    *dataset.Set
+	view   *dataset.View[ipcohort.Cohort]
 }
 
+// EmptyPrefixSet returns an empty, ready-to-use PrefixSet.
 func EmptyPrefixSet() *PrefixSet {
-	ps := &PrefixSet{}
-	ps.cohort.Store(&ipcohort.Cohort{})
-	return ps
+	set := dataset.NewSet(dataset.NopFetcher{})
+	view := dataset.AddInitial(set, &ipcohort.Cohort{}, func(context.Context) (*ipcohort.Cohort, error) {
+		return &ipcohort.Cohort{}, nil
+	})
+	_ = set.Load(context.Background())
+	return &PrefixSet{set: set, view: view}
 }
 
+// NewPrefixSet creates a Git-backed prefix set. The initial fetch starts in
+// the background; Contains returns false until a valid snapshot is loaded.
 func NewPrefixSet(ctx context.Context, repoURL, dataPath string, files []string, interval time.Duration) (*PrefixSet, error) {
 	if err := os.MkdirAll(dataPath, 0o755); err != nil {
 		return nil, fmt.Errorf("ippolicy: create data dir: %w", err)
 	}
-
 	if interval <= 0 {
 		interval = DefaultPrefixSetRefreshInterval
 	}
 	setCtx, cancel := context.WithCancel(ctx)
 	repo := gitshallow.New(repoURL, dataPath, 0, "")
+	set := dataset.NewSet(repo)
+	view := dataset.AddInitial(set, &ipcohort.Cohort{}, func(ctx context.Context) (*ipcohort.Cohort, error) {
+		paths := make([]string, len(files))
+		for i, file := range files {
+			paths[i] = repo.FilePath(file)
+		}
+		cohort, err := ipcohort.LoadFiles(paths...)
+		if err != nil {
+			return nil, fmt.Errorf("load files: %w", err)
+		}
+		log().Info("prefix set loaded", "entries", commaify(cohort.Size()))
+		return cohort, nil
+	})
 
-	ps := &PrefixSet{
-		ctx:    setCtx,
-		cancel: cancel,
-		repo:   repo,
-		files:  files,
-	}
-	ps.cohort.Store(&ipcohort.Cohort{})
-
-	go ps.refreshLoop(interval)
-
+	ps := &PrefixSet{ctx: setCtx, cancel: cancel, set: set, view: view}
+	go func() {
+		if err := set.Load(setCtx); err != nil && setCtx.Err() == nil {
+			log().Warn("prefix set initial load (will retry)", "err", err)
+		}
+		set.Tick(setCtx, interval, func(err error) {
+			log().Warn("prefix set reload failed", "err", err)
+		})
+	}()
 	return ps, nil
 }
 
 func (ps *PrefixSet) Close() error {
-	if ps != nil && ps.cancel != nil {
+	if ps == nil {
+		return nil
+	}
+	if ps.cancel != nil {
 		ps.cancel()
+	}
+	if ps.set != nil {
+		return ps.set.Close()
 	}
 	return nil
 }
 
 func (ps *PrefixSet) Contains(addr netip.Addr) bool {
-	cohort := ps.cohort.Load()
-	if cohort == nil {
-		cohort = &ipcohort.Cohort{}
-		ps.cohort.CompareAndSwap(nil, cohort)
+	if ps == nil || ps.view == nil {
+		return false
 	}
-	return cohort.ContainsAddr(addr)
+	cohort := ps.view.Value()
+	return cohort != nil && cohort.ContainsAddr(addr)
 }
 
-func (ps *PrefixSet) reload(ctx context.Context) error {
-	updated, err := ps.repo.Fetch(ctx)
-	if err != nil {
-		return err
-	}
-
-	paths := make([]string, len(ps.files))
-	for i, f := range ps.files {
-		paths[i] = ps.repo.FilePath(f)
-	}
-
-	if cachedCohortValid(updated, ps.cohort.Load(), paths) {
-		return nil
-	}
-
-	cohort, err := ipcohort.LoadFiles(paths...)
-	if err != nil {
-		return fmt.Errorf("load files: %w", err)
-	}
-
-	ps.cohort.Store(cohort)
-
-	log().Info("prefix set loaded", "entries", commaify(cohort.Size()))
-	return nil
+// Loaded reports whether the initial dataset load succeeded.
+func (ps *PrefixSet) Loaded() bool {
+	return ps != nil && ps.set != nil && ps.set.Loaded()
 }
 
-// cachedCohortValid reports whether the current cohort can be reused
-// without reloading from disk: the repo was not updated, the cohort is
-// non-nil and non-empty, and all data files are present.
-func cachedCohortValid(updated bool, cohort *ipcohort.Cohort, paths []string) bool {
-	return !updated && cohort != nil && cohort.Size() > 0 && filesPresent(paths)
+// LoadedAt reports when the current snapshot was loaded.
+func (ps *PrefixSet) LoadedAt() time.Time {
+	if ps == nil || ps.view == nil {
+		return time.Time{}
+	}
+	return ps.view.LoadedAt()
 }
 
-func filesPresent(paths []string) bool {
-	for _, path := range paths {
-		if _, err := os.Stat(path); err != nil {
-			return false
-		}
+// Size reports the number of prefixes in the current snapshot.
+func (ps *PrefixSet) Size() int {
+	if ps == nil || ps.view == nil || ps.view.Value() == nil {
+		return 0
 	}
-	return true
-}
-
-func (ps *PrefixSet) refreshLoop(interval time.Duration) {
-	if err := ps.reload(ps.ctx); err != nil {
-		log().Warn("prefix set initial load (will retry)", "err", err)
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ps.ctx.Done():
-			return
-		case <-ticker.C:
-			if err := ps.reload(ps.ctx); err != nil {
-				log().Warn("prefix set reload failed", "err", err)
-			}
-		}
-	}
+	return ps.view.Value().Size()
 }
