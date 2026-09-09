@@ -1,4 +1,4 @@
-package ipgate
+package ippolicy
 
 import (
 	"net/netip"

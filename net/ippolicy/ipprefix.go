@@ -1,4 +1,4 @@
-package ipgate
+package ippolicy
 
 import (
 	"context"
@@ -30,7 +30,7 @@ func EmptyPrefixSet() *PrefixSet {
 
 func NewPrefixSet(ctx context.Context, repoURL, dataPath string, files []string, interval time.Duration) (*PrefixSet, error) {
 	if err := os.MkdirAll(dataPath, 0o755); err != nil {
-		return nil, fmt.Errorf("ipgate: create data dir: %w", err)
+		return nil, fmt.Errorf("ippolicy: create data dir: %w", err)
 	}
 
 	if interval <= 0 {

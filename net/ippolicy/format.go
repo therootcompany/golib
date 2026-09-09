@@ -1,4 +1,4 @@
-package ipgate
+package ippolicy
 
 import (
 	"log/slog"
@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-func log() *slog.Logger { return slog.Default().WithGroup("ipgate") }
+func log() *slog.Logger { return slog.Default().WithGroup("ippolicy") }
 
 func commaify(n int) string {
 	s := strconv.Itoa(n)

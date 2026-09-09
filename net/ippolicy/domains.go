@@ -1,7 +1,8 @@
-package ipgate
+package ippolicy
 
 import (
 	"context"
+	"net"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,29 @@ func EmptyDomainSet() *DomainSet {
 	ds := &DomainSet{}
 	ds.cohort.Store(&ipcohort.Cohort{})
 	return ds
+}
+
+func NewDomainSetFromEntries(ctx context.Context, entries []string, interval time.Duration) *DomainSet {
+	static, domains := splitEntries(entries)
+	return NewDomainSet(ctx, static, domains, interval)
+}
+
+func (ds *DomainSet) ReplaceEntries(entries []string) {
+	static, domains := splitEntries(entries)
+	ds.Replace(static, domains)
+}
+
+func splitEntries(entries []string) (static, domains []string) {
+	for _, entry := range entries {
+		if net.ParseIP(entry) != nil {
+			static = append(static, entry)
+		} else if _, _, err := net.ParseCIDR(entry); err == nil {
+			static = append(static, entry)
+		} else {
+			domains = append(domains, entry)
+		}
+	}
+	return static, domains
 }
 
 // NewDomainSet creates a DomainSet from pre-parsed inputs.
