@@ -3,6 +3,7 @@ package ipgate
 import (
 	"log/slog"
 	"strconv"
+	"strings"
 )
 
 func log() *slog.Logger { return slog.Default().WithGroup("ipgate") }
@@ -21,9 +22,10 @@ func commaify(n int) string {
 		rem = 3
 	}
 
-	out := s[:rem]
+	var out strings.Builder
+	out.WriteString(s[:rem])
 	for i := rem; i < len(s); i += 3 {
-		out += "," + s[i:i+3]
+		out.WriteString("," + s[i:i+3])
 	}
-	return out
+	return out.String()
 }
