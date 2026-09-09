@@ -17,6 +17,32 @@ func TestParseTSV(t *testing.T) {
 	}
 }
 
+func TestLoadWithClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("192.0.2.7\n"))
+	}))
+	defer server.Close()
+
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		called = true
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+	entries, err := LoadWithClient(context.Background(), server.URL, t.TempDir(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || len(entries) != 1 || entries[0] != "192.0.2.7" {
+		t.Fatalf("called=%v entries=%#v", called, entries)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
 func TestLoadURLAuthCacheAndNested(t *testing.T) {
 	var authOK bool
 	inner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("192.0.2.2\n")) }))

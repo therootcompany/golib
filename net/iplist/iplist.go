@@ -33,17 +33,26 @@ const (
 // MaxNestedSources levels. URL responses are cached below cacheDir and the
 // cache remains available across process restarts.
 func Load(ctx context.Context, source, cacheDir string) ([]string, error) {
-	return load(ctx, strings.TrimSpace(source), cacheDir, make(map[string]struct{}), 0)
+	return LoadWithClient(ctx, source, cacheDir, nil)
 }
 
-func load(ctx context.Context, source, cacheDir string, seen map[string]struct{}, depth int) ([]string, error) {
+// LoadWithClient is Load with an optional HTTP client. A nil client uses the
+// internal client with the package's standard timeout and transport policy.
+func LoadWithClient(ctx context.Context, source, cacheDir string, client *http.Client) ([]string, error) {
+	if client == nil {
+		client = https.NewInternalClient()
+	}
+	return load(ctx, strings.TrimSpace(source), cacheDir, make(map[string]struct{}), 0, client)
+}
+
+func load(ctx context.Context, source, cacheDir string, seen map[string]struct{}, depth int, client *http.Client) ([]string, error) {
 	if source == "" {
 		return nil, nil
 	}
 	if depth > MaxNestedSources {
 		return nil, fmt.Errorf("source nesting exceeds %d levels", MaxNestedSources)
 	}
-	entries, err := readSource(ctx, source, cacheDir, seen)
+	entries, err := readSource(ctx, source, cacheDir, seen, client)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +60,7 @@ func load(ctx context.Context, source, cacheDir string, seen map[string]struct{}
 	for _, entry := range entries {
 		parsed, parseErr := url.Parse(entry)
 		if parseErr == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
-			nested, err := load(ctx, entry, cacheDir, seen, depth+1)
+			nested, err := load(ctx, entry, cacheDir, seen, depth+1, client)
 			if err != nil {
 				return nil, err
 			}
@@ -63,7 +72,7 @@ func load(ctx context.Context, source, cacheDir string, seen map[string]struct{}
 	return result, nil
 }
 
-func readSource(ctx context.Context, source, cacheDir string, seen map[string]struct{}) ([]string, error) {
+func readSource(ctx context.Context, source, cacheDir string, seen map[string]struct{}, client *http.Client) ([]string, error) {
 	parsed, err := url.Parse(source)
 	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
 		if docid, gid := gsheet2csv.ParseIDs(source); docid != "" {
@@ -95,7 +104,7 @@ func readSource(ctx context.Context, source, cacheDir string, seen map[string]st
 	digest := sha256.Sum256([]byte(key))
 	path := filepath.Join(cacheDir, "ip-sources", hex.EncodeToString(digest[:8])+".tsv")
 	previous, previousErr := os.ReadFile(path)
-	cache := httpcache.NewWith(parsed.String(), path, https.NewInternalClient())
+	cache := httpcache.NewWith(parsed.String(), path, client)
 	cache.Header = header
 	cache.MaxAge = defaultMaxAge
 	cache.MaxBytes = defaultMaxBytes
