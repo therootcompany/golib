@@ -60,8 +60,6 @@ type MainConfig struct {
 	blocklistRepo string
 	cacheDir      string
 	geoipDir      string
-	geoipBaseURL  string
-	geoipConfPath string
 }
 
 func main() {
@@ -93,8 +91,6 @@ func main() {
 	fs.StringVar(&cfg.blocklistRepo, "blocklist-repo", cfg.blocklistRepo, "git URL of the bitwire-it-compatible blocklist repo")
 	fs.StringVar(&cfg.cacheDir, "cache-dir", "", "cache parent dir (default: ~/.cache)")
 	fs.StringVar(&cfg.geoipDir, "geoip-dir", "", "dir holding GeoLite2 tarballs (default: <$cache-dir>/maxmind)")
-	fs.StringVar(&cfg.geoipBaseURL, "geoip-base-url", "", "MaxMind download base URL (default: https://download.maxmind.com/geoip/databases)")
-	fs.StringVar(&cfg.geoipConfPath, "geoip-conf", "", "path to GeoIP.conf (default: ./GeoIP.conf or ~/.config/maxmind/GeoIP.conf)")
 
 	fs.Usage = func() {
 		printVersion(os.Stderr)
@@ -188,8 +184,6 @@ func main() {
 		BlocklistRepo:    cfg.blocklistRepo,
 		CacheDir:         cfg.cacheDir,
 		GeoIPDir:         cfg.geoipDir,
-		GeoIPBaseURL:     cfg.geoipBaseURL,
-		GeoIPConfPath:    cfg.geoipConfPath,
 		AllowedCountries: []string{"US", "CA", "MX", "CR", "VI"},
 		Fields:           fields,
 		RPM:              requestsPerMinute,

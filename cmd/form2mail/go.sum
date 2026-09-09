@@ -12,8 +12,8 @@ github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsT
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/therootcompany/golib/https v0.9.0 h1:D9gh0K6ljkvF805JUbylITn8SHPMo08q5PglQGXsK8c=
 github.com/therootcompany/golib/https v0.9.0/go.mod h1:ilExqR/Uh7oB36oy9mwuNhANcFh+zdCfD3uJiZ11YAY=
-github.com/therootcompany/golib/net/formmailer v0.1.1 h1:TF81OYZNqWu6aZqhaEGcKEBaCUSfOvgM+807/Snn+Xo=
-github.com/therootcompany/golib/net/formmailer v0.1.1/go.mod h1:hFr4I6BalzjJOs5JA7p2iGayN6wTz13/YqEDYOhptDs=
+github.com/therootcompany/golib/net/formmailer v0.2.0 h1:2sfP9YhLKZ6TUJYw8ynOhrzs0sJri+uukBLttr3WWKo=
+github.com/therootcompany/golib/net/formmailer v0.2.0/go.mod h1:hFr4I6BalzjJOs5JA7p2iGayN6wTz13/YqEDYOhptDs=
 github.com/therootcompany/golib/net/geoip v0.5.3 h1:wps0TrRoGYw7XA5mWP0uOkGBF5oZ5rQ+1JPIAkRYrOU=
 github.com/therootcompany/golib/net/geoip v0.5.3/go.mod h1:3CuuG2igsZySLNrRxoRTHPw3fmw9c4b0jRajSOOKJNU=
 github.com/therootcompany/golib/net/gitshallow v0.9.3 h1:FKi0IvpqEDnYasjTmkRmXDdi+y3bhQBcjgvggwAwxFs=

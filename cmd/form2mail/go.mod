@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/joho/godotenv v1.5.1
-	github.com/therootcompany/golib/net/formmailer v0.1.1
+	github.com/therootcompany/golib/net/formmailer v0.2.0
 	golang.org/x/term v0.40.0
 )
 
