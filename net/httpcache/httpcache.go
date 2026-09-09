@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/therootcompany/golib/https"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -139,11 +140,11 @@ func (c *Cacher) saveMeta() error {
 	return nil
 }
 
-// New creates a Cacher with a default *http.Client (5s connect, 5m overall).
-// Equivalent to NewWith(url, path, nil). Header is read live on every request,
-// so it may be set or modified after New.
+// New creates a Cacher with golib's fast internal HTTP client.
+// Equivalent to NewWith(url, path, https.NewInternalClient()). Header is read
+// live on every request, so it may be set or modified after New.
 func New(url, path string) *Cacher {
-	return NewWith(url, path, nil)
+	return NewWith(url, path, https.NewInternalClient())
 }
 
 // NewWith creates a Cacher backed by the given *http.Client; pass nil for
