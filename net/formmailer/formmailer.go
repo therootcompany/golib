@@ -235,21 +235,10 @@ type FormMailer struct {
 
 	// --- GeoIP configuration (used by Run) ---
 
-	// GeoIPConfPath is the path to a GeoIP.conf file. Zero searches
-	// ./GeoIP.conf and ~/.config/maxmind/GeoIP.conf. Its presence selects
-	// download mode (formmailer owns the geoip-update loop); its absence
-	// falls back to polling pre-existing archives.
-	GeoIPConfPath string
-	// GeoIPDir is the directory holding the GeoLite2 tarballs. Zero uses
-	// ~/.cache/maxmind. Ignored when using programmatic setup.
+	// GeoIPDir is the directory holding the GeoLite2 tarballs. An external
+	// geoip-update command owns downloads. Zero uses ~/.cache/maxmind.
+	// Ignored when using programmatic setup.
 	GeoIPDir string
-	// GeoIPBaseURL overrides the MaxMind download base. Zero uses the
-	// geoip.DownloadBase default. Library-level; not exposed on the CLI.
-	GeoIPBaseURL string
-	// GeoIPFreshDays gates downloads: skip HTTP when a local archive is
-	// younger than N days. Zero uses 3. Maps to httpcache.Cacher.MaxAge;
-	// a library-level option, rare to expose all the way up to the CLI.
-	GeoIPFreshDays int
 	// AllowedCountries — if non-nil, only requests from listed ISO codes are
 	// accepted. Unknown country ("") is always allowed. Requires GeoIP to be
 	// loaded.
@@ -343,9 +332,8 @@ func (fm *FormMailer) contentType() string {
 // Data sources:
 //   - Blocklist: gitshallow clones the configured repo, ipcohort loads the
 //     inbound cohort files, dataset manages hot-swap.
-//   - GeoIP: geoip.Fetcher pulls the GeoLite2 City + ASN tarballs via
-//     httpcache on each refresh tick; geoip.Open extracts them in memory
-//     and dataset manages hot-swap. formmailer owns its own downloads.
+//   - GeoIP: an external geoip-update job owns downloads; formmailer polls
+//     local City + ASN tarballs and geoip.Open extracts them in memory.
 //
 // Background refreshes run at RefreshInterval (default 47min). The server
 // starts serving immediately; /healthz returns 503 until both blocklist and
@@ -401,16 +389,13 @@ func (fm *FormMailer) Run(ctx context.Context) error {
 			})
 	}
 
-	// GeoIP directory. Archives live here; formmailer either downloads them
-	// (when a GeoIP.conf is present) or polls pre-existing ones (an external
-	// geoip-update job owns the downloads).
+	// GeoIP archives are downloaded by the external geoip-update command.
+	// Formmailer only polls and reloads the local tarballs.
 	geoDir := filepath.Join(fm.CacheDir, "maxmind")
 	if fm.GeoIPDir != "" {
 		geoDir = fm.GeoIPDir
 	}
 
-	// dirPopulated reports whether dir holds any entries. Used to pick the
-	// poll mode when no GeoIP.conf is present.
 	dirPopulated := func(dir string) bool {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -419,51 +404,10 @@ func (fm *FormMailer) Run(ctx context.Context) error {
 		return len(entries) > 0
 	}
 
-	// Decide GeoIP mode from what's on disk. A present GeoIP.conf selects
-	// download mode (formmailer owns the geoip-update loop via
-	// geoip.Fetcher); otherwise, if the archive dir is already populated,
-	// poll it (external job owns downloads). Either way the view loader
-	// extracts the archives in memory. The refresh interval is the
-	// dataset layer's job (Set.Tick); freshness gating is httpcache's
-	// (Cacher.MaxAge == fresh-days).
-	confExists := fm.GeoIPConfPath != ""
-	if confExists {
-		if _, err := os.Stat(fm.GeoIPConfPath); err != nil {
-			confExists = false
-			log.Printf("geoip: configured conf %s not found; falling back to poll mode", fm.GeoIPConfPath)
-		}
-	}
-	if !confExists {
-		for _, p := range geoip.DefaultConfPaths() {
-			if _, err := os.Stat(p); err == nil {
-				fm.GeoIPConfPath = p
-				confExists = true
-				break
-			}
-		}
-	}
-
 	var geoSet *dataset.Set
 	var geoView *dataset.View[geoip.Databases]
 	geoMode := "disabled"
-	switch {
-	case confExists:
-		// Download mode: formmailer owns the geoip-update loop.
-		geoMode = "download"
-		geoFetcher, ferr := geoip.NewFetcher(fm.GeoIPConfPath)
-		if ferr != nil {
-			log.Printf("geoip: %v", ferr)
-		} else {
-			geoFetcher.Dir = geoDir
-			geoFetcher.BaseURL = fm.GeoIPBaseURL
-			geoFetcher.FreshDays = fm.GeoIPFreshDays
-			geoSet = dataset.NewSet(geoFetcher)
-			geoView = dataset.Add(geoSet, func(ctx context.Context) (*geoip.Databases, error) {
-				return geoip.Open(geoDir)
-			})
-		}
-	case dirPopulated(geoDir):
-		// Poll mode: an external job owns the downloads; we just reload.
+	if dirPopulated(geoDir) {
 		geoMode = "poll"
 		cityPath := filepath.Join(geoDir, geoip.TarGzName(geoip.CityEdition))
 		asnPath := filepath.Join(geoDir, geoip.TarGzName(geoip.ASNEdition))
@@ -575,13 +519,8 @@ func (fm *FormMailer) Run(ctx context.Context) error {
 	if fm.BlocklistRepo != "" {
 		fmt.Println("Blocklist: enabled")
 	}
-	if geoSet != nil {
-		switch geoMode {
-		case "download":
-			fmt.Printf("GeoIP: download mode (conf=%s, dir=%s)\n", fm.GeoIPConfPath, geoDir)
-		case "poll":
-			fmt.Printf("GeoIP: poll mode (dir=%s)\n", geoDir)
-		}
+	if geoSet != nil && geoMode == "poll" {
+		fmt.Printf("GeoIP: poll mode (dir=%s)\n", geoDir)
 	}
 	if len(fm.AllowedCountries) > 0 {
 		fmt.Printf("Country gate: %s\n", strings.Join(fm.AllowedCountries, ", "))

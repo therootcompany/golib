@@ -3,8 +3,6 @@ package formmailer
 import (
 	"context"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,41 +45,10 @@ func runOnce(t *testing.T, fm *FormMailer) string {
 	})
 }
 
-// TestRunGeoModeSelection sanity-checks the hybrid GeoIP mode selection:
-//   - conf present            -> download mode
-//   - conf absent + populated -> poll mode
-//   - conf absent + empty dir -> disabled
+// TestRunGeoModeSelection checks that formmailer only polls existing
+// archives; downloading is owned by the external geoip-update command.
 func TestRunGeoModeSelection(t *testing.T) {
-	t.Run("download", func(t *testing.T) {
-		dir := t.TempDir()
-		conf := filepath.Join(dir, "GeoIP.conf")
-		if err := os.WriteFile(conf, []byte(
-			"AccountID   123456\nLicenseKey  testkey\nEditionIDs  GeoLite2-City GeoLite2-ASN\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		// 500 server so the owned download loop fails fast; the mode is
-		// selected and logged before serving regardless.
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "nope", http.StatusInternalServerError)
-		}))
-		defer srv.Close()
-
-		out := runOnce(t, &FormMailer{
-			CacheDir:      dir,
-			GeoIPConfPath: conf,
-			GeoIPBaseURL:  srv.URL,
-			SMTPHost:      "localhost:25",
-			SMTPFrom:      "a@example.com",
-			SMTPTo:        []string{"b@example.com"},
-		})
-		if !strings.Contains(out, "GeoIP: download mode") {
-			t.Fatalf("missing download mode line; stdout:\n%s", out)
-		}
-	})
-
 	t.Run("poll", func(t *testing.T) {
-		// Point HOME at a temp dir so the default conf discovery can't find a
-		// real ~/.config/maxmind/GeoIP.conf.
 		home := t.TempDir()
 		t.Setenv("HOME", home)
 
