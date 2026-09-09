@@ -12,6 +12,7 @@
 package gsheet2csv
 
 import (
+	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -48,6 +49,14 @@ type Reader struct {
 	err     error
 }
 
+// NewReaderFromContext is NewReaderFrom with request cancellation.
+func NewReaderFromContext(ctx context.Context, urlOrPath string) *Reader {
+	if strings.HasPrefix(urlOrPath, "https://") || strings.HasPrefix(urlOrPath, "http://") {
+		return NewReaderFromURLContext(ctx, urlOrPath)
+	}
+	return NewReaderFrom(urlOrPath)
+}
+
 func NewReaderFrom(urlOrPath string) *Reader {
 	if strings.HasPrefix(urlOrPath, "https://") || strings.HasPrefix(urlOrPath, "http://") {
 		return NewReaderFromURL(urlOrPath)
@@ -64,14 +73,29 @@ func NewReaderFrom(urlOrPath string) *Reader {
 	return r
 }
 
+func NewReaderFromURLContext(ctx context.Context, url string) *Reader {
+	docid, gid := ParseIDs(url)
+	return NewReaderFromIDsContext(ctx, httpClient, docid, gid)
+}
+
 func NewReaderFromURL(url string) *Reader {
 	docid, gid := ParseIDs(url)
-
 	return NewReaderFromIDs(docid, gid)
+}
+
+// NewReaderFromIDsContext uses client and ctx for the sheet request.
+// It leaves NewReaderFromIDs unchanged for compatibility.
+func NewReaderFromIDsContext(ctx context.Context, client *http.Client, docid, gid string) *Reader {
+	resp, err := GetSheetContext(ctx, client, docid, gid)
+	return newReaderFromResponse(resp, err, docid, gid)
 }
 
 func NewReaderFromIDs(docid, gid string) *Reader {
 	resp, err := GetSheet(docid, gid)
+	return newReaderFromResponse(resp, err, docid, gid)
+}
+
+func newReaderFromResponse(resp *http.Response, err error, docid, gid string) *Reader {
 	if err != nil {
 		r := NewReader(nil)
 		r.err = err
@@ -91,10 +115,16 @@ func ToCSVURL(docid, gid string) string {
 	return fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s/export?format=csv&usp=sharing&gid=%s", docid, gid)
 }
 
-func GetSheet(docid, gid string) (*http.Response, error) {
+func GetSheetContext(ctx context.Context, client *http.Client, docid, gid string) (*http.Response, error) {
 	downloadURL := ToCSVURL(docid, gid)
-
-	resp, err := httpGet(downloadURL)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		client = httpClient
+	}
+	resp, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +134,22 @@ func GetSheet(docid, gid string) (*http.Response, error) {
 		return nil, ErrHTTPGet
 	}
 
+	return resp, nil
+}
+
+func GetSheet(docid, gid string) (*http.Response, error) {
+	return getSheetWithGet(ToCSVURL(docid, gid), httpGet)
+}
+
+func getSheetWithGet(downloadURL string, get func(string) (*http.Response, error)) (*http.Response, error) {
+	resp, err := get(downloadURL)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, ErrHTTPGet
+	}
 	return resp, nil
 }
 

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/therootcompany/golib/https"
+	"github.com/therootcompany/golib/io/transform/gsheet2csv"
 	"github.com/therootcompany/golib/net/httpcache"
 )
 
@@ -64,6 +65,12 @@ func load(ctx context.Context, source, cacheDir string, seen map[string]struct{}
 
 func readSource(ctx context.Context, source, cacheDir string, seen map[string]struct{}) ([]string, error) {
 	parsed, err := url.Parse(source)
+	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
+		if docid, gid := gsheet2csv.ParseIDs(source); docid != "" {
+			source = gsheet2csv.ToCSVURL(docid, gid)
+			parsed, err = url.Parse(source)
+		}
+	}
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		body, err := os.ReadFile(source)
 		if err != nil {
