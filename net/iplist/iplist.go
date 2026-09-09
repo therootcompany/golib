@@ -94,12 +94,13 @@ func readSource(ctx context.Context, source, cacheDir string, seen map[string]st
 	}
 	digest := sha256.Sum256([]byte(key))
 	path := filepath.Join(cacheDir, "ip-sources", hex.EncodeToString(digest[:8])+".tsv")
+	previous, previousErr := os.ReadFile(path)
 	cache := httpcache.NewWith(parsed.String(), path, https.NewInternalClient())
 	cache.Header = header
 	cache.MaxAge = defaultMaxAge
 	cache.MaxBytes = defaultMaxBytes
 	if _, fetchErr := cache.Fetch(ctx); fetchErr != nil {
-		if _, statErr := os.Stat(path); statErr != nil {
+		if previousErr != nil {
 			return nil, fmt.Errorf("fetch %s: %w", safeURL(source), fetchErr)
 		}
 	}
@@ -107,7 +108,15 @@ func readSource(ctx context.Context, source, cacheDir string, seen map[string]st
 	if err != nil {
 		return nil, fmt.Errorf("read cached source %s: %w", safeURL(source), err)
 	}
-	return Parse(strings.NewReader(string(body)))
+	entries, err := Parse(strings.NewReader(string(body)))
+	if err != nil {
+		if previousErr == nil {
+			_ = os.WriteFile(path, previous, 0o600)
+			_ = os.Remove(path + ".meta")
+		}
+		return nil, fmt.Errorf("parse cached source %s: %w", safeURL(source), err)
+	}
+	return entries, nil
 }
 
 // Parse reads the first TSV column. Blank lines, comments, and an optional
