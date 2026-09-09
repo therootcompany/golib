@@ -34,6 +34,8 @@ func NewDomainSet(ctx context.Context, staticPrefixes []string, domains []string
 		domains:        domains,
 	}
 
+	ds.cohort.Store(&ipcohort.Cohort{})
+
 	emptyResolved := make(map[string][]string)
 	ds.resolved.Store(&emptyResolved)
 
@@ -47,7 +49,12 @@ func NewDomainSet(ctx context.Context, staticPrefixes []string, domains []string
 }
 
 func (ds *DomainSet) Contains(addr netip.Addr) bool {
-	return ds.cohort.Load().ContainsAddr(addr)
+	cohort := ds.cohort.Load()
+	if cohort == nil {
+		cohort = &ipcohort.Cohort{}
+		ds.cohort.CompareAndSwap(nil, cohort)
+	}
+	return cohort.ContainsAddr(addr)
 }
 
 func (ds *DomainSet) refreshLoop(ctx context.Context) {
@@ -119,4 +126,3 @@ func (ds *DomainSet) rebuildCohort() {
 		ds.cohort.Store(cohort)
 	}
 }
-
