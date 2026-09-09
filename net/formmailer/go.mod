@@ -19,4 +19,3 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 )
 
-replace github.com/therootcompany/golib/net/geoip v0.5.3 => ../geoip
