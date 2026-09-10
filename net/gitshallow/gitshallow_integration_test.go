@@ -36,7 +36,7 @@ func TestRepo_Clone(t *testing.T) {
 	os.RemoveAll(dir)
 
 	repo := gitshallow.New(testRepoURL, dir, 1, "")
-	updated, err := repo.Fetch(t.Context())
+	updated, err := repo.Update(t.Context())
 	if err != nil {
 		t.Fatalf("Fetch (clone): %v", err)
 	}
@@ -64,12 +64,12 @@ func TestRepo_Pull_SameInstance(t *testing.T) {
 
 	repo := gitshallow.New(testRepoURL, dir, 1, "")
 	// Ensure cloned.
-	if _, err := repo.Fetch(t.Context()); err != nil {
+	if _, err := repo.Update(t.Context()); err != nil {
 		t.Fatalf("initial Fetch: %v", err)
 	}
 
 	// Second pull on the same instance — already at HEAD, should not advance.
-	updated, err := repo.Fetch(t.Context())
+	updated, err := repo.Update(t.Context())
 	if err != nil {
 		t.Fatalf("second Fetch: %v", err)
 	}
@@ -84,13 +84,13 @@ func TestRepo_Pull_FreshInstance(t *testing.T) {
 
 	// Ensure cloned via a first instance.
 	first := gitshallow.New(testRepoURL, dir, 1, "")
-	if _, err := first.Fetch(t.Context()); err != nil {
+	if _, err := first.Update(t.Context()); err != nil {
 		t.Fatalf("initial Fetch: %v", err)
 	}
 
 	// Fresh instance with no in-memory state — git HEAD on disk drives the check.
 	fresh := gitshallow.New(testRepoURL, dir, 1, "")
-	updated, err := fresh.Fetch(t.Context())
+	updated, err := fresh.Update(t.Context())
 	if err != nil {
 		t.Fatalf("fresh-instance Fetch: %v", err)
 	}
