@@ -119,14 +119,21 @@ func (p *Policy) Current() *Evaluator { return p.current.Load() }
 // Refresh errors are returned while the previous evaluator is retained.
 func (p *Policy) Load(ctx context.Context, wait bool) (*Evaluator, error) {
 	if _, err := p.Revalidate(ctx); err != nil {
-		return p.Current(), err
+		return p.lastGood(), err
 	}
 	if p.loadedAt.Load() == nil || wait {
 		if err := p.refresh.Wait(ctx); err != nil {
-			return p.Current(), err
+			return p.lastGood(), err
 		}
 	}
-	return p.Current(), nil
+	return p.lastGood(), nil
+}
+
+func (p *Policy) lastGood() *Evaluator {
+	if evaluator := p.Current(); evaluator != nil {
+		return evaluator
+	}
+	return &Evaluator{}
 }
 
 func (p *Policy) Due(ctx context.Context) (bool, error) {
