@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/therootcompany/golib/net/geoip v0.6.1
-	github.com/therootcompany/golib/net/ippolicy v0.9.3
+	github.com/therootcompany/golib/net/ippolicy v0.10.0
 	golang.org/x/time v0.15.0
 )
 
