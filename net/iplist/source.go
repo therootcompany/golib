@@ -9,101 +9,189 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/therootcompany/golib/sync/cachable"
 )
 
-const DefaultRefreshInterval = time.Hour + 57*time.Minute + 13*time.Second
+const (
+	DefaultRefreshInterval = time.Hour + 57*time.Minute + 13*time.Second
+	DefaultRefreshTimeout  = 15 * time.Minute
+)
 
-type SourceConfig struct {
+type IPListConfig struct {
 	Source          string
 	CacheDir        string
 	HTTPClient      *http.Client
 	RefreshInterval time.Duration
 	Optional        bool
-	OnRefresh       func(SourceEvent)
+	RefreshTimeout  time.Duration
 }
 
-type SourceEvent struct {
-	Entries uint64
-	Err     error
-}
-
-type sourceSnapshot struct {
-	entries []string
-}
-
-type Source struct {
+type IPList struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
-	config     SourceConfig
-	current    atomic.Pointer[sourceSnapshot]
-	observers  []func(SourceEvent)
-	observerMu sync.RWMutex
+	config     IPListConfig
+	current    atomic.Pointer[[]string]
+	start      sync.Once
+	generation atomic.Uint64
+	loadedAt   atomic.Pointer[time.Time]
+	lastErr    atomic.Pointer[error]
+	refresh    cachable.Refresh
 }
 
-func NewSource(ctx context.Context, config SourceConfig) (*Source, error) {
+var (
+	_ cachable.Cacheable[[]string] = (*IPList)(nil)
+	_ cachable.Mutable[[]string]   = (*IPList)(nil)
+	_ cachable.Inspectable         = (*IPList)(nil)
+	_ cachable.Tickable            = (*IPList)(nil)
+)
+
+func NewIPList(ctx context.Context, config IPListConfig) (*IPList, error) {
 	if config.RefreshInterval <= 0 {
 		config.RefreshInterval = DefaultRefreshInterval
 	}
 	sourceCtx, cancel := context.WithCancel(ctx)
-	s := &Source{ctx: sourceCtx, cancel: cancel, config: config}
-	entries, err := s.load()
-	if err != nil {
+	s := &IPList{ctx: sourceCtx, cancel: cancel, config: config}
+	if _, err := s.Load(ctx, true); err != nil {
 		cancel()
 		return nil, err
 	}
-	s.store(entries)
-	go s.refreshLoop()
 	return s, nil
 }
 
-func (s *Source) Entries() []string {
-	current := s.current.Load()
-	if current == nil {
-		return nil
-	}
-	return append([]string(nil), current.entries...)
+func (s *IPList) Current() *[]string {
+	return s.current.Load()
 }
 
-func (s *Source) Refresh() error {
-	entries, err := s.load()
+func (s *IPList) Due(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	status := s.Status()
+	return !status.HasValue || status.StaleAt.IsZero() || !time.Now().Before(status.StaleAt), nil
+}
+
+func (s *IPList) Revalidate(ctx context.Context) (started bool, err error) {
+	due, err := s.Due(ctx)
+	if err != nil || !due {
+		return false, err
+	}
+	if !s.refresh.Begin() {
+		return false, nil
+	}
+	go func() {
+		timeout := s.config.RefreshTimeout
+		if timeout <= 0 {
+			timeout = DefaultRefreshTimeout
+		}
+		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		defer cancel()
+		s.refresh.Finish(s.update(refreshCtx))
+	}()
+	return true, nil
+}
+
+func (s *IPList) update(ctx context.Context) error {
+	generation := s.generation.Load()
+	entries, err := s.load(ctx)
 	if err != nil {
-		s.emit(SourceEvent{Entries: uint64(len(s.Entries())), Err: err})
+		errCopy := err
+		s.lastErr.Store(&errCopy)
 		return err
 	}
-	s.store(entries)
-	s.emit(SourceEvent{Entries: uint64(len(entries))})
+	old := s.current.Load()
+	changed := old == nil || !sameEntries(*old, entries)
+	if changed && s.generation.Load() == generation {
+		s.store(entries)
+	}
+	s.lastErr.Store(nil)
 	return nil
 }
 
-func (s *Source) Subscribe(observer func(SourceEvent)) {
-	if observer == nil {
-		return
+func (s *IPList) Load(ctx context.Context, wait bool) (*[]string, error) {
+	_, startErr := s.Revalidate(ctx)
+	if startErr != nil {
+		return s.Current(), startErr
 	}
-	s.observerMu.Lock()
-	s.observers = append(s.observers, observer)
-	s.observerMu.Unlock()
+	if s.Current() == nil || wait {
+		if err := s.refresh.Wait(ctx); err != nil {
+			return s.Current(), err
+		}
+	}
+	return s.Current(), nil
 }
 
-func (s *Source) emit(event SourceEvent) {
-	if s.config.OnRefresh != nil {
-		s.config.OnRefresh(event)
+func (s *IPList) Set(entries *[]string) error {
+	if entries == nil {
+		return s.Clear()
 	}
-	s.observerMu.RLock()
-	observers := append([]func(SourceEvent){}, s.observers...)
-	s.observerMu.RUnlock()
-	for _, observer := range observers {
-		observer(event)
-	}
+	s.generation.Add(1)
+	s.store(*entries)
+	return nil
 }
 
-func (s *Source) Close() error {
-	if s != nil && s.cancel != nil {
+func (s *IPList) Clear() error {
+	s.generation.Add(1)
+	s.current.Store(nil)
+	s.loadedAt.Store(nil)
+	return nil
+}
+
+func (s *IPList) Status() cachable.Status {
+	loadedAt := time.Time{}
+	if t := s.loadedAt.Load(); t != nil {
+		loadedAt = *t
+	}
+	var lastErr error
+	if p := s.lastErr.Load(); p != nil {
+		lastErr = *p
+	}
+	status := cachable.Status{LoadedAt: loadedAt, HasValue: s.Current() != nil, Refreshing: s.refresh.Running(), LastError: lastErr}
+	if !loadedAt.IsZero() {
+		status.StaleAt = loadedAt.Add(s.config.RefreshInterval)
+	}
+	return status
+}
+
+func (s *IPList) Start(ctx context.Context, interval time.Duration) {
+	s.start.Do(func() {
+		if interval <= 0 {
+			interval = s.config.RefreshInterval
+		}
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-s.ctx.Done():
+					return
+				case <-ticker.C:
+					_, _ = s.Revalidate(s.ctx)
+				}
+			}
+		}()
+	})
+}
+
+func (s *IPList) Stop() error {
+	if s == nil {
+		return nil
+	}
+	if s.cancel != nil {
 		s.cancel()
 	}
-	return nil
+	timeout := s.config.RefreshTimeout
+	if timeout <= 0 {
+		timeout = DefaultRefreshTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return s.refresh.Stop(ctx)
 }
 
-func (s *Source) load() ([]string, error) {
+func (s *IPList) load(ctx context.Context) ([]string, error) {
 	if s.config.Source == "" {
 		if s.config.Optional {
 			return nil, nil
@@ -121,23 +209,24 @@ func (s *Source) load() ([]string, error) {
 			}
 		}
 	}
-	return Load(s.ctx, s.config.Source, s.config.CacheDir, s.config.HTTPClient)
+	return Load(ctx, s.config.Source, s.config.CacheDir, s.config.HTTPClient)
 }
 
-func (s *Source) store(entries []string) {
-	copyEntries := append([]string(nil), entries...)
-	s.current.Store(&sourceSnapshot{entries: copyEntries})
+func (s *IPList) store(entries []string) {
+	cp := append([]string(nil), entries...)
+	s.current.Store(&cp)
+	now := time.Now()
+	s.loadedAt.Store(&now)
 }
 
-func (s *Source) refreshLoop() {
-	ticker := time.NewTicker(s.config.RefreshInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-ticker.C:
-			_ = s.Refresh()
+func sameEntries(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
 	}
+	return true
 }

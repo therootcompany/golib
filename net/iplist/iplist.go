@@ -201,7 +201,7 @@ func readSource(ctx context.Context, source, cacheDir string, seen map[string]st
 	cache.Header = header
 	cache.MaxAge = defaultMaxAge
 	cache.MaxBytes = defaultMaxBytes
-	if _, fetchErr := cache.Fetch(ctx); fetchErr != nil {
+	if _, fetchErr := cache.Update(ctx); fetchErr != nil {
 		// No previous cache to fall back on — propagate the fetch error.
 		if previousErr != nil {
 			return nil, fmt.Errorf("fetch %s: %w", safeURL(source), fetchErr)
