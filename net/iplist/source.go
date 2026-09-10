@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/therootcompany/golib/sync/cachable"
+	"github.com/therootcompany/golib/sync/cacheable"
 )
 
 const (
@@ -36,14 +36,14 @@ type IPList struct {
 	generation atomic.Uint64
 	loadedAt   atomic.Pointer[time.Time]
 	lastErr    atomic.Pointer[error]
-	refresh    cachable.Refresh
+	refresh    cacheable.Refresh
 }
 
 var (
-	_ cachable.Cacheable[[]string] = (*IPList)(nil)
-	_ cachable.Mutable[[]string]   = (*IPList)(nil)
-	_ cachable.Inspectable         = (*IPList)(nil)
-	_ cachable.Tickable            = (*IPList)(nil)
+	_ cacheable.Cacheable[[]string] = (*IPList)(nil)
+	_ cacheable.Mutable[[]string]   = (*IPList)(nil)
+	_ cacheable.Inspectable         = (*IPList)(nil)
+	_ cacheable.Tickable            = (*IPList)(nil)
 )
 
 func NewIPList(ctx context.Context, config IPListConfig) (*IPList, error) {
@@ -137,7 +137,7 @@ func (s *IPList) Clear() error {
 	return nil
 }
 
-func (s *IPList) Status() cachable.Status {
+func (s *IPList) Status() cacheable.Status {
 	loadedAt := time.Time{}
 	if t := s.loadedAt.Load(); t != nil {
 		loadedAt = *t
@@ -146,7 +146,7 @@ func (s *IPList) Status() cachable.Status {
 	if p := s.lastErr.Load(); p != nil {
 		lastErr = *p
 	}
-	status := cachable.Status{LoadedAt: loadedAt, HasValue: s.Current() != nil, Refreshing: s.refresh.Running(), LastError: lastErr}
+	status := cacheable.Status{LoadedAt: loadedAt, HasValue: s.Current() != nil, Refreshing: s.refresh.Running(), LastError: lastErr}
 	if !loadedAt.IsZero() {
 		status.StaleAt = loadedAt.Add(s.config.RefreshInterval)
 	}

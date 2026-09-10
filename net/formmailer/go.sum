@@ -30,8 +30,8 @@ github.com/therootcompany/golib/net/iplist v0.9.1 h1:atyzk6RPSPP/E+2Y+Q1XzBs3GnD
 github.com/therootcompany/golib/net/iplist v0.9.1/go.mod h1:8ifRSgp4ptijldClyh688NLom8EZre6E16JZ2AHCEMw=
 github.com/therootcompany/golib/net/ippolicy v0.9.1 h1:szAPNGFaJyD44MRSQ3r+AXOVdRVaoS8rMob44V8UbUk=
 github.com/therootcompany/golib/net/ippolicy v0.9.1/go.mod h1:3FpLflMoNLpHlE2XgHaXTekFHgg3BBRFqkOm+9hvosQ=
-github.com/therootcompany/golib/sync/cachable v0.1.0 h1:swCXtXB116jhSmla81HaXi/9cPsqFI+Oq/6OcSfdU5Q=
-github.com/therootcompany/golib/sync/cachable v0.1.0/go.mod h1:l/NZdGiSbW5CkLlkkRa0yObkqak2sj/jQTXXqXwvCl0=
+github.com/therootcompany/golib/sync/cacheable v0.1.0 h1:swCXtXB116jhSmla81HaXi/9cPsqFI+Oq/6OcSfdU5Q=
+github.com/therootcompany/golib/sync/cacheable v0.1.0/go.mod h1:l/NZdGiSbW5CkLlkkRa0yObkqak2sj/jQTXXqXwvCl0=
 golang.org/x/mod v0.30.0 h1:fDEXFVZ/fmCKProc/yAXXUijritrDzahmwwefnjoPFk=
 golang.org/x/mod v0.30.0/go.mod h1:lAsf5O2EvJeSFMiBxXDki7sCgAxEUcZHXoXMKT4GJKc=
 golang.org/x/net v0.47.0 h1:Mx+4dIFzqraBXUugkia1OOvlD6LemFo1ALMHjrXDOhY=

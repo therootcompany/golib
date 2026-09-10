@@ -11,7 +11,7 @@ import (
 
 	"github.com/therootcompany/golib/net/gitshallow"
 	"github.com/therootcompany/golib/net/ipcohort"
-	"github.com/therootcompany/golib/sync/cachable"
+	"github.com/therootcompany/golib/sync/cacheable"
 )
 
 const (
@@ -31,7 +31,7 @@ type IPPrefixSet struct {
 	lastErr        atomic.Pointer[error]
 	interval       time.Duration
 	RefreshTimeout time.Duration
-	refresh        cachable.Refresh
+	refresh        cacheable.Refresh
 }
 
 func EmptyIPPrefixSet() *IPPrefixSet {
@@ -64,10 +64,10 @@ func NewIPPrefixSet(ctx context.Context, repoURL, dataPath string, files []strin
 }
 
 var (
-	_ cachable.Cacheable[ipcohort.Cohort] = (*IPPrefixSet)(nil)
-	_ cachable.Mutable[ipcohort.Cohort]   = (*IPPrefixSet)(nil)
-	_ cachable.Inspectable                = (*IPPrefixSet)(nil)
-	_ cachable.Tickable                   = (*IPPrefixSet)(nil)
+	_ cacheable.Cacheable[ipcohort.Cohort] = (*IPPrefixSet)(nil)
+	_ cacheable.Mutable[ipcohort.Cohort]   = (*IPPrefixSet)(nil)
+	_ cacheable.Inspectable                = (*IPPrefixSet)(nil)
+	_ cacheable.Tickable                   = (*IPPrefixSet)(nil)
 )
 
 func (ps *IPPrefixSet) Current() *ipcohort.Cohort {
@@ -138,7 +138,7 @@ func (ps *IPPrefixSet) Clear() error {
 	return ps.Set(nil)
 }
 
-func (ps *IPPrefixSet) Status() cachable.Status {
+func (ps *IPPrefixSet) Status() cacheable.Status {
 	loadedAt := time.Time{}
 	if t := ps.loadedAt.Load(); t != nil {
 		loadedAt = *t
@@ -147,7 +147,7 @@ func (ps *IPPrefixSet) Status() cachable.Status {
 	if p := ps.lastErr.Load(); p != nil {
 		lastErr = *p
 	}
-	status := cachable.Status{LoadedAt: loadedAt, HasValue: ps.Current() != nil, Refreshing: ps.refresh.Running(), LastError: lastErr}
+	status := cacheable.Status{LoadedAt: loadedAt, HasValue: ps.Current() != nil, Refreshing: ps.refresh.Running(), LastError: lastErr}
 	if !loadedAt.IsZero() {
 		status.StaleAt = loadedAt.Add(ps.interval)
 	}

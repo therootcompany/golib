@@ -13,7 +13,7 @@ import (
 
 	"github.com/therootcompany/golib/https"
 	"github.com/therootcompany/golib/net/httpcache"
-	"github.com/therootcompany/golib/sync/cachable"
+	"github.com/therootcompany/golib/sync/cacheable"
 )
 
 const (
@@ -43,7 +43,7 @@ type GeoIPDB struct {
 	cancel     context.CancelFunc
 	loadedAt   atomic.Pointer[time.Time]
 	lastErr    atomic.Pointer[error]
-	refresh    cachable.Refresh
+	refresh    cacheable.Refresh
 	local      bool
 }
 
@@ -105,10 +105,10 @@ func (f *GeoIPDB) ready() error {
 
 // Fetch downloads all configured editions and reports whether any changed.
 var (
-	_ cachable.Cacheable[Databases] = (*GeoIPDB)(nil)
-	_ cachable.Mutable[Databases]   = (*GeoIPDB)(nil)
-	_ cachable.Inspectable          = (*GeoIPDB)(nil)
-	_ cachable.Tickable             = (*GeoIPDB)(nil)
+	_ cacheable.Cacheable[Databases] = (*GeoIPDB)(nil)
+	_ cacheable.Mutable[Databases]   = (*GeoIPDB)(nil)
+	_ cacheable.Inspectable          = (*GeoIPDB)(nil)
+	_ cacheable.Tickable             = (*GeoIPDB)(nil)
 )
 
 // Current returns the newest completed City+ASN snapshot without blocking.
@@ -195,7 +195,7 @@ func (f *GeoIPDB) Clear() error {
 	return f.Set(nil)
 }
 
-func (f *GeoIPDB) Status() cachable.Status {
+func (f *GeoIPDB) Status() cacheable.Status {
 	loadedAt := time.Time{}
 	if t := f.loadedAt.Load(); t != nil {
 		loadedAt = *t
@@ -204,7 +204,7 @@ func (f *GeoIPDB) Status() cachable.Status {
 	if p := f.lastErr.Load(); p != nil {
 		lastErr = *p
 	}
-	status := cachable.Status{LoadedAt: loadedAt, HasValue: f.Current() != nil, Refreshing: f.refresh.Running(), LastError: lastErr}
+	status := cacheable.Status{LoadedAt: loadedAt, HasValue: f.Current() != nil, Refreshing: f.refresh.Running(), LastError: lastErr}
 	if !loadedAt.IsZero() && f.maxAge > 0 {
 		status.StaleAt = loadedAt.Add(f.maxAge)
 	}

@@ -11,7 +11,7 @@ import (
 
 	"github.com/therootcompany/golib/net/dnsresolver"
 	"github.com/therootcompany/golib/net/ipcohort"
-	"github.com/therootcompany/golib/sync/cachable"
+	"github.com/therootcompany/golib/sync/cacheable"
 )
 
 const DefaultDomainSetRefreshInterval = 5 * time.Minute
@@ -95,7 +95,12 @@ func (ds *DomainSet) Replace(staticPrefixes, domains []string) {
 	ds.rebuildCohort()
 }
 
-var _ cachable.Tickable = (*DomainSet)(nil)
+var _ cacheable.Tickable = (*DomainSet)(nil)
+
+// Current returns the current immutable address cohort.
+func (ds *DomainSet) Current() *ipcohort.Cohort {
+	return ds.cohort.Load()
+}
 
 // Start starts at most one optional background DNS refresh ticker.
 func (ds *DomainSet) Start(ctx context.Context, interval time.Duration) {

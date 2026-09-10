@@ -21,7 +21,7 @@ require (
 	github.com/therootcompany/golib/net/ipcohort v0.9.0 // indirect
 	github.com/therootcompany/golib/net/iplist v0.9.1 // indirect
 	github.com/therootcompany/golib/net/ippolicy v0.9.1 // indirect
-	github.com/therootcompany/golib/sync/cachable v0.1.0 // indirect
+	github.com/therootcompany/golib/sync/cacheable v0.1.0 // indirect
 	golang.org/x/mod v0.30.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect

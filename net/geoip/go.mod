@@ -6,7 +6,7 @@ require (
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/therootcompany/golib/https v0.9.0
 	github.com/therootcompany/golib/net/httpcache v0.6.0
-	github.com/therootcompany/golib/sync/cachable v0.1.0
+	github.com/therootcompany/golib/sync/cacheable v0.1.0
 )
 
 require (

@@ -1,2 +1,2 @@
-github.com/therootcompany/golib/sync/cachable v0.1.0 h1:swCXtXB116jhSmla81HaXi/9cPsqFI+Oq/6OcSfdU5Q=
-github.com/therootcompany/golib/sync/cachable v0.1.0/go.mod h1:l/NZdGiSbW5CkLlkkRa0yObkqak2sj/jQTXXqXwvCl0=
+github.com/therootcompany/golib/sync/cacheable v0.1.0 h1:swCXtXB116jhSmla81HaXi/9cPsqFI+Oq/6OcSfdU5Q=
+github.com/therootcompany/golib/sync/cacheable v0.1.0/go.mod h1:l/NZdGiSbW5CkLlkkRa0yObkqak2sj/jQTXXqXwvCl0=

@@ -18,8 +18,8 @@ github.com/therootcompany/golib/net/httpcache v0.6.0 h1:qFBnSs6rZrtUQ+fweP4bHF2F
 github.com/therootcompany/golib/net/httpcache v0.6.0/go.mod h1:mKSQJWpGSCDBzWkTCwT7dO1SCVCsFmdkRgKr39fNS1U=
 github.com/therootcompany/golib/net/ipcohort v0.9.0 h1:j3AaoW2u4XQJz1ya6fixv3pb3KgxIpZV8t0082/kS3E=
 github.com/therootcompany/golib/net/ipcohort v0.9.0/go.mod h1:Ljcnt2xOryVDGIVV5Kzt5hj2LhW4lBAWo5OeeVYU9ys=
-github.com/therootcompany/golib/sync/cachable v0.1.0 h1:swCXtXB116jhSmla81HaXi/9cPsqFI+Oq/6OcSfdU5Q=
-github.com/therootcompany/golib/sync/cachable v0.1.0/go.mod h1:l/NZdGiSbW5CkLlkkRa0yObkqak2sj/jQTXXqXwvCl0=
+github.com/therootcompany/golib/sync/cacheable v0.1.0 h1:swCXtXB116jhSmla81HaXi/9cPsqFI+Oq/6OcSfdU5Q=
+github.com/therootcompany/golib/sync/cacheable v0.1.0/go.mod h1:l/NZdGiSbW5CkLlkkRa0yObkqak2sj/jQTXXqXwvCl0=
 github.com/therootcompany/golib/sync/dataset v0.6.0 h1:Gerq315Ld1PyfD+6EmTDxSEAOg6s0kDchL2oo/jAQZ0=
 github.com/therootcompany/golib/sync/dataset v0.6.0/go.mod h1:ktn0ppeIpNvgNLFYFuD9W6hGEQfwaIEcE8TV048+Y9M=
 golang.org/x/sync v0.20.0 h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=

@@ -1,4 +1,4 @@
-package cachable
+package cacheable
 
 import (
 	"context"

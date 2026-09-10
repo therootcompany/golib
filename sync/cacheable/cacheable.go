@@ -1,5 +1,5 @@
-// Package cachable defines contracts for lazily refreshed cached values.
-package cachable
+// Package cacheable defines contracts for lazily refreshed cached values.
+package cacheable
 
 import (
 	"context"

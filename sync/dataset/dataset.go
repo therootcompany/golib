@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/therootcompany/golib/sync/cachable"
+	"github.com/therootcompany/golib/sync/cacheable"
 )
 
 // Upstream reports whether an upstream source has changed since the last call.
@@ -104,12 +104,12 @@ type Set struct {
 	loadedAt       atomic.Pointer[time.Time]
 	start          sync.Once
 	cancel         context.CancelFunc
-	refresh        cachable.Refresh
+	refresh        cacheable.Refresh
 	generation     atomic.Uint64
 	RefreshTimeout time.Duration
 	// RefreshInterval gates how often Revalidate will start a refresh. Zero
 	// means always due (freshness is delegated to the upstreams' own dedup
-	// windows). Set to a positive duration to match the other cachable
+	// windows). Set to a positive duration to match the other cacheable
 	// implementations' time-based Due.
 	RefreshInterval time.Duration
 }
@@ -296,10 +296,10 @@ type View[T any] struct {
 }
 
 var (
-	_ cachable.Cacheable[any] = (*View[any])(nil)
-	_ cachable.Mutable[any]   = (*View[any])(nil)
-	_ cachable.Inspectable    = (*View[any])(nil)
-	_ cachable.Tickable       = (*View[any])(nil)
+	_ cacheable.Cacheable[any] = (*View[any])(nil)
+	_ cacheable.Mutable[any]   = (*View[any])(nil)
+	_ cacheable.Inspectable    = (*View[any])(nil)
+	_ cacheable.Tickable       = (*View[any])(nil)
 )
 
 // Current returns the current snapshot without blocking. It is nil before
@@ -355,8 +355,8 @@ func (v *View[T]) Clear() error {
 // Status reports the view's published snapshot. StaleAt is populated from the
 // set's RefreshInterval (when set); with a zero interval StaleAt stays zero
 // because freshness is delegated to the upstreams.
-func (v *View[T]) Status() cachable.Status {
-	status := cachable.Status{HasValue: v.Current() != nil, Refreshing: v.set.refresh.Running()}
+func (v *View[T]) Status() cacheable.Status {
+	status := cacheable.Status{HasValue: v.Current() != nil, Refreshing: v.set.refresh.Running()}
 	if loadedAt := v.loadedAt.Load(); loadedAt != nil {
 		status.LoadedAt = *loadedAt
 		if v.set.RefreshInterval > 0 {
