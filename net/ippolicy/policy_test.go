@@ -36,19 +36,24 @@ func TestPolicyKeepsSnapshotAfterFailedRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := New(t.Context(), Config{Whitelist: whitelist})
+	p := New(t.Context(), Config{Whitelist: whitelist, RefreshInterval: time.Nanosecond})
 	defer p.Stop()
 
-	if p.Evaluate(netip.MustParseAddr("192.0.2.1")) != Whitelisted {
+	evaluator, err := p.Load(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evaluator.Evaluate(netip.MustParseAddr("192.0.2.1")) != Whitelisted {
 		t.Fatal("initial whitelist did not match")
 	}
 	if err := os.WriteFile(path, []byte("invalid entry\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := whitelist.Load(t.Context(), true); err == nil {
+	evaluator, err = p.Load(t.Context(), true)
+	if err == nil {
 		t.Fatal("invalid refresh unexpectedly succeeded")
 	}
-	if p.Evaluate(netip.MustParseAddr("192.0.2.1")) != Whitelisted {
+	if evaluator.Evaluate(netip.MustParseAddr("192.0.2.1")) != Whitelisted {
 		t.Fatal("failed refresh replaced valid snapshot")
 	}
 }
@@ -71,12 +76,16 @@ func TestPolicyWhitelistPrecedesBlacklistExtra(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := New(context.Background(), Config{Whitelist: whitelist, BlacklistExtra: blacklistExtra})
+	p := New(context.Background(), Config{Whitelist: whitelist, BlacklistExtra: blacklistExtra, RefreshInterval: time.Nanosecond})
 	defer p.Stop()
-	if p.Evaluate(netip.MustParseAddr("192.0.2.1")) != Whitelisted {
+	evaluator, err := p.Load(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evaluator.Evaluate(netip.MustParseAddr("192.0.2.1")) != Whitelisted {
 		t.Fatal("whitelist did not take precedence")
 	}
-	if p.Evaluate(netip.MustParseAddr("192.0.2.2")) != Blacklisted {
+	if evaluator.Evaluate(netip.MustParseAddr("192.0.2.2")) != Blacklisted {
 		t.Fatal("blacklist extra did not block")
 	}
 }

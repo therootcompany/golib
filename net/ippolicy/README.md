@@ -34,11 +34,12 @@ policy := ippolicy.New(ctx, ippolicy.Config{
 })
 defer policy.Stop()
 
-if err := policy.Load(ctx, true); err != nil {
-    return err
+evaluator, err := policy.Load(ctx, false)
+if err != nil {
+    slog.Warn("ip policy refresh failed", "err", err)
 }
 
-switch policy.Evaluate(addr) {
+switch evaluator.Evaluate(addr) {
 case ippolicy.Blacklisted:
     // reject
 case ippolicy.Whitelisted, ippolicy.Unlisted:
@@ -46,8 +47,10 @@ case ippolicy.Whitelisted, ippolicy.Unlisted:
 }
 ```
 
-Use `Load(ctx, false)` when a current snapshot may be used while refresh work
-runs. Use `Start`/`Stop` only when periodic background checks are wanted.
+`Policy` owns source loading and refresh coordination. `Evaluator` is the
+immutable, read-only decision snapshot. Use `Load(ctx, false)` when the current
+snapshot may be used while refresh work runs; it returns the last-good evaluator
+when refresh fails. `Stop` shuts down source and DNS refresh work.
 Every source keeps its last-good snapshot after a failed update.
 
 A nil whitelist produces an `Unlisted` policy and intentionally ignores
