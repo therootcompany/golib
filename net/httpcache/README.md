@@ -25,7 +25,7 @@ c.MaxAge = time.Hour       // skip HTTP if file is < 1h old
 // c.FailureBackoff = 30 * time.Minute // defaults to MaxAge
 c.MaxBytes = 50 << 20      // 50 MiB cap
 
-updated, err := c.Fetch(ctx)
+updated, err := c.Update(ctx)
 switch {
 case errors.Is(err, httpcache.ErrPeerFetching):
     // another process is downloading; reload from disk if updated==true

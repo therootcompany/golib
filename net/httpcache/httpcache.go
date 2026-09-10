@@ -2,6 +2,7 @@ package httpcache
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,6 +101,16 @@ type cacheMeta struct {
 
 func (c *Cacher) metaPath() string { return c.Path + ".meta" }
 
+// BasicAuth returns an HTTP Basic Authorization header value.
+func BasicAuth(user, pass string) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
+}
+
+// Bearer returns a Bearer Authorization header value.
+func Bearer(token string) string {
+	return "Bearer " + token
+}
+
 // safeURL returns c.URL with any userinfo (user:password@) stripped, so
 // errors and logs don't leak credentials embedded in the URL. Falls back
 // to "<unparseable URL>" rather than echoing the raw value if parsing
@@ -178,7 +189,7 @@ func NewWith(url, path string, client *http.Client) *Cacher {
 //
 // Safe to call concurrently — concurrent callers share a single in-flight
 // fetch (via singleflight) and all receive the same result.
-func (c *Cacher) Fetch(ctx context.Context) (updated bool, err error) {
+func (c *Cacher) Update(ctx context.Context) (updated bool, err error) {
 	type result struct {
 		updated bool
 		err     error
@@ -339,6 +350,11 @@ func (c *Cacher) fetch(ctx context.Context) (updated bool, err error) {
 }
 
 func (c *Cacher) recordFailure(err error, retryAt *time.Time) error {
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrPeerFetching) {
+		return err
+	}
 	now := time.Now()
 	c.LastFailure = &now
 	c.RetryAt = retryAt
