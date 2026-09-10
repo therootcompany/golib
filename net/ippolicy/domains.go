@@ -2,6 +2,7 @@ package ippolicy
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/therootcompany/golib/net/dnsresolver"
 	"github.com/therootcompany/golib/net/ipcohort"
+	"github.com/therootcompany/golib/sync/cachable"
 )
 
 const DefaultDomainSetRefreshInterval = 5 * time.Minute
@@ -81,10 +83,6 @@ func NewDomainSet(ctx context.Context, staticPrefixes []string, domains []string
 
 	log().Info("domain set loaded", "static", commaify(len(staticPrefixes)), "domains", commaify(len(domains)))
 
-	if len(domains) > 0 {
-		ds.startRefreshLoop()
-	}
-
 	return ds
 }
 
@@ -93,18 +91,23 @@ func (ds *DomainSet) Replace(staticPrefixes, domains []string) {
 		staticPrefixes: append([]string(nil), staticPrefixes...),
 		domains:        append([]string(nil), domains...),
 	})
-	if len(domains) > 0 {
-		ds.startRefreshLoop()
-	}
 	ds.resolveDomains(ds.ctx)
 	ds.rebuildCohort()
 }
 
-func (ds *DomainSet) startRefreshLoop() {
-	ds.start.Do(func() { go ds.refreshLoop(ds.interval) })
+var _ cachable.Tickable = (*DomainSet)(nil)
+
+// Start starts at most one optional background DNS refresh ticker.
+func (ds *DomainSet) Start(ctx context.Context, interval time.Duration) {
+	ds.start.Do(func() {
+		if interval <= 0 {
+			interval = ds.interval
+		}
+		go ds.refreshLoop(ctx, interval)
+	})
 }
 
-func (ds *DomainSet) Close() error {
+func (ds *DomainSet) Stop() error {
 	if ds != nil && ds.cancel != nil {
 		ds.cancel()
 	}
@@ -120,8 +123,8 @@ func (ds *DomainSet) Contains(addr netip.Addr) bool {
 	return cohort.ContainsAddr(addr)
 }
 
-func (ds *DomainSet) refreshLoop(interval time.Duration) {
-	ds.resolveDomains(ds.ctx)
+func (ds *DomainSet) refreshLoop(ctx context.Context, interval time.Duration) {
+	ds.resolveDomains(ctx)
 	ds.rebuildCohort()
 
 	ticker := time.NewTicker(interval)
@@ -129,10 +132,12 @@ func (ds *DomainSet) refreshLoop(interval time.Duration) {
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ds.ctx.Done():
 			return
 		case <-ticker.C:
-			ds.resolveDomains(ds.ctx)
+			ds.resolveDomains(ctx)
 			ds.rebuildCohort()
 		}
 	}
@@ -151,13 +156,21 @@ func (ds *DomainSet) resolveDomains(ctx context.Context) {
 	for _, domain := range sources.domains {
 		ips, _, err := resolver.LookupIP(ctx, domain)
 
-		if err != nil || len(ips) == 0 {
+		if err != nil {
+			if errors.Is(err, dnsresolver.ErrNoAddresses) || errors.Is(err, dnsresolver.ErrNameNotFound) {
+				// A definitive no-such-name result removes old addresses.
+				continue
+			}
 			if old, ok := prev[domain]; ok {
 				next[domain] = old
 				log().Warn("resolve failed, keeping prior IPs", "domain", domain, "count", len(old), "err", err)
 			} else {
 				log().Warn("resolve failed, no prior data", "domain", domain, "err", err)
 			}
+			continue
+		}
+		if len(ips) == 0 {
+			// A successful empty result removes old addresses.
 			continue
 		}
 

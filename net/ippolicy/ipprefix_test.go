@@ -10,10 +10,10 @@ import (
 )
 
 func TestPrefixSetContainsZeroValue(t *testing.T) {
-	var ps PrefixSet
+	var ps IPPrefixSet
 	// Zero-value must not panic — Contains self-initialises via CAS.
 	if ps.Contains(netip.MustParseAddr("192.0.2.1")) {
-		t.Fatal("zero-value PrefixSet must not contain an address")
+		t.Fatal("zero-value IPPrefixSet must not contain an address")
 	}
 	// After first call the cohort should be non-nil.
 	if ps.cohort.Load() == nil {

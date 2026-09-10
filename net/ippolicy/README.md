@@ -1,36 +1,22 @@
 # net/ippolicy
 
-`ippolicy` composes independently refreshed IP sources into a fast policy
-check. It uses `net/iplist` for local/HTTP source refresh and provides IP
-matching, DNS refresh, and the legacy git blacklist.
+`ippolicy` composes whitelist, blacklist-extra, and repository-backed prefix data into a fast policy
+check. Sources expose lazy loading and explicit refresh; policy construction
+does not start hidden refresh goroutines.
 
 ## Quick start
 
-Construct each source with `net/iplist.NewSource`, then pass them to
-`ippolicy.New`:
-
 ```go
-whitelist, err := iplist.NewSource(ctx, iplist.SourceConfig{
-    Source:     "allowed.csv",
-    CacheDir:   "/var/cache/app/iplist",
-    // HTTPClient: nil, // uses golib's internal client
+whitelist, err := iplist.NewIPList(ctx, iplist.IPListConfig{
+    Source:   "allowed.csv",
+    CacheDir: "/var/cache/app/iplist",
 })
 if err != nil {
     return err
 }
-defer whitelist.Close()
+defer whitelist.Stop()
 
-blacklistExtra, err := iplist.NewSource(ctx, iplist.SourceConfig{
-    Source:     "blocked-ips-extra.tsv",
-    CacheDir:   "/var/cache/app/iplist",
-    Optional:   true,
-})
-if err != nil {
-    return err
-}
-defer blacklistExtra.Close()
-
-gitBlacklist, err := ippolicy.NewPrefixSet(
+blacklist, err := ippolicy.NewIPPrefixSet(
     ctx,
     "https://github.com/bitwire-it/ipblocklist.git",
     "/var/cache/app/ipblocklist",
@@ -40,17 +26,17 @@ gitBlacklist, err := ippolicy.NewPrefixSet(
 if err != nil {
     return err
 }
-defer gitBlacklist.Close()
+defer blacklist.Stop()
 
 policy := ippolicy.New(ctx, ippolicy.Config{
-    Whitelist:      whitelist,
-    Blacklist:      gitBlacklist,
-    BlacklistExtra: blacklistExtra,
-    OnRefresh: func(e ippolicy.RefreshEvent) {
-        slog.Info("ippolicy refresh", "kind", e.Kind, "err", e.Err)
-    },
+    Whitelist: whitelist,
+    Blacklist: blacklist,
 })
-defer policy.Close()
+defer policy.Stop()
+
+if err := policy.Load(ctx, true); err != nil {
+    return err
+}
 
 switch policy.Evaluate(addr) {
 case ippolicy.Blacklisted:
@@ -60,14 +46,9 @@ case ippolicy.Whitelisted, ippolicy.Unlisted:
 }
 ```
 
-## Behavior
+Use `Load(ctx, false)` when a current snapshot may be used while refresh work
+runs. Use `Start`/`Stop` only when periodic background checks are wanted.
+Every source keeps its last-good snapshot after a failed update.
 
-Each source refreshes independently and keeps its last valid data on failure.
-Whitelist matches take precedence over blacklist matches. The policy does not
-log; use `OnRefresh` for application logging and metrics.
-
-A nil `Whitelist` produces a policy where every address evaluates to
-`Unlisted`. This intentionally drops the blacklists as well: without a
-whitelist the policy cannot distinguish "allowed" from "unknown", so blocking
-would be meaningless. The caller receives a `RefreshFallback` event so it can
-log or alert.
+A nil whitelist produces an `Unlisted` policy and intentionally ignores
+blacklists: without a whitelist there is no meaningful allow-list boundary.
