@@ -15,11 +15,13 @@ import (
 //	AccountID   123456
 //	LicenseKey  xxxxxxxxxxxxxxxx
 //	EditionIDs  GeoLite2-City GeoLite2-ASN
+//	BaseURL     https://geoip.example.com/geoip/databases
 type Conf struct {
 	AccountID         string
 	LicenseKey        string
 	EditionIDs        []string
 	DatabaseDirectory string
+	BaseURL           string
 }
 
 // ErrMissingCredentials is returned by ParseConf when AccountID or LicenseKey
@@ -48,6 +50,7 @@ func ParseConf(s string) (*Conf, error) {
 		AccountID:         kv["AccountID"],
 		LicenseKey:        kv["LicenseKey"],
 		DatabaseDirectory: kv["DatabaseDirectory"],
+		BaseURL:           kv["BaseURL"],
 	}
 	if c.AccountID == "" || c.LicenseKey == "" {
 		return nil, ErrMissingCredentials

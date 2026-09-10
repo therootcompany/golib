@@ -98,9 +98,18 @@ func openMMDBTarGz(path string) (*geoip2.Reader, error) {
 	}
 }
 
-// Close closes the city and ASN readers.
+// Close closes the city and ASN readers. It is safe to call on a
+// partially-initialised Databases (nil readers are skipped), which makes
+// Set/Clear robust against manually-constructed snapshots.
 func (d *Databases) Close() error {
-	return errors.Join(d.City.Close(), d.ASN.Close())
+	var errs []error
+	if d.City != nil {
+		errs = append(errs, d.City.Close())
+	}
+	if d.ASN != nil {
+		errs = append(errs, d.ASN.Close())
+	}
+	return errors.Join(errs...)
 }
 
 // Info is the structured result of a GeoIP lookup.
