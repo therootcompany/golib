@@ -19,7 +19,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -27,7 +26,6 @@ import (
 	"github.com/therootcompany/golib/net/gitshallow"
 	"github.com/therootcompany/golib/net/httpcache"
 	"github.com/therootcompany/golib/net/ipcohort"
-	"github.com/therootcompany/golib/net/iplist"
 	"github.com/therootcompany/golib/sync/dataset"
 )
 
@@ -117,7 +115,7 @@ type IPCheck struct {
 
 	inbound   *dataset.View[ipcohort.Cohort]
 	outbound  *dataset.View[ipcohort.Cohort]
-	whitelist atomic.Pointer[ipcohort.Cohort]
+	whitelist *dataset.View[ipcohort.Cohort]
 	geo       *dataset.View[geoip.Databases]
 }
 
@@ -233,7 +231,7 @@ func main() {
 	loadBlocklists := func() {
 		fmt.Fprint(os.Stderr, "Loading blocklists... ")
 		t := time.Now()
-		if err := blocklists.Load(context.Background()); err != nil {
+		if err := blocklists.Load(context.Background(), true); err != nil {
 			fmt.Fprintln(os.Stderr)
 			log.Printf("blocklists: %v", err)
 			if !asyncServe {
@@ -243,8 +241,8 @@ func main() {
 		}
 		fmt.Fprintf(os.Stderr, "%s (inbound=%s, outbound=%s)\n",
 			time.Since(t).Round(time.Millisecond),
-			commafy(cfg.inbound.Value().Size()),
-			commafy(cfg.outbound.Value().Size()),
+			commafy(cfg.inbound.Current().Size()),
+			commafy(cfg.outbound.Current().Size()),
 		)
 	}
 	if !asyncServe {
@@ -286,46 +284,41 @@ func main() {
 	})
 	fmt.Fprint(os.Stderr, "Loading geoip... ")
 	tGeo := time.Now()
-	if err := geoSet.Load(context.Background()); err != nil {
+	if err := geoSet.Load(context.Background(), true); err != nil {
 		fmt.Fprintln(os.Stderr)
 		log.Fatalf("geoip: %v", err)
 	}
 	fmt.Fprintf(os.Stderr, "%s\n", time.Since(tGeo).Round(time.Millisecond))
-	defer func() { _ = cfg.geo.Value().Close() }()
+	defer func() { _ = cfg.geo.Current().Close() }()
 
-	// Whitelist: combined IPs + CIDRs in one file, refreshed on an interval.
+	// Whitelist: combined IPs + CIDRs in one file, polled for mtime changes.
 	// A match here overrides any block decision from the blocklists.
-	// Uses net/iplist.Source — the refreshed-IP-list primitive net/ippolicy
-	// builds on — instead of a dataset wrapper; iplist owns the refresh.
+	var whitelistSet *dataset.Set
+	var loadWhitelist func()
 	if cfg.WhitelistPath != "" {
-		t := time.Now()
-		whitelistSrc, err := iplist.NewSource(context.Background(), iplist.SourceConfig{
-			Source:          cfg.WhitelistPath,
-			RefreshInterval: refreshInterval,
-			Optional:        true,
+		whitelistSet = dataset.NewSet(dataset.PollFiles(cfg.WhitelistPath))
+		cfg.whitelist = addCohort(whitelistSet, func(_ context.Context) (*ipcohort.Cohort, error) {
+			return ipcohort.LoadFile(cfg.WhitelistPath)
 		})
-		if err != nil {
-			log.Fatalf("whitelist: %v", err)
-		}
-		store := func() {
-			coh, perr := ipcohort.Parse(whitelistSrc.Entries())
-			if perr != nil {
-				log.Printf("whitelist: %v", perr)
-			}
-			cfg.whitelist.Store(coh)
-		}
-		store()
-		whitelistSrc.Subscribe(func(e iplist.SourceEvent) {
-			if e.Err != nil {
-				log.Printf("whitelist refresh: %v", e.Err)
+		loadWhitelist = func() {
+			fmt.Fprint(os.Stderr, "Loading whitelist... ")
+			t := time.Now()
+			if err := whitelistSet.Load(context.Background(), true); err != nil {
+				fmt.Fprintln(os.Stderr)
+				log.Printf("whitelist: %v", err)
+				if !asyncServe {
+					os.Exit(1)
+				}
 				return
 			}
-			store()
-		})
-		fmt.Fprintf(os.Stderr, "Loading whitelist... %s (entries=%s)\n",
-			time.Since(t).Round(time.Millisecond),
-			commafy(cfg.whitelist.Load().Size()),
-		)
+			fmt.Fprintf(os.Stderr, "%s (entries=%s)\n",
+				time.Since(t).Round(time.Millisecond),
+				commafy(cfg.whitelist.Current().Size()),
+			)
+		}
+		if !asyncServe {
+			loadWhitelist()
+		}
 	}
 
 	// Blank line separates the stderr "Loading ..." block from the real
@@ -380,13 +373,15 @@ func main() {
 	defer stop()
 	if asyncServe {
 		go loadBlocklists()
+		if loadWhitelist != nil {
+			go loadWhitelist()
+		}
 	}
-	go blocklists.Tick(ctx, refreshInterval, func(err error) {
-		log.Printf("blocklists refresh: %v", err)
-	})
-	go geoSet.Tick(ctx, refreshInterval, func(err error) {
-		log.Printf("geoip refresh: %v", err)
-	})
+	blocklists.Start(ctx, refreshInterval)
+	geoSet.Start(ctx, refreshInterval)
+	if whitelistSet != nil {
+		whitelistSet.Start(ctx, refreshInterval)
+	}
 	if err := cfg.serve(ctx); err != nil {
 		log.Fatalf("serve: %v", err)
 	}

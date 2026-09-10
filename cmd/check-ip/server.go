@@ -31,7 +31,7 @@ type Result struct {
 // lookup builds a Result for ip against the currently loaded blocklists
 // and GeoIP databases.
 func (c *IPCheck) lookup(ip string) Result {
-	res := Result{IP: ip, Geo: c.geo.Value().Lookup(ip)}
+	res := Result{IP: ip, Geo: c.geo.Current().Lookup(ip)}
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
 		res.Blocked = true
@@ -39,12 +39,12 @@ func (c *IPCheck) lookup(ip string) Result {
 		res.BlockedOutbound = true
 		return res
 	}
-	if cur := c.whitelist.Load(); cur != nil && cur.ContainsAddr(addr) {
+	if c.whitelist != nil && c.whitelist.Current().ContainsAddr(addr) {
 		res.Allowlisted = true
 		return res
 	}
-	res.BlockedInbound = c.inbound.Value().ContainsAddr(addr)
-	res.BlockedOutbound = c.outbound.Value().ContainsAddr(addr)
+	res.BlockedInbound = c.inbound.Current().ContainsAddr(addr)
+	res.BlockedOutbound = c.outbound.Current().ContainsAddr(addr)
 	res.Blocked = res.BlockedInbound || res.BlockedOutbound
 	return res
 }
@@ -119,8 +119,8 @@ type dsStatus struct {
 // loaded, 503 while any are still empty.
 func (c *IPCheck) healthz(w http.ResponseWriter, _ *http.Request) {
 	cohortStatus := func(v *dataset.View[ipcohort.Cohort]) dsStatus {
-		s := dsStatus{LoadedAt: v.LoadedAt()}
-		if cur := v.Value(); cur != nil {
+		s := dsStatus{LoadedAt: v.Status().LoadedAt}
+		if cur := v.Current(); cur != nil {
 			s.Loaded, s.Size = true, cur.Size()
 		}
 		return s
@@ -130,12 +130,12 @@ func (c *IPCheck) healthz(w http.ResponseWriter, _ *http.Request) {
 		"inbound":  cohortStatus(c.inbound),
 		"outbound": cohortStatus(c.outbound),
 		"geoip": {
-			Loaded:   c.geo.Value() != nil,
-			LoadedAt: c.geo.LoadedAt(),
+			Loaded:   c.geo.Current() != nil,
+			LoadedAt: c.geo.Status().LoadedAt,
 		},
 	}
-	if cur := c.whitelist.Load(); cur != nil {
-		datasets["whitelist"] = dsStatus{Loaded: true, Size: cur.Size()}
+	if c.whitelist != nil {
+		datasets["whitelist"] = cohortStatus(c.whitelist)
 	}
 
 	ready := datasets["inbound"].Loaded && datasets["outbound"].Loaded && datasets["geoip"].Loaded
