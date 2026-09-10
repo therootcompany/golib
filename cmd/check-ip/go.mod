@@ -3,11 +3,11 @@ module github.com/therootcompany/golib/cmd/check-ip
 go 1.26.5
 
 require (
-	github.com/therootcompany/golib/net/geoip v0.6.1
+	github.com/therootcompany/golib/net/geoip v0.6.2
 	github.com/therootcompany/golib/net/gitshallow v0.10.0
 	github.com/therootcompany/golib/net/httpcache v0.6.0
 	github.com/therootcompany/golib/net/ipcohort v0.9.0
-	github.com/therootcompany/golib/sync/dataset v0.6.1
+	github.com/therootcompany/golib/sync/dataset v0.6.2
 )
 
 require (

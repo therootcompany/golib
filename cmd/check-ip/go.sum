@@ -10,8 +10,8 @@ github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsT
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/therootcompany/golib/https v0.9.0 h1:D9gh0K6ljkvF805JUbylITn8SHPMo08q5PglQGXsK8c=
 github.com/therootcompany/golib/https v0.9.0/go.mod h1:ilExqR/Uh7oB36oy9mwuNhANcFh+zdCfD3uJiZ11YAY=
-github.com/therootcompany/golib/net/geoip v0.6.1 h1:J6aTzUC+Aj3kUuufhaEF6vVSElGyarlT0IIGsYqMMno=
-github.com/therootcompany/golib/net/geoip v0.6.1/go.mod h1:Ojmw/79d+I0j6i3WnBWxSkN1wI3cyd7cKjTBJz9rKU4=
+github.com/therootcompany/golib/net/geoip v0.6.2 h1:50y48I3Ld6VHppw3ut0536yM3qjXhYpG5fpYBO/tEgM=
+github.com/therootcompany/golib/net/geoip v0.6.2/go.mod h1:Ojmw/79d+I0j6i3WnBWxSkN1wI3cyd7cKjTBJz9rKU4=
 github.com/therootcompany/golib/net/gitshallow v0.10.0 h1:cLN9ElTmNWk5HSbaRD3sSFuGdpgy4YXc+LVzjzT0nM4=
 github.com/therootcompany/golib/net/gitshallow v0.10.0/go.mod h1:S/3OK7wMOqJJjP79U9Qw/l3jjEyrb/zsjJ8HAPAX/Fc=
 github.com/therootcompany/golib/net/httpcache v0.6.0 h1:qFBnSs6rZrtUQ+fweP4bHF2FQd/Syvs7mRN5nO5YtkY=
@@ -20,8 +20,8 @@ github.com/therootcompany/golib/net/ipcohort v0.9.0 h1:j3AaoW2u4XQJz1ya6fixv3pb3
 github.com/therootcompany/golib/net/ipcohort v0.9.0/go.mod h1:Ljcnt2xOryVDGIVV5Kzt5hj2LhW4lBAWo5OeeVYU9ys=
 github.com/therootcompany/golib/sync/cacheable v0.1.0 h1:s6mz4dZv9Vsd0nuDz8IpS+n35GLjOwpjZlomimkqw1M=
 github.com/therootcompany/golib/sync/cacheable v0.1.0/go.mod h1:0ZQ9sOtqyr1j8ZfSaAyPM1HlGi1B2qFgaGC4ULUbhD4=
-github.com/therootcompany/golib/sync/dataset v0.6.1 h1:YIl1OQOlzt2tFiN7wOsnQbZSKNRJJkzTLgu3s0YEGEU=
-github.com/therootcompany/golib/sync/dataset v0.6.1/go.mod h1:0ixmqLKpEEf87i5chou3gjFNIn0U94vL/65iVWZbkDw=
+github.com/therootcompany/golib/sync/dataset v0.6.2 h1:wIlILpX+ovBbmY403Vp0R3F+yBd2GJiFAacOCLnBnwg=
+github.com/therootcompany/golib/sync/dataset v0.6.2/go.mod h1:0ixmqLKpEEf87i5chou3gjFNIn0U94vL/65iVWZbkDw=
 golang.org/x/sync v0.20.0 h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=
 golang.org/x/sync v0.20.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=
 golang.org/x/sys v0.45.0 h1:dO4czNzziLiiXplLQgBCEpCvXQ3dnkn0SdaZSYdQ+FY=
