@@ -6,7 +6,7 @@ require (
 	github.com/therootcompany/golib/net/dnsresolver v0.6.0
 	github.com/therootcompany/golib/net/gitshallow v0.10.0
 	github.com/therootcompany/golib/net/ipcohort v0.9.0
-	github.com/therootcompany/golib/net/iplist v0.9.0
+	github.com/therootcompany/golib/net/iplist v0.9.1
 	github.com/therootcompany/golib/sync/cachable v0.1.0
 )
 
