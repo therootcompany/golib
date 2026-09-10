@@ -69,7 +69,7 @@ func TestDownload_CityAndASN(t *testing.T) {
 		os.Remove(path)
 		os.Remove(path + ".meta")
 
-		updated, err := newCacher(cfg, edition, path).Fetch(t.Context())
+		updated, err := newCacher(cfg, edition, path).Update(t.Context())
 		if err != nil {
 			t.Fatalf("%s Fetch: %v", edition, err)
 		}
@@ -99,11 +99,11 @@ func TestDownload_ConditionalGet_FreshCacher(t *testing.T) {
 	for _, edition := range []string{geoip.CityEdition, geoip.ASNEdition} {
 		path := filepath.Join(td, geoip.TarGzName(edition))
 
-		if _, err := newCacher(cfg, edition, path).Fetch(t.Context()); err != nil {
+		if _, err := newCacher(cfg, edition, path).Update(t.Context()); err != nil {
 			t.Fatalf("%s initial Fetch: %v", edition, err)
 		}
 
-		updated, err := newCacher(cfg, edition, path).Fetch(t.Context())
+		updated, err := newCacher(cfg, edition, path).Update(t.Context())
 		if err != nil {
 			t.Fatalf("%s fresh Fetch: %v", edition, err)
 		}
