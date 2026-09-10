@@ -222,11 +222,11 @@ func (r *Repo) gc(ctx context.Context) error {
 }
 
 // Fetch clones the repo if missing, pulls otherwise, and conditionally runs
-// GC based on GCInterval. Returns whether HEAD changed. Implements Fetcher.
+// GC based on GCInterval. Returns whether HEAD changed. Implements Upstream.
 // Safe to call concurrently — concurrent callers share a single in-flight
 // fetch (via singleflight) and all receive the same result. To force a
 // pull regardless of MaxAge, set MaxAge=-1 before calling.
-func (r *Repo) Fetch(ctx context.Context) (updated bool, err error) {
+func (r *Repo) Update(ctx context.Context) (updated bool, err error) {
 	// MaxAge: file-mtime gate (FETCH_HEAD is rewritten on every successful
 	// fetch, so its mtime is "last time we talked to the remote").
 	if maxAge := r.effectiveMaxAge(); maxAge > 0 {
@@ -309,9 +309,9 @@ func (f *RepoFile) Path() string {
 }
 
 // Fetch syncs the repo and reports whether this file changed since last call.
-// Safe to call concurrently. Implements Fetcher.
-func (f *RepoFile) Fetch(ctx context.Context) (bool, error) {
-	if _, err := f.repo.Fetch(ctx); err != nil {
+// Safe to call concurrently. Implements Upstream.
+func (f *RepoFile) Update(ctx context.Context) (bool, error) {
+	if _, err := f.repo.Update(ctx); err != nil {
 		return false, err
 	}
 	info, err := os.Stat(f.Path())

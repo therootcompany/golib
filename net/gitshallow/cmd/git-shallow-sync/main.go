@@ -101,7 +101,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Syncing %s -> %s... ", url, absPath)
 	t := time.Now()
 	repo := gitshallow.New(url, absPath, cfg.Depth, cfg.Branch)
-	updated, err := repo.Fetch(ctx)
+	updated, err := repo.Update(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintf(os.Stderr, "error: sync: %v\n", err)

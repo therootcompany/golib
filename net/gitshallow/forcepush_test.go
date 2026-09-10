@@ -57,10 +57,10 @@ func TestRepo_ForcePushRecovery(t *testing.T) {
 
 	// gitshallow clones, reads v1.
 	repo := gitshallow.New(upstream, clone, 1, "main")
-	if updated, err := repo.Fetch(t.Context()); err != nil {
-		t.Fatalf("first Fetch: %v", err)
+	if updated, err := repo.Update(t.Context()); err != nil {
+		t.Fatalf("first Update: %v", err)
 	} else if !updated {
-		t.Fatal("first Fetch: expected updated=true")
+		t.Fatal("first Update: expected updated=true")
 	}
 	got, err := os.ReadFile(filepath.Join(clone, "data.txt"))
 	if err != nil {
@@ -85,7 +85,7 @@ func TestRepo_ForcePushRecovery(t *testing.T) {
 	// Use a fresh instance: the same *Repo has a 1s debounce that would
 	// skip the follow-up fetch in this test's wall-clock window.
 	repo2 := gitshallow.New(upstream, clone, 1, "main")
-	updated, err := repo2.Fetch(t.Context())
+	updated, err := repo2.Update(t.Context())
 	if err != nil {
 		t.Fatalf("post-force-push Fetch: %v", err)
 	}
