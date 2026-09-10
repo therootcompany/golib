@@ -73,11 +73,11 @@ func (r *Migrator) ExecDown(ctx context.Context, m sqlmigrate.Migration, sql str
 }
 
 func (r *Migrator) exec(name, suffix, label string) error {
-	path := unclean(filepath.Join(r.MigrationsDir, name+suffix))
+	path := shellQuote(unclean(filepath.Join(r.MigrationsDir, name+suffix)))
 	cmd := strings.Replace(r.SqlCommand, "%s", path, 1)
 
-	syncCmd := strings.Replace(r.SqlCommand, "%s", unclean(r.LogQueryPath), 1)
-	logPath := unclean(r.LogPath)
+	syncCmd := strings.Replace(r.SqlCommand, "%s", shellQuote(unclean(r.LogQueryPath)), 1)
+	logPath := shellQuote(unclean(r.LogPath))
 
 	fmt.Fprintf(r.Writer, "# %s %s\n", label, name)
 	if _, err := os.Stat(filepath.Join(r.MigrationsDir, name+suffix)); err != nil {
@@ -109,7 +109,7 @@ func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) 
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("reading migrations log: %w", err)
+		return nil, fmt.Errorf("%w: reading migrations log: %w", sqlmigrate.ErrQueryApplied, err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -130,6 +130,9 @@ func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) 
 			applied = append(applied, sqlmigrate.Migration{Name: line})
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("%w: reading migrations log: %w", sqlmigrate.ErrQueryApplied, err)
+	}
 
 	return applied, nil
 }
@@ -138,6 +141,12 @@ func (r *Migrator) Applied(ctx context.Context) ([]sqlmigrate.Migration, error) 
 // if generating both in the same script.
 func (r *Migrator) Reset() {
 	r.counter = 0
+}
+
+// shellQuote wraps a string in single quotes with proper escaping,
+// preventing shell injection in generated scripts.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // unclean ensures a relative path starts with ./ or ../ so it
