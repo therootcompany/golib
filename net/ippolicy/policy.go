@@ -213,7 +213,7 @@ func (p *Policy) Set(e *Evaluator) error {
 }
 
 func (p *Policy) Clear() error {
-	p.current.Store(nil)
+	p.current.Store(&Evaluator{})
 	p.loadedAt.Store(nil)
 	return nil
 }

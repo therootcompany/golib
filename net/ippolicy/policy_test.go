@@ -27,6 +27,19 @@ func TestEnumStrings(t *testing.T) {
 	}
 }
 
+func TestPolicyClearPublishesEmptyEvaluator(t *testing.T) {
+	p := New(t.Context(), Config{})
+	if err := p.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	if evaluator := p.Current(); evaluator == nil {
+		t.Fatal("Clear published nil evaluator")
+	}
+	if got := p.Current().Evaluate(netip.MustParseAddr("192.0.2.1")); got != Unlisted {
+		t.Fatalf("empty evaluator decision = %s, want %s", got, Unlisted)
+	}
+}
+
 func TestPolicyKeepsSnapshotAfterFailedRefresh(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "allowed.tsv")
 	if err := os.WriteFile(path, []byte("192.0.2.1\n"), 0o600); err != nil {
