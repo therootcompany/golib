@@ -21,7 +21,11 @@ const QueryTimeout = 750 * time.Millisecond
 // pathological setups from amplifying lookup cost.
 const DefaultMaxCNAMEHops = 5
 
-var ErrNoARecord = errors.New("did not resolve to A record")
+var (
+	ErrNoARecord    = errors.New("did not resolve to A record")
+	ErrNoAddresses  = errors.New("no addresses")
+	ErrNameNotFound = errors.New("name not found")
+)
 
 var FallbackServers = []string{
 	"208.67.222.123:53", // OpenDNS
@@ -127,7 +131,7 @@ func (r *Resolver) LookupIP(ctx context.Context, domain string) ([]net.IP, uint3
 		}
 	}
 	if len(ips) == 0 {
-		return nil, 0, fmt.Errorf("no A records for %s", domain)
+		return nil, 0, fmt.Errorf("no A records for %s: %w", domain, ErrNoAddresses)
 	}
 	return ips, ttl, nil
 }
@@ -155,7 +159,11 @@ func (r *Resolver) Exchange(ctx context.Context, m *dns.Msg) (*dns.Msg, uint32, 
 				return
 			}
 			if resp.Rcode != dns.RcodeSuccess {
-				results <- result{err: fmt.Errorf("DNS query %s: rcode %s", m.Question[0].Name, dns.RcodeToString[resp.Rcode])}
+				err := fmt.Errorf("DNS query %s: rcode %s", m.Question[0].Name, dns.RcodeToString[resp.Rcode])
+				if resp.Rcode == dns.RcodeNameError {
+					err = fmt.Errorf("%w: %w", ErrNameNotFound, err)
+				}
+				results <- result{err: err}
 				return
 			}
 			var minTTLVal uint32
