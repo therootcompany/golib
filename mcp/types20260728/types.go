@@ -8,6 +8,7 @@ package mcptypes
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -107,6 +108,8 @@ type ErrorObject struct {
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data,omitempty"`
 }
+
+var ErrInvalidArguments = errors.New("invalid tool arguments")
 
 const (
 	ErrParse                           = -32700
@@ -251,4 +254,53 @@ func Decode[T any](data json.RawMessage) (T, error) {
 	}
 	err := json.Unmarshal(data, &value)
 	return value, err
+}
+
+// Validatable is implemented by typed tool argument structs that enforce
+// required fields and application-level constraints.
+type Validatable interface {
+	Validate() error
+}
+
+// DecodeValidated decodes typed tool arguments and runs their validation.
+func DecodeValidated[T Validatable](data json.RawMessage) (T, error) {
+	value, err := Decode[T](data)
+	if err != nil {
+		return value, fmt.Errorf("%w: %v", ErrInvalidArguments, err)
+	}
+	if err := value.Validate(); err != nil {
+		return value, fmt.Errorf("%w: %v", ErrInvalidArguments, err)
+	}
+	return value, nil
+}
+
+// NewToolResultText returns a successful text-only tool result.
+func NewToolResultText(text string) CallToolResult {
+	return CallToolResult{ResultType: "complete", Content: []Content{{Type: "text", Text: text}}}
+}
+
+// NewToolResultError returns an in-band tool execution error.
+func NewToolResultError(message string) CallToolResult {
+	result := NewToolResultText(message)
+	result.IsError = true
+	return result
+}
+
+// NewToolResultStructured encodes a typed Go value as structuredContent.
+func NewToolResultStructured[T any](value T, text string) (CallToolResult, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return CallToolResult{}, fmt.Errorf("encode structured tool result: %w", err)
+	}
+	return CallToolResult{ResultType: "complete", Content: []Content{{Type: "text", Text: text}}, StructuredContent: raw}, nil
+}
+
+// NewToolResultStructuredOnly encodes a typed Go value and uses its JSON form
+// as the text fallback for clients that do not support structuredContent.
+func NewToolResultStructuredOnly[T any](value T) (CallToolResult, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return CallToolResult{}, fmt.Errorf("encode structured tool result: %w", err)
+	}
+	return CallToolResult{ResultType: "complete", Content: []Content{{Type: "text", Text: string(raw)}}, StructuredContent: raw}, nil
 }

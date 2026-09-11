@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,13 @@ import (
 
 type echoArgs struct {
 	Message string `json:"message"`
+}
+
+func (a echoArgs) Validate() error {
+	if a.Message == "" {
+		return errors.New("message is required")
+	}
+	return nil
 }
 
 func TestServeHTTPUsesHeadersBeforeTypedDecode(t *testing.T) {
@@ -38,6 +46,44 @@ func TestServeHTTPUsesHeadersBeforeTypedDecode(t *testing.T) {
 	}
 	if gotArgs.Message != "hello" {
 		t.Fatalf("args = %#v", gotArgs)
+	}
+}
+
+func TestServeHTTPRejectsInvalidTypedArguments(t *testing.T) {
+	srv := &MCPServer{}
+	RegisterTypedTool(srv, mcptypes.Tool{Name: "echo"}, func(context.Context, Headers, echoArgs) (mcptypes.CallToolResult, error) {
+		return mcptypes.NewToolResultText("ok"), nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{}}}`))
+	req.Header.Set("Mcp-Method", "tools/call")
+	req.Header.Set("Mcp-Name", "echo")
+	res := httptest.NewRecorder()
+	srv.ServeHTTP(res, req)
+	var response mcptypes.ErrorResponse
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != mcptypes.ErrInvalidParams {
+		t.Fatalf("code = %d, want %d", response.Error.Code, mcptypes.ErrInvalidParams)
+	}
+}
+
+func TestServeHTTPRejectsHeaderNameMismatch(t *testing.T) {
+	srv := &MCPServer{}
+	srv.RegisterTool(mcptypes.Tool{Name: "echo"}, func(context.Context, CallToolRequest) (mcptypes.CallToolResult, error) {
+		return mcptypes.NewToolResultText("ok"), nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"other"}}`))
+	req.Header.Set("Mcp-Method", "tools/call")
+	req.Header.Set("Mcp-Name", "echo")
+	res := httptest.NewRecorder()
+	srv.ServeHTTP(res, req)
+	var response mcptypes.ErrorResponse
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != mcptypes.ErrHeaderMismatch {
+		t.Fatalf("code = %d, want %d", response.Error.Code, mcptypes.ErrHeaderMismatch)
 	}
 }
 

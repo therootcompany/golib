@@ -8,6 +8,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -50,9 +51,9 @@ type ResourceHandlerFunc func(context.Context, ReadResourceRequest) (mcptypes.Re
 // RegisterTypedTool decodes a tool's arguments into T before calling handler.
 // T is the application Go type for the tool input; no JSON Schema validator is
 // involved.
-func RegisterTypedTool[T any](s *MCPServer, definition mcptypes.Tool, handler func(context.Context, Headers, T) (mcptypes.CallToolResult, error)) {
+func RegisterTypedTool[T mcptypes.Validatable](s *MCPServer, definition mcptypes.Tool, handler func(context.Context, Headers, T) (mcptypes.CallToolResult, error)) {
 	s.RegisterTool(definition, func(ctx context.Context, request CallToolRequest) (mcptypes.CallToolResult, error) {
-		args, err := mcptypes.Decode[T](request.Params.Arguments)
+		args, err := mcptypes.DecodeValidated[T](request.Params.Arguments)
 		if err != nil {
 			return mcptypes.CallToolResult{}, fmt.Errorf("decode %s arguments: %w", definition.Name, err)
 		}
@@ -69,6 +70,7 @@ type MCPServer struct {
 	AllowedOrigins []string
 	mu             sync.RWMutex
 	tools          []registeredTool
+	toolByName     map[string]registeredTool
 	resources      []registeredResource
 }
 type registeredTool struct {
@@ -88,7 +90,12 @@ func (s *MCPServer) RegisterTool(definition mcptypes.Tool, handler ToolHandlerFu
 			panic("mcp: duplicate tool: " + definition.Name)
 		}
 	}
-	s.tools = append(s.tools, registeredTool{definition, handler})
+	if s.toolByName == nil {
+		s.toolByName = make(map[string]registeredTool)
+	}
+	registered := registeredTool{definition, handler}
+	s.tools = append(s.tools, registered)
+	s.toolByName[definition.Name] = registered
 }
 func (s *MCPServer) RegisterResource(definition mcptypes.Resource, handler ResourceHandlerFunc) {
 	s.mu.Lock()
@@ -144,6 +151,9 @@ func (s *MCPServer) handle(ctx context.Context, headers Headers, body []byte) an
 	}
 	if headers.Method != envelope.Method {
 		return s.error(envelope.ID, mcptypes.ErrHeaderMismatch, "Mcp-Method does not match request method")
+	}
+	if envelope.Method == "tools/call" && headers.Name == "" {
+		return s.error(envelope.ID, mcptypes.ErrHeaderMismatch, "missing Mcp-Name header")
 	}
 	var request mcptypes.Request
 	if err := json.Unmarshal(body, &request); err != nil || request.JSONRPC != mcptypes.JSONRPCVersion || request.Method == "" || (request.IDPresent && (request.ID == nil || request.ID.IsNull())) {
@@ -202,24 +212,25 @@ func (s *MCPServer) toolsList(id *mcptypes.RequestID) any {
 	return s.result(id, raw)
 }
 func (s *MCPServer) toolsCall(ctx context.Context, headers Headers, id *mcptypes.RequestID, raw json.RawMessage) any {
+	// Select the handler from Mcp-Name before decoding tool parameters.
+	s.mu.RLock()
+	registered, found := s.toolByName[headers.Name]
+	s.mu.RUnlock()
+	if !found {
+		return s.error(id, mcptypes.ErrInvalidParams, "Unknown tool")
+	}
 	params, err := mcptypes.Decode[mcptypes.CallToolParams](raw)
 	if err != nil || params.Name == "" {
 		return s.error(id, mcptypes.ErrInvalidParams, "Invalid params for tools/call")
 	}
-	s.mu.RLock()
-	var handler ToolHandlerFunc
-	for _, tool := range s.tools {
-		if tool.definition.Name == params.Name {
-			handler = tool.handler
-			break
-		}
+	if params.Name != headers.Name {
+		return s.error(id, mcptypes.ErrHeaderMismatch, "Mcp-Name does not match params.name")
 	}
-	s.mu.RUnlock()
-	if handler == nil {
-		return s.error(id, mcptypes.ErrInvalidParams, "Unknown tool")
-	}
-	value, err := handler(ctx, CallToolRequest{headers, params})
+	value, err := registered.handler(ctx, CallToolRequest{headers, params})
 	if err != nil {
+		if errors.Is(err, mcptypes.ErrInvalidArguments) {
+			return s.error(id, mcptypes.ErrInvalidParams, err.Error())
+		}
 		return s.error(id, mcptypes.ErrInternal, "Tool execution failed")
 	}
 	encoded, encodeErr := json.Marshal(value)
