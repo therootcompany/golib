@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 )
 
 const (
@@ -88,9 +89,125 @@ type RequestMeta struct {
 }
 
 type ResultMeta struct {
-	ServerInfo     *ServerInfo                `json:"io.modelcontextprotocol/serverInfo,omitempty"`
-	SubscriptionID string                     `json:"io.modelcontextprotocol/subscriptionId,omitempty"`
-	Extensions     map[string]json.RawMessage `json:"-"`
+	ServerInfo     *ServerInfo
+	SubscriptionID string
+	UI             *AppUI
+	Extensions     map[string]json.RawMessage
+}
+
+func (m ResultMeta) MarshalJSON() ([]byte, error) {
+	values := make(map[string]json.RawMessage, len(m.Extensions)+3)
+	maps.Copy(values, m.Extensions)
+	if m.ServerInfo != nil {
+		value, err := json.Marshal(m.ServerInfo)
+		if err != nil {
+			return nil, err
+		}
+		values["io.modelcontextprotocol/serverInfo"] = value
+	}
+	if m.SubscriptionID != "" {
+		value, err := json.Marshal(m.SubscriptionID)
+		if err != nil {
+			return nil, err
+		}
+		values["io.modelcontextprotocol/subscriptionId"] = value
+	}
+	if m.UI != nil {
+		value, err := json.Marshal(m.UI)
+		if err != nil {
+			return nil, err
+		}
+		values["ui"] = value
+	}
+	return json.Marshal(values)
+}
+
+func (m *ResultMeta) UnmarshalJSON(data []byte) error {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(data, &values); err != nil {
+		return err
+	}
+	m.Extensions = make(map[string]json.RawMessage, len(values))
+	for key, value := range values {
+		switch key {
+		case "io.modelcontextprotocol/serverInfo":
+			if err := json.Unmarshal(value, &m.ServerInfo); err != nil {
+				return err
+			}
+		case "io.modelcontextprotocol/subscriptionId":
+			if err := json.Unmarshal(value, &m.SubscriptionID); err != nil {
+				return err
+			}
+		case "ui":
+			if err := json.Unmarshal(value, &m.UI); err != nil {
+				return err
+			}
+		default:
+			m.Extensions[key] = value
+		}
+	}
+	return nil
+}
+
+// Meta contains typed MCP Apps metadata plus preserved extension fields.
+type Meta struct {
+	UI         *AppUI
+	Extensions map[string]json.RawMessage
+}
+
+type AppUI struct {
+	ResourceURI string          `json:"resourceUri,omitempty"`
+	Visibility  []Visibility    `json:"visibility,omitempty"`
+	CSP         *AppCSP         `json:"csp,omitempty"`
+	Permissions *AppPermissions `json:"permissions,omitempty"`
+}
+type Visibility string
+
+const (
+	VisibilityModel Visibility = "model"
+	VisibilityApp   Visibility = "app"
+)
+
+type AppCSP struct {
+	ConnectDomains  []string `json:"connectDomains,omitempty"`
+	ResourceDomains []string `json:"resourceDomains,omitempty"`
+	FrameDomains    []string `json:"frameDomains,omitempty"`
+	BaseURIDomains  []string `json:"baseUriDomains,omitempty"`
+}
+type AppPermission struct{}
+type AppPermissions struct {
+	ClipboardWrite *AppPermission `json:"clipboardWrite,omitempty"`
+	Camera         *AppPermission `json:"camera,omitempty"`
+	Microphone     *AppPermission `json:"microphone,omitempty"`
+	Geolocation    *AppPermission `json:"geolocation,omitempty"`
+}
+
+func (m Meta) MarshalJSON() ([]byte, error) {
+	values := make(map[string]json.RawMessage, len(m.Extensions)+1)
+	maps.Copy(values, m.Extensions)
+	if m.UI != nil {
+		value, err := json.Marshal(m.UI)
+		if err != nil {
+			return nil, err
+		}
+		values["ui"] = value
+	}
+	return json.Marshal(values)
+}
+func (m *Meta) UnmarshalJSON(data []byte) error {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(data, &values); err != nil {
+		return err
+	}
+	m.Extensions = make(map[string]json.RawMessage, len(values))
+	if raw, ok := values["ui"]; ok {
+		if err := json.Unmarshal(raw, &m.UI); err != nil {
+			return err
+		}
+		delete(values, "ui")
+	}
+	maps.Copy(m.Extensions, values)
+	return nil
 }
 
 type Response struct {
@@ -209,7 +326,7 @@ const (
 )
 
 type Tool struct {
-	Meta         json.RawMessage  `json:"_meta,omitempty"`
+	Meta         *Meta            `json:"_meta,omitempty"`
 	Name         string           `json:"name"`
 	Title        string           `json:"title,omitempty"`
 	Description  string           `json:"description,omitempty"`
@@ -225,20 +342,20 @@ type ToolAnnotations struct {
 	OpenWorldHint   *bool  `json:"openWorldHint,omitempty"`
 }
 type Resource struct {
-	Meta        json.RawMessage `json:"_meta,omitempty"`
-	URI         string          `json:"uri"`
-	Name        string          `json:"name"`
-	Title       string          `json:"title,omitempty"`
-	Description string          `json:"description,omitempty"`
-	MIMEType    string          `json:"mimeType,omitempty"`
-	Size        *int64          `json:"size,omitempty"`
+	Meta        *Meta  `json:"_meta,omitempty"`
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mimeType,omitempty"`
+	Size        *int64 `json:"size,omitempty"`
 }
 type ResourceContents struct {
-	Meta     json.RawMessage `json:"_meta,omitempty"`
-	URI      string          `json:"uri"`
-	MIMEType string          `json:"mimeType,omitempty"`
-	Text     string          `json:"text,omitempty"`
-	Blob     string          `json:"blob,omitempty"`
+	Meta     *Meta  `json:"_meta,omitempty"`
+	URI      string `json:"uri"`
+	MIMEType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"`
 }
 type Content struct {
 	Type     string `json:"type"`

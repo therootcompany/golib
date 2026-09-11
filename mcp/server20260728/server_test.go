@@ -49,6 +49,51 @@ func TestServeHTTPUsesHeadersBeforeTypedDecode(t *testing.T) {
 	}
 }
 
+func TestTypedMiddlewareReceivesValidatedArguments(t *testing.T) {
+	srv := &MCPServer{}
+	called := false
+	middleware := func(next TypedToolHandler[echoArgs]) TypedToolHandler[echoArgs] {
+		return func(ctx context.Context, headers Headers, args echoArgs) (mcptypes.CallToolResult, error) {
+			if args.Message != "hello" {
+				t.Fatalf("middleware args = %#v", args)
+			}
+			called = true
+			return next(ctx, headers, args)
+		}
+	}
+	RegisterTypedToolWithMiddleware(srv, mcptypes.Tool{Name: "echo"}, func(context.Context, Headers, echoArgs) (mcptypes.CallToolResult, error) {
+		return mcptypes.NewToolResultText("ok"), nil
+	}, middleware)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"message":"hello"}}}`))
+	req.Header.Set("Mcp-Method", "tools/call")
+	req.Header.Set("Mcp-Name", "echo")
+	srv.ServeHTTP(httptest.NewRecorder(), req)
+	if !called {
+		t.Fatal("typed middleware was not called")
+	}
+}
+
+func TestServeHTTPContainsToolPanic(t *testing.T) {
+	srv := &MCPServer{}
+	srv.RegisterTool(mcptypes.Tool{Name: "panic"}, func(context.Context, CallToolRequest) (mcptypes.CallToolResult, error) {
+		panic("boom")
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"panic"}}`))
+	req.Header.Set("Mcp-Method", "tools/call")
+	req.Header.Set("Mcp-Name", "panic")
+	res := httptest.NewRecorder()
+	srv.ServeHTTP(res, req)
+	var response struct {
+		Result mcptypes.CallToolResult `json:"result"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Result.IsError {
+		t.Fatal("panic did not become an in-band tool error")
+	}
+}
+
 func TestServeHTTPRejectsInvalidTypedArguments(t *testing.T) {
 	srv := &MCPServer{}
 	RegisterTypedTool(srv, mcptypes.Tool{Name: "echo"}, func(context.Context, Headers, echoArgs) (mcptypes.CallToolResult, error) {
@@ -65,6 +110,27 @@ func TestServeHTTPRejectsInvalidTypedArguments(t *testing.T) {
 	}
 	if response.Error.Code != mcptypes.ErrInvalidParams {
 		t.Fatalf("code = %d, want %d", response.Error.Code, mcptypes.ErrInvalidParams)
+	}
+}
+
+func TestRegisterResourceRejectsInvalidURI(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("invalid resource URI did not panic")
+		}
+	}()
+	(&MCPServer{}).RegisterResource(mcptypes.Resource{URI: "not absolute"}, nil)
+}
+
+func TestServeHTTPRejectsAppOnlyToolsFromList(t *testing.T) {
+	srv := &MCPServer{}
+	srv.RegisterTool(mcptypes.Tool{Name: "hidden", Meta: &mcptypes.Meta{UI: &mcptypes.AppUI{Visibility: []mcptypes.Visibility{mcptypes.VisibilityApp}}}}, nil)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	req.Header.Set("Mcp-Method", "tools/list")
+	res := httptest.NewRecorder()
+	srv.ServeHTTP(res, req)
+	if strings.Contains(res.Body.String(), "hidden") {
+		t.Fatalf("app-only tool leaked into list: %s", res.Body)
 	}
 }
 

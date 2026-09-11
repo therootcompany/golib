@@ -7,14 +7,19 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
+	"unicode"
 
 	mcptypes "github.com/therootcompany/golib/mcp/types20260728"
 )
@@ -46,18 +51,30 @@ type ReadResourceRequest struct {
 	Params  mcptypes.ReadResourceParams
 }
 type ToolHandlerFunc func(context.Context, CallToolRequest) (mcptypes.CallToolResult, error)
+type TypedToolHandler[T mcptypes.Validatable] func(context.Context, Headers, T) (mcptypes.CallToolResult, error)
+type TypedToolMiddleware[T mcptypes.Validatable] func(TypedToolHandler[T]) TypedToolHandler[T]
 type ResourceHandlerFunc func(context.Context, ReadResourceRequest) (mcptypes.ReadResourceResult, error)
 
 // RegisterTypedTool decodes a tool's arguments into T before calling handler.
 // T is the application Go type for the tool input; no JSON Schema validator is
 // involved.
-func RegisterTypedTool[T mcptypes.Validatable](s *MCPServer, definition mcptypes.Tool, handler func(context.Context, Headers, T) (mcptypes.CallToolResult, error)) {
+func RegisterTypedTool[T mcptypes.Validatable](s *MCPServer, definition mcptypes.Tool, handler TypedToolHandler[T]) {
+	RegisterTypedToolWithMiddleware(s, definition, handler)
+}
+
+// RegisterTypedToolWithMiddleware decodes and validates arguments before
+// running middleware. Middleware receives the concrete T value.
+func RegisterTypedToolWithMiddleware[T mcptypes.Validatable](s *MCPServer, definition mcptypes.Tool, handler TypedToolHandler[T], middleware ...TypedToolMiddleware[T]) {
+	wrapped := handler
+	for i := len(middleware) - 1; i >= 0; i-- {
+		wrapped = middleware[i](wrapped)
+	}
 	s.RegisterTool(definition, func(ctx context.Context, request CallToolRequest) (mcptypes.CallToolResult, error) {
 		args, err := mcptypes.DecodeValidated[T](request.Params.Arguments)
 		if err != nil {
 			return mcptypes.CallToolResult{}, fmt.Errorf("decode %s arguments: %w", definition.Name, err)
 		}
-		return handler(ctx, request.Headers, args)
+		return wrapped(ctx, request.Headers, args)
 	})
 }
 
@@ -98,6 +115,9 @@ func (s *MCPServer) RegisterTool(definition mcptypes.Tool, handler ToolHandlerFu
 	s.toolByName[definition.Name] = registered
 }
 func (s *MCPServer) RegisterResource(definition mcptypes.Resource, handler ResourceHandlerFunc) {
+	if err := validateResourceURI(definition.URI); err != nil {
+		panic(fmt.Sprintf("mcp: invalid resource URI %q: %v", definition.URI, err))
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, resource := range s.resources {
@@ -186,6 +206,18 @@ func (s *MCPServer) discover(id *mcptypes.RequestID) any {
 	}
 	return s.result(id, raw)
 }
+func isAppOnly(tool mcptypes.Tool) bool {
+	if tool.Meta == nil || tool.Meta.UI == nil || len(tool.Meta.UI.Visibility) == 0 {
+		return false
+	}
+	for _, visibility := range tool.Meta.UI.Visibility {
+		if visibility != mcptypes.VisibilityApp {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *MCPServer) capabilities() mcptypes.ServerCapabilities {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -200,9 +232,12 @@ func (s *MCPServer) capabilities() mcptypes.ServerCapabilities {
 }
 func (s *MCPServer) toolsList(id *mcptypes.RequestID) any {
 	s.mu.RLock()
-	tools := make([]mcptypes.Tool, len(s.tools))
-	for i := range s.tools {
-		tools[i] = s.tools[i].definition
+	tools := make([]mcptypes.Tool, 0, len(s.tools))
+	for _, registered := range s.tools {
+		if isAppOnly(registered.definition) {
+			continue
+		}
+		tools = append(tools, registered.definition)
 	}
 	s.mu.RUnlock()
 	raw, err := json.Marshal(mcptypes.ToolsListResult{ResultType: "complete", Tools: tools, CacheScope: mcptypes.CachePrivate})
@@ -226,7 +261,7 @@ func (s *MCPServer) toolsCall(ctx context.Context, headers Headers, id *mcptypes
 	if params.Name != headers.Name {
 		return s.error(id, mcptypes.ErrHeaderMismatch, "Mcp-Name does not match params.name")
 	}
-	value, err := registered.handler(ctx, CallToolRequest{headers, params})
+	value, err := s.callToolWithRecovery(ctx, registered.handler, CallToolRequest{headers, params})
 	if err != nil {
 		if errors.Is(err, mcptypes.ErrInvalidArguments) {
 			return s.error(id, mcptypes.ErrInvalidParams, err.Error())
@@ -257,6 +292,9 @@ func (s *MCPServer) resourceRead(ctx context.Context, headers Headers, id *mcpty
 	if err != nil || params.URI == "" {
 		return s.error(id, mcptypes.ErrInvalidParams, "Invalid params for resources/read")
 	}
+	if err := validateResourceURI(params.URI); err != nil {
+		return s.error(id, mcptypes.ErrInvalidParams, "Invalid resource URI")
+	}
 	s.mu.RLock()
 	var handler ResourceHandlerFunc
 	for _, resource := range s.resources {
@@ -273,11 +311,43 @@ func (s *MCPServer) resourceRead(ctx context.Context, headers Headers, id *mcpty
 	if err != nil {
 		return s.error(id, mcptypes.ErrInternal, "Resource read failed")
 	}
+	for _, content := range value.Contents {
+		if err := validateResourceURI(content.URI); err != nil {
+			return s.error(id, mcptypes.ErrInternal, "Resource returned invalid URI")
+		}
+		if content.Blob != "" {
+			if _, err := base64.StdEncoding.DecodeString(content.Blob); err != nil {
+				return s.error(id, mcptypes.ErrInternal, "Resource returned invalid binary data")
+			}
+		}
+	}
 	encoded, encodeErr := json.Marshal(value)
 	if encodeErr != nil {
 		return s.error(id, mcptypes.ErrInternal, "Failed to encode result")
 	}
 	return s.result(id, encoded)
+}
+
+func (s *MCPServer) callToolWithRecovery(ctx context.Context, handler ToolHandlerFunc, request CallToolRequest) (result mcptypes.CallToolResult, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("[mcp] panic in tool %q: %v\n%s", request.Params.Name, recovered, debug.Stack())
+			result = mcptypes.NewToolResultError("Tool execution failed")
+			err = nil
+		}
+	}()
+	return handler(ctx, request)
+}
+
+func validateResourceURI(raw string) error {
+	if raw == "" || strings.IndexFunc(raw, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) >= 0 {
+		return errors.New("URI is empty or contains invalid characters")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Fragment != "" {
+		return errors.New("URI must be absolute and must not contain a fragment")
+	}
+	return nil
 }
 
 func (s *MCPServer) result(id *mcptypes.RequestID, value json.RawMessage) mcptypes.Response {
