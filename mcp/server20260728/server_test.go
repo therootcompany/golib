@@ -27,7 +27,7 @@ func TestServeHTTPUsesHeadersBeforeTypedDecode(t *testing.T) {
 	var got Headers
 	var gotArgs echoArgs
 	srv := &MCPServer{Name: "test", Version: "1"}
-	RegisterTypedTool(srv, mcptypes.Tool{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`)}, func(_ context.Context, headers Headers, args echoArgs) (mcptypes.CallToolResult, error) {
+	RegisterTypedTool(srv, mcptypes.Tool{Name: "echo", InputSchema: mcptypes.ToolInputSchema{Type: "object"}}, func(_ context.Context, headers Headers, args echoArgs) (mcptypes.CallToolResult, error) {
 		got = headers
 		gotArgs = args
 		return mcptypes.CallToolResult{ResultType: "complete", Content: []mcptypes.Content{{Type: "text", Text: args.Message}}}, nil
@@ -49,27 +49,27 @@ func TestServeHTTPUsesHeadersBeforeTypedDecode(t *testing.T) {
 	}
 }
 
-func TestTypedMiddlewareReceivesValidatedArguments(t *testing.T) {
+func TestMuxWithRunsMiddlewareAfterTypedValidation(t *testing.T) {
 	srv := &MCPServer{}
 	called := false
-	middleware := func(next TypedToolHandler[echoArgs]) TypedToolHandler[echoArgs] {
-		return func(ctx context.Context, headers Headers, args echoArgs) (mcptypes.CallToolResult, error) {
-			if args.Message != "hello" {
-				t.Fatalf("middleware args = %#v", args)
-			}
+	auth := func(next ToolExecution) ToolExecution {
+		return func(ctx context.Context, headers Headers) (mcptypes.CallToolResult, error) {
 			called = true
-			return next(ctx, headers, args)
+			return next(ctx, headers)
 		}
 	}
-	RegisterTypedToolWithMiddleware(srv, mcptypes.Tool{Name: "echo"}, func(context.Context, Headers, echoArgs) (mcptypes.CallToolResult, error) {
-		return mcptypes.NewToolResultText("ok"), nil
-	}, middleware)
+	NewMux(srv).With(auth).Register("tools/echo", ToolHandler[echoArgs]{
+		Tool: mcptypes.Tool{Name: "echo"},
+		Handle: func(context.Context, Headers, echoArgs) (mcptypes.CallToolResult, error) {
+			return mcptypes.NewToolResultText("ok"), nil
+		},
+	})
 	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"message":"hello"}}}`))
 	req.Header.Set("Mcp-Method", "tools/call")
 	req.Header.Set("Mcp-Name", "echo")
 	srv.ServeHTTP(httptest.NewRecorder(), req)
 	if !called {
-		t.Fatal("typed middleware was not called")
+		t.Fatal("middleware was not called")
 	}
 }
 

@@ -330,9 +330,28 @@ type Tool struct {
 	Name         string           `json:"name"`
 	Title        string           `json:"title,omitempty"`
 	Description  string           `json:"description,omitempty"`
-	InputSchema  json.RawMessage  `json:"inputSchema"`
-	OutputSchema json.RawMessage  `json:"outputSchema,omitempty"`
+	InputSchema  ToolInputSchema  `json:"inputSchema"`
+	OutputSchema *ToolInputSchema `json:"outputSchema,omitempty"`
 	Annotations  *ToolAnnotations `json:"annotations,omitempty"`
+}
+
+// ToolInputSchema describes the JSON shape advertised to MCP clients. It is
+// documentation for clients; DecodeValidated and the Go input type enforce
+// server-side correctness.
+type ToolInputSchema struct {
+	Type                 string              `json:"type"`
+	Description          string              `json:"description,omitempty"`
+	Properties           map[string]Property `json:"properties,omitempty"`
+	Required             []string            `json:"required,omitempty"`
+	Items                *ToolInputSchema    `json:"items,omitempty"`
+	AdditionalProperties *bool               `json:"additionalProperties,omitempty"`
+}
+
+type Property struct {
+	Type        string           `json:"type"`
+	Description string           `json:"description,omitempty"`
+	Enum        []string         `json:"enum,omitempty"`
+	Items       *ToolInputSchema `json:"items,omitempty"`
 }
 type ToolAnnotations struct {
 	Title           string `json:"title,omitempty"`
