@@ -294,27 +294,43 @@ func main() {
 	}
 	maxmindDir := filepath.Join(cfg.CacheDir, "maxmind")
 	authHeader := http.Header{"Authorization": []string{cfg.GeoIPBasicAuth}}
+	newGeoSet := func(downloadBase string) *dataset.Set {
+		cityCacher := httpcache.New(
+			downloadBase+"/GeoLite2-City/download?suffix=tar.gz",
+			filepath.Join(maxmindDir, geoip.TarGzName(geoip.CityEdition)))
+		cityCacher.Header = authHeader
+		cityCacher.MaxAge = 3 * 24 * time.Hour
+		asnCacher := httpcache.New(
+			downloadBase+"/GeoLite2-ASN/download?suffix=tar.gz",
+			filepath.Join(maxmindDir, geoip.TarGzName(geoip.ASNEdition)))
+		asnCacher.Header = authHeader
+		asnCacher.MaxAge = 3 * 24 * time.Hour
+		return dataset.NewSet(cityCacher, asnCacher)
+	}
 	downloadBase := geoip.DownloadBase
 	if cfg.GeoIPURL != "" {
 		downloadBase = strings.TrimRight(cfg.GeoIPURL, "/")
 	}
-	cityCacher := httpcache.New(
-		downloadBase+"/GeoLite2-City/download?suffix=tar.gz",
-		filepath.Join(maxmindDir, geoip.TarGzName(geoip.CityEdition)))
-	cityCacher.Header = authHeader
-	cityCacher.MaxAge = 3 * 24 * time.Hour
-	asnCacher := httpcache.New(
-		downloadBase+"/GeoLite2-ASN/download?suffix=tar.gz",
-		filepath.Join(maxmindDir, geoip.TarGzName(geoip.ASNEdition)))
-	asnCacher.Header = authHeader
-	asnCacher.MaxAge = 3 * 24 * time.Hour
-	geoSet := dataset.NewSet(cityCacher, asnCacher)
+	geoSet := newGeoSet(downloadBase)
 	cfg.geo = dataset.Add(geoSet, func(_ context.Context) (*geoip.Databases, error) {
 		return geoip.Open(maxmindDir)
 	})
 	fmt.Fprint(os.Stderr, "Loading geoip... ")
 	tGeo := time.Now()
-	if err := geoSet.Load(context.Background()); err != nil {
+	err = geoSet.Load(context.Background())
+	if err != nil && cfg.GeoIPURL != "" && downloadBase != geoip.DownloadBase {
+		fmt.Fprintln(os.Stderr)
+		log.Printf("geoip mirror unavailable: %v; trying official download", err)
+		downloadBase = geoip.DownloadBase
+		geoSet = newGeoSet(downloadBase)
+		cfg.geo = dataset.Add(geoSet, func(_ context.Context) (*geoip.Databases, error) {
+			return geoip.Open(maxmindDir)
+		})
+		fmt.Fprint(os.Stderr, "Loading geoip from official source... ")
+		tGeo = time.Now()
+		err = geoSet.Load(context.Background())
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr)
 		log.Printf("geoip unavailable: %v", err)
 	} else {
