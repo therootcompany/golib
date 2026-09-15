@@ -34,7 +34,10 @@ type Result struct {
 // lookup builds a Result for ip against the currently loaded blocklists
 // and GeoIP databases.
 func (c *IPCheck) lookup(ip string) Result {
-	res := Result{IP: ip, Geo: c.geo.Value().Lookup(ip)}
+	res := Result{IP: ip}
+	if databases := c.geo.Value(); databases != nil {
+		res.Geo = databases.Lookup(ip)
+	}
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
 		res.Blocked = true
@@ -54,12 +57,18 @@ func (c *IPCheck) lookup(ip string) Result {
 
 // lookupRaw returns the raw geoip.Info for an IP.
 func (c *IPCheck) lookupRaw(ip string) geoip.Info {
-	return c.geo.Value().Lookup(ip)
+	if databases := c.geo.Value(); databases != nil {
+		return databases.Lookup(ip)
+	}
+	return geoip.Info{}
 }
 
 // lookupRawCity returns the raw *geoip2.City record for an IP.
 func (c *IPCheck) lookupRawCity(ip string) *geoip2.City {
-	return c.geo.Value().LookupRaw(ip)
+	if databases := c.geo.Value(); databases != nil {
+		return databases.LookupRaw(ip)
+	}
+	return nil
 }
 
 // writePretty renders res as space-aligned plain text.
@@ -172,8 +181,8 @@ type dsStatus struct {
 }
 
 // healthz reports per-dataset load state and an overall ready flag.
-// Returns 200 when all required sets (inbound, outbound, geoip) are
-// loaded, 503 while any are still empty.
+// Returns 200 when the blocklist sets are loaded. GeoIP is optional and may
+// be unavailable while blocklist checks continue to work.
 func (c *IPCheck) healthz(w http.ResponseWriter, _ *http.Request) {
 	cohortStatus := func(v *dataset.View[ipcohort.Cohort]) dsStatus {
 		s := dsStatus{LoadedAt: v.LoadedAt()}
@@ -195,7 +204,7 @@ func (c *IPCheck) healthz(w http.ResponseWriter, _ *http.Request) {
 		datasets["whitelist"] = cohortStatus(c.whitelist)
 	}
 
-	ready := datasets["inbound"].Loaded && datasets["outbound"].Loaded && datasets["geoip"].Loaded
+	ready := datasets["inbound"].Loaded && datasets["outbound"].Loaded
 	resp := struct {
 		Ready    bool                `json:"ready"`
 		Version  string              `json:"version"`

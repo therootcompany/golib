@@ -36,13 +36,13 @@ var webFS embed.FS
 
 // Replaced by goreleaser / ldflags at build time.
 var (
-	name        = "check-ip"
-	version     = "0.0.0-dev"
-	commit      = "0000000"
-	date        = "0001-01-01"
-	licenseYear = "2026"
+	name         = "check-ip"
+	version      = "0.0.0-dev"
+	commit       = "0000000"
+	date         = "0001-01-01"
+	licenseYear  = "2026"
 	licenseOwner = "AJ ONeal"
-	licenseType = "MPL-2.0"
+	licenseType  = "MPL-2.0"
 )
 
 // versionFromGit returns a tag scoped to this subdirectory, falling back to a short commit hash.
@@ -316,10 +316,15 @@ func main() {
 	tGeo := time.Now()
 	if err := geoSet.Load(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr)
-		log.Fatalf("geoip: %v", err)
+		log.Printf("geoip unavailable: %v", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s\n", time.Since(tGeo).Round(time.Millisecond))
 	}
-	fmt.Fprintf(os.Stderr, "%s\n", time.Since(tGeo).Round(time.Millisecond))
-	defer func() { _ = cfg.geo.Value().Close() }()
+	defer func() {
+		if databases := cfg.geo.Value(); databases != nil {
+			_ = databases.Close()
+		}
+	}()
 
 	// Whitelist: combined IPs + CIDRs in one file, polled for mtime changes.
 	// A match here overrides any block decision from the blocklists.
