@@ -18,15 +18,15 @@ cookie value: s%3ASGVsbG8sIFdvcmxkIQ%3D%3D.F%2FbW1t2GXhUIqykISYbB%2BFMA3lLquegPU
 go get github.com/therootcompany/golib/auth/expresscookie@latest
 ```
 
-Validate the secret once during application setup:
+Initialize the secret once during application setup:
 
 ```go
 secret, err := expresscookie.NewSecret([]byte(os.Getenv("COOKIE_SECRET")))
 ```
 
-`SessionCookie.Payload` contains the raw bytes to sign. Encode structured data
-first, such as with `json.Marshal`. The signed value is then URL-escaped for
-the cookie.
+> **Payload:** The package signs `Payload` exactly as supplied. Encode
+> structured data first; the complete signed value is then URL-escaped for the
+> cookie.
 
 ```go
 http.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +43,7 @@ http.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-Sign and send a cookie with `net/http`:
+Sign and send a cookie:
 
 ```go
 http.SetCookie(w, expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
