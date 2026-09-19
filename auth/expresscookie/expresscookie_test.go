@@ -64,11 +64,10 @@ func TestSignedCookieRoundTrip(t *testing.T) {
 	expiresAt := time.Now().Add(time.Hour)
 	cookie := expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
 		Name:      "session",
-		Secret:    secret,
 		Path:      "/",
 		Payload:   []byte(`{"sub":"user-1","exp":123}`),
 		ExpiresAt: expiresAt,
-	})
+	}, secret)
 	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("cookie security attributes = %#v", cookie)
 	}
@@ -85,10 +84,9 @@ func TestSignedCookieRejectsTampering(t *testing.T) {
 	secret := testSecret(t)
 	cookie := expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
 		Name:      "session",
-		Secret:    secret,
 		Payload:   []byte("payload"),
 		ExpiresAt: time.Now().Add(time.Hour),
-	})
+	}, secret)
 	if _, err := expresscookie.VerifySignedCookie(cookie.Value+"tampered", secret); err == nil {
 		t.Fatal("tampered cookie was accepted")
 	}
@@ -112,9 +110,8 @@ func TestEncodedPayloadStages(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie := expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
-		Secret:  secret,
 		Payload: []byte("SGVsbG8sIFdvcmxkIQ=="),
-	})
+	}, secret)
 	const want = "s%3ASGVsbG8sIFdvcmxkIQ%3D%3D.F%2FbW1t2GXhUIqykISYbB%2BFMA3lLquegPU4jYjVLsnXs"
 	if cookie.Value != want {
 		t.Fatalf("cookie value = %q, want %q", cookie.Value, want)
@@ -128,9 +125,8 @@ func ExampleBuildSignedCookie() {
 	}
 	cookie := expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
 		Name:    "session",
-		Secret:  secret,
 		Payload: []byte("SGVsbG8sIFdvcmxkIQ=="),
-	})
+	}, secret)
 
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.AddCookie(cookie)

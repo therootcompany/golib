@@ -60,7 +60,6 @@ func DecodeHexSecret(value string) (Secret, error) {
 // SessionCookie is a signed session cookie configuration.
 type SessionCookie struct {
 	Name   string
-	Secret Secret
 	Path   string
 	Domain string
 	// Payload is the raw application payload to sign. It is not encoded by this
@@ -71,8 +70,8 @@ type SessionCookie struct {
 }
 
 // BuildSignedCookie builds an HttpOnly, Secure, SameSite=Strict cookie.
-func BuildSignedCookie(c SessionCookie) *http.Cookie {
-	sig := SignValue(string(c.Payload), c.Secret)
+func BuildSignedCookie(c SessionCookie, secret Secret) *http.Cookie {
+	sig := SignValue(string(c.Payload), secret)
 	if c.SameSite == 0 {
 		c.SameSite = http.SameSiteStrictMode
 	}
