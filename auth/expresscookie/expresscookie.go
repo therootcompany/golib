@@ -69,44 +69,69 @@ type SessionCookie struct {
 	SameSite  http.SameSite
 }
 
-// BuildSignedCookie builds an HttpOnly, Secure, SameSite=Strict cookie.
-func BuildSignedCookie(c SessionCookie, secret Secret) *http.Cookie {
-	sig := SignValue(string(c.Payload), secret)
-	if c.SameSite == 0 {
-		c.SameSite = http.SameSiteStrictMode
+// Cookie is a parsed or signable cookie.
+//
+// A parsed Cookie is untrusted until Verify succeeds. Verify returns the
+// payload even when verification fails; callers must always check its error.
+type Cookie struct {
+	options   SessionCookie
+	payload   []byte
+	signature string
+}
+
+// New creates a signable cookie from options.
+func New(options SessionCookie) Cookie {
+	return Cookie{options: options}
+}
+
+// Sign creates an HttpOnly, Secure, SameSite=Strict HTTP cookie.
+func (c Cookie) Sign(secret Secret) *http.Cookie {
+	sig := SignValue(string(c.options.Payload), secret)
+	sameSite := c.options.SameSite
+	if sameSite == 0 {
+		sameSite = http.SameSiteStrictMode
 	}
-	signed := EncodeSignedValue(string(c.Payload), sig)
-	maxAge := int(time.Until(c.ExpiresAt).Seconds())
+	signed := EncodeSignedValue(string(c.options.Payload), sig)
+	maxAge := int(time.Until(c.options.ExpiresAt).Seconds())
 	if maxAge < 1 {
 		maxAge = 0
 	}
 	return &http.Cookie{
-		Name:     c.Name,
+		Name:     c.options.Name,
 		Value:    signed,
-		Path:     c.Path,
-		Domain:   c.Domain,
-		Expires:  c.ExpiresAt,
+		Path:     c.options.Path,
+		Domain:   c.options.Domain,
+		Expires:  c.options.ExpiresAt,
 		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   true,
-		SameSite: c.SameSite,
+		SameSite: sameSite,
 	}
 }
 
-// VerifySignedCookie verifies a signed cookie and returns its raw payload.
-func VerifySignedCookie(rawValue string, secret Secret) ([]byte, error) {
-	cookieVal, err := url.QueryUnescape(rawValue)
+// Parse parses the signed value from an HTTP cookie without verifying it.
+func Parse(rawValue string) (Cookie, error) {
+	cookieValue, err := url.QueryUnescape(rawValue)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unescape cookie value: %w", err)
+		return Cookie{}, fmt.Errorf("failed to unescape cookie value: %w", err)
 	}
-	payload, sig, err := DecodeSignedValue(cookieVal)
+	payload, signature, err := DecodeSignedValue(cookieValue)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode signed cookie: %w", err)
+		return Cookie{}, fmt.Errorf("failed to decode signed cookie: %w", err)
 	}
-	if err := VerifyHMAC(payload, sig, secret); err != nil {
-		return nil, fmt.Errorf("cookie HMAC verification failed: %w", err)
+	return Cookie{payload: []byte(payload), signature: signature}, nil
+}
+
+// Verify checks the signature and returns the raw payload.
+//
+// The payload is returned even when verification fails. Callers must always
+// check the error before using it.
+func (c Cookie) Verify(secret Secret) ([]byte, error) {
+	payload := bytes.Clone(c.payload)
+	if err := VerifyHMAC(string(payload), c.signature, secret); err != nil {
+		return payload, fmt.Errorf("cookie HMAC verification failed: %w", err)
 	}
-	return []byte(payload), nil
+	return payload, nil
 }
 
 // EncodeSignedValue returns a cookie-signature-compatible signed cookie value.

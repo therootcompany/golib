@@ -62,16 +62,20 @@ func TestDecodeHexSecret(t *testing.T) {
 func TestSignedCookieRoundTrip(t *testing.T) {
 	secret := testSecret(t)
 	expiresAt := time.Now().Add(time.Hour)
-	cookie := expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
+	cookie := expresscookie.New(expresscookie.SessionCookie{
 		Name:      "session",
 		Path:      "/",
 		Payload:   []byte(`{"sub":"user-1","exp":123}`),
 		ExpiresAt: expiresAt,
-	}, secret)
+	}).Sign(secret)
 	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("cookie security attributes = %#v", cookie)
 	}
-	payload, err := expresscookie.VerifySignedCookie(cookie.Value, secret)
+	parsed, err := expresscookie.Parse(cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := parsed.Verify(secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,13 +86,16 @@ func TestSignedCookieRoundTrip(t *testing.T) {
 
 func TestSignedCookieRejectsTampering(t *testing.T) {
 	secret := testSecret(t)
-	cookie := expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
+	cookie := expresscookie.New(expresscookie.SessionCookie{
 		Name:      "session",
 		Payload:   []byte("payload"),
 		ExpiresAt: time.Now().Add(time.Hour),
-	}, secret)
-	if _, err := expresscookie.VerifySignedCookie(cookie.Value+"tampered", secret); err == nil {
-		t.Fatal("tampered cookie was accepted")
+	}).Sign(secret)
+	parsed, err := expresscookie.Parse(cookie.Value + "tampered")
+	if err == nil {
+		if _, err := parsed.Verify(secret); err == nil {
+			t.Fatal("tampered cookie was accepted")
+		}
 	}
 }
 
@@ -109,24 +116,24 @@ func TestEncodedPayloadStages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cookie := expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
+	cookie := expresscookie.New(expresscookie.SessionCookie{
 		Payload: []byte("SGVsbG8sIFdvcmxkIQ=="),
-	}, secret)
+	}).Sign(secret)
 	const want = "s%3ASGVsbG8sIFdvcmxkIQ%3D%3D.F%2FbW1t2GXhUIqykISYbB%2BFMA3lLquegPU4jYjVLsnXs"
 	if cookie.Value != want {
 		t.Fatalf("cookie value = %q, want %q", cookie.Value, want)
 	}
 }
 
-func ExampleBuildSignedCookie() {
+func ExampleNew() {
 	secret, err := expresscookie.NewSecret([]byte("example-secret-16"))
 	if err != nil {
 		panic(err)
 	}
-	cookie := expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
+	cookie := expresscookie.New(expresscookie.SessionCookie{
 		Name:    "session",
 		Payload: []byte("SGVsbG8sIFdvcmxkIQ=="),
-	}, secret)
+	}).Sign(secret)
 
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.AddCookie(cookie)
@@ -134,7 +141,11 @@ func ExampleBuildSignedCookie() {
 	if err != nil {
 		panic(err)
 	}
-	payload, err := expresscookie.VerifySignedCookie(requestCookie.Value, secret)
+	parsed, err := expresscookie.Parse(requestCookie.Value)
+	if err != nil {
+		panic(err)
+	}
+	payload, err := parsed.Verify(secret)
 	if err != nil {
 		panic(err)
 	}
