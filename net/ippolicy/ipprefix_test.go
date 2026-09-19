@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/therootcompany/golib/net/gitshallow"
 	"github.com/therootcompany/golib/net/ipcohort"
 )
 
@@ -32,16 +33,16 @@ func TestCachedCohortValidRequiresFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !cachedCohortValid(false, cohort, []string{present}) {
+	if !cachedCohortValid(gitshallow.UpdateCurrent, cohort, []string{present}) {
 		t.Fatal("fresh metadata and present files should use the cache")
 	}
-	if cachedCohortValid(false, cohort, []string{present, filepath.Join(dir, "gone")}) {
+	if cachedCohortValid(gitshallow.UpdateCurrent, cohort, []string{present, filepath.Join(dir, "gone")}) {
 		t.Fatal("missing data file must invalidate the cache")
 	}
-	if cachedCohortValid(false, nil, []string{present}) {
+	if cachedCohortValid(gitshallow.UpdateCurrent, nil, []string{present}) {
 		t.Fatal("nil cohort must not be used")
 	}
-	if cachedCohortValid(true, cohort, []string{present}) {
+	if cachedCohortValid(gitshallow.UpdateChanged, cohort, []string{present}) {
 		t.Fatal("updated repo must reload")
 	}
 }

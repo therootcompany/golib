@@ -21,3 +21,8 @@ require (
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/tools v0.39.0 // indirect
 )
+
+replace (
+	github.com/therootcompany/golib/net/gitshallow => ../gitshallow
+	github.com/therootcompany/golib/sync/cacheable => ../../sync/cacheable
+)

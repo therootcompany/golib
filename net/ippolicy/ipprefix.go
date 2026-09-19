@@ -216,7 +216,7 @@ func (ps *IPPrefixSet) Contains(addr netip.Addr) bool {
 }
 
 func (ps *IPPrefixSet) reload(ctx context.Context) (*ipcohort.Cohort, error) {
-	updated, err := ps.repo.Update(ctx)
+	status, err := ps.repo.Update(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func (ps *IPPrefixSet) reload(ctx context.Context) (*ipcohort.Cohort, error) {
 		paths[i] = ps.repo.FilePath(f)
 	}
 
-	if cachedCohortValid(updated, ps.cohort.Load(), paths) {
+	if cachedCohortValid(status, ps.cohort.Load(), paths) {
 		return nil, nil
 	}
 
@@ -235,15 +235,14 @@ func (ps *IPPrefixSet) reload(ctx context.Context) (*ipcohort.Cohort, error) {
 		return nil, fmt.Errorf("load files: %w", err)
 	}
 
-	log().Info("prefix set loaded", "entries", commaify(cohort.Size()))
 	return cohort, nil
 }
 
 // cachedCohortValid reports whether the current cohort can be reused
 // without reloading from disk: the repo was not updated, the cohort is
 // non-nil and non-empty, and all data files are present.
-func cachedCohortValid(updated bool, cohort *ipcohort.Cohort, paths []string) bool {
-	return !updated && cohort != nil && cohort.Size() > 0 && filesPresent(paths)
+func cachedCohortValid(status gitshallow.UpdateStatus, cohort *ipcohort.Cohort, paths []string) bool {
+	return status != gitshallow.UpdateChanged && cohort != nil && cohort.Size() > 0 && filesPresent(paths)
 }
 
 func filesPresent(paths []string) bool {
