@@ -48,11 +48,10 @@ Sign and send a cookie:
 ```go
 http.SetCookie(w, expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
 	Name:      "session",
-	Secret:    secret,
 	Path:      "/",
 	Payload:   []byte(`{"user":"123"}`),
 	ExpiresAt: time.Now().Add(time.Hour),
-}))
+}, secret))
 ```
 
 `DecodeHexSecret` decodes and validates an `APP_SECRET`-style hexadecimal key.
