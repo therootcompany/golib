@@ -221,18 +221,27 @@ func (r *Repo) gc(ctx context.Context) error {
 	return err
 }
 
+// UpdateStatus describes what happened during an update.
+type UpdateStatus uint8
+
+const (
+	UpdateSkipped UpdateStatus = iota
+	UpdateCurrent
+	UpdateChanged
+)
+
 // Fetch clones the repo if missing, pulls otherwise, and conditionally runs
 // GC based on GCInterval. Returns whether HEAD changed. Implements Upstream.
 // Safe to call concurrently — concurrent callers share a single in-flight
 // fetch (via singleflight) and all receive the same result. To force a
 // pull regardless of MaxAge, set MaxAge=-1 before calling.
-func (r *Repo) Update(ctx context.Context) (updated bool, err error) {
+func (r *Repo) Update(ctx context.Context) (UpdateStatus, error) {
 	// MaxAge: file-mtime gate (FETCH_HEAD is rewritten on every successful
 	// fetch, so its mtime is "last time we talked to the remote").
 	if maxAge := r.effectiveMaxAge(); maxAge > 0 {
 		if info, err := os.Stat(filepath.Join(r.Path, ".git", "FETCH_HEAD")); err == nil {
 			if time.Since(info.ModTime()) < maxAge {
-				return false, nil
+				return UpdateSkipped, nil
 			}
 		}
 	}
@@ -241,9 +250,12 @@ func (r *Repo) Update(ctx context.Context) (updated bool, err error) {
 		return r.fetch(ctx)
 	})
 	if err != nil {
-		return false, err
+		return UpdateCurrent, err
 	}
-	return v.(bool), nil
+	if v.(bool) {
+		return UpdateChanged, nil
+	}
+	return UpdateCurrent, nil
 }
 
 func (r *Repo) fetch(ctx context.Context) (bool, error) {
