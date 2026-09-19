@@ -34,7 +34,11 @@ http.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	payload, err := expresscookie.VerifySignedCookie(cookie.Value, secret)
+	signed, err := expresscookie.Parse(cookie.Value)
+	if err != nil {
+		return
+	}
+	payload, err := signed.Verify(secret)
 	if err != nil {
 		http.Error(w, "invalid session", http.StatusUnauthorized)
 		return
@@ -46,12 +50,12 @@ http.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 Sign and send a cookie:
 
 ```go
-http.SetCookie(w, expresscookie.BuildSignedCookie(expresscookie.SessionCookie{
+http.SetCookie(w, expresscookie.New(expresscookie.SessionCookie{
 	Name:      "session",
 	Path:      "/",
 	Payload:   []byte(`{"user":"123"}`),
 	ExpiresAt: time.Now().Add(time.Hour),
-}, secret))
+}).Sign(secret))
 ```
 
 `DecodeHexSecret` decodes and validates an `APP_SECRET`-style hexadecimal key.
