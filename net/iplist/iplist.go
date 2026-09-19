@@ -228,8 +228,9 @@ func readSource(ctx context.Context, source, cacheDir string, seen map[string]st
 }
 
 // Parse reads TSV or CSV data from r and returns the first column of each
-// row. Blank lines, comments (lines starting with #), and an optional
-// "network" header on the first line are ignored. Other columns are
+// row. Blank lines, comments (lines starting with #), and an optional header
+// on the first line are ignored. The header is recognized when the first
+// column is "network" or "source" (case-insensitive). Other columns are
 // treated as labels and discarded.
 //
 // The format is auto-detected: if the first non-empty, non-comment line
@@ -258,13 +259,17 @@ func isTSV(data []byte) bool {
 	return false
 }
 
+func isHeader(value string) bool {
+	return strings.EqualFold(value, "network") || strings.EqualFold(value, "source")
+}
+
 func parseTSV(r io.Reader) ([]string, error) {
 	scanner := bufio.NewScanner(r)
 	entries := make([]string, 0)
 	for line := 1; scanner.Scan(); line++ {
 		col, _, _ := strings.Cut(scanner.Text(), "\t")
 		value := strings.TrimSpace(col)
-		if value == "" || strings.HasPrefix(value, "#") || (line == 1 && strings.EqualFold(value, "network")) {
+		if value == "" || strings.HasPrefix(value, "#") || (line == 1 && isHeader(value)) {
 			continue
 		}
 		entries = append(entries, value)
@@ -289,7 +294,7 @@ func parseCSV(r io.Reader) ([]string, error) {
 			continue
 		}
 		value := strings.TrimSpace(record[0])
-		if value == "" || (i == 0 && strings.EqualFold(value, "network")) {
+		if value == "" || (i == 0 && isHeader(value)) {
 			continue
 		}
 		entries = append(entries, value)
