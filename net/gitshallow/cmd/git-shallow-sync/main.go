@@ -108,7 +108,10 @@ func main() {
 		os.Exit(1)
 	}
 	state := "already up to date"
-	if updated {
+	switch updated {
+	case gitshallow.UpdateSkipped:
+		state = "skipped"
+	case gitshallow.UpdateChanged:
 		state = "updated"
 	}
 	fmt.Fprintf(os.Stderr, "%s (%s)\n", time.Since(t).Round(time.Millisecond), state)

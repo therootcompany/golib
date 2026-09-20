@@ -40,8 +40,8 @@ func TestRepo_Clone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch (clone): %v", err)
 	}
-	if !updated {
-		t.Error("fresh clone: expected updated=true")
+	if updated != gitshallow.UpdateChanged {
+		t.Error("fresh clone: expected UpdateChanged")
 	}
 
 	for _, rel := range []string{
@@ -73,8 +73,8 @@ func TestRepo_Pull_SameInstance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Fetch: %v", err)
 	}
-	if updated {
-		t.Error("same-instance second pull: expected updated=false (already at HEAD)")
+	if updated == gitshallow.UpdateChanged {
+		t.Error("same-instance second pull: expected not UpdateChanged (already at HEAD)")
 	}
 	t.Log("same-instance pull correctly reported no update")
 }
@@ -94,8 +94,8 @@ func TestRepo_Pull_FreshInstance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fresh-instance Fetch: %v", err)
 	}
-	if updated {
-		t.Error("fresh-instance pull: expected updated=false (HEAD unchanged on disk)")
+	if updated == gitshallow.UpdateChanged {
+		t.Error("fresh-instance pull: expected not UpdateChanged (HEAD unchanged on disk)")
 	}
 	t.Log("fresh-instance pull correctly reported no update")
 }

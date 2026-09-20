@@ -59,8 +59,8 @@ func TestRepo_ForcePushRecovery(t *testing.T) {
 	repo := gitshallow.New(upstream, clone, 1, "main")
 	if updated, err := repo.Update(t.Context()); err != nil {
 		t.Fatalf("first Update: %v", err)
-	} else if !updated {
-		t.Fatal("first Update: expected updated=true")
+	} else if updated != gitshallow.UpdateChanged {
+		t.Fatal("first Update: expected changed")
 	}
 	got, err := os.ReadFile(filepath.Join(clone, "data.txt"))
 	if err != nil {
@@ -89,8 +89,8 @@ func TestRepo_ForcePushRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post-force-push Fetch: %v", err)
 	}
-	if !updated {
-		t.Error("post-force-push Fetch: expected updated=true")
+	if updated != gitshallow.UpdateChanged {
+		t.Error("post-force-push Fetch: expected changed")
 	}
 	got, err = os.ReadFile(filepath.Join(clone, "data.txt"))
 	if err != nil {
