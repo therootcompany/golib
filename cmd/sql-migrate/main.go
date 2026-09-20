@@ -546,20 +546,16 @@ func mustInit(cfg *MainConfig) {
 	entries, err := os.ReadDir(cfg.migrationsDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "Error: init failed to create %q: %v\n", cfg.migrationsDir, err)
+			fmt.Fprintf(os.Stderr, "Error: init failed to read %q: %v\n", cfg.migrationsDir, err)
 			os.Exit(1)
 		}
 		if err = os.MkdirAll(cfg.migrationsDir, 0755); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: init failed to read %q: %v\n", cfg.migrationsDir, err)
+			fmt.Fprintf(os.Stderr, "Error: init failed to create %q: %v\n", cfg.migrationsDir, err)
 			os.Exit(1)
 		}
 	}
 
 	ups, downs := migrationsList(cfg.migrationsDir, entries)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: init couldn't list existing migrations: %v\n", err)
-		os.Exit(1)
-	}
 
 	mMigratorUpPath := filepath.Join(cfg.migrationsDir, M_MIGRATOR_UP_NAME)
 	mMigratorDownPath := filepath.Join(cfg.migrationsDir, M_MIGRATOR_DOWN_NAME)
