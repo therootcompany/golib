@@ -1,0 +1,8 @@
+# Built binaries
+cmd/jwt/jwt
+/jwt
+/custom-header
+/acme-jws
+/mcp-server-auth
+/oauth-access-token
+/oidc-id-token

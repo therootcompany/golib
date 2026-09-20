@@ -808,7 +808,7 @@ func TestCov_KeyType(t *testing.T) {
 		{fakeKey{}, ""},
 	}
 	for _, tt := range tests {
-		pk := PublicKey{Key: tt.key}
+		pk := PublicKey{Pub: tt.key}
 		if got := pk.KeyType(); got != tt.expect {
 			t.Errorf("KeyType(%T)=%q want %q", tt.key, got, tt.expect)
 		}
@@ -934,7 +934,7 @@ func TestCov_Thumbprint(t *testing.T) {
 		})
 	}
 	t.Run("unsupported", func(t *testing.T) {
-		pk := PublicKey{Key: fakeKey{}}
+		pk := PublicKey{Pub: fakeKey{}}
 		_, err := pk.Thumbprint()
 		if !errors.Is(err, ErrUnsupportedKeyType) {
 			t.Fatalf("expected ErrUnsupportedKeyType, got %v", err)
@@ -944,7 +944,11 @@ func TestCov_Thumbprint(t *testing.T) {
 
 func TestCov_PrivateKey_Thumbprint(t *testing.T) {
 	pk := mustFromPrivate(t, mustEdKey(t))
-	thumb, err := pk.Thumbprint()
+	pub, err := pk.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	thumb, err := pub.Thumbprint()
 	if err != nil || thumb == "" {
 		t.Fatal(err)
 	}
@@ -963,7 +967,7 @@ func TestCov_PrivateKey_PublicKey(t *testing.T) {
 	})
 	t.Run("bad_signer", func(t *testing.T) {
 		// signer whose Public() returns a non-CryptoPublicKey
-		pk := &PrivateKey{privKey: fakeSigner{pub: "not a key"}}
+		pk := &PrivateKey{Priv: fakeSigner{pub: "not a key"}}
 		_, err := pk.PublicKey()
 		if !errors.Is(err, ErrSanityFail) {
 			t.Fatalf("expected ErrSanityFail, got %v", err)
@@ -980,8 +984,8 @@ func TestCov_NewPrivateKey(t *testing.T) {
 		t.Fatal("expected auto KID")
 	}
 	// Should be Ed25519
-	if _, ok := pk.privKey.(ed25519.PrivateKey); !ok {
-		t.Fatalf("expected Ed25519, got %T", pk.privKey)
+	if _, ok := pk.Priv.(ed25519.PrivateKey); !ok {
+		t.Fatalf("expected Ed25519, got %T", pk.Priv)
 	}
 }
 
@@ -1294,7 +1298,7 @@ func TestCov_toPublicKeyOps(t *testing.T) {
 }
 
 func TestCov_encode_Unsupported(t *testing.T) {
-	_, err := encode(PublicKey{Key: fakeKey{}})
+	_, err := encode(PublicKey{Pub: fakeKey{}})
 	if !errors.Is(err, ErrUnsupportedKeyType) {
 		t.Fatalf("expected ErrUnsupportedKeyType, got %v", err)
 	}
@@ -1304,8 +1308,8 @@ func TestCov_encodePrivate_Unsupported(t *testing.T) {
 	// Signer whose Public() returns a real ed25519 key but signer type is custom
 	edKey := mustEdKey(t)
 	pk := PrivateKey{
-		privKey: fakeSigner{pub: edKey.Public()},
-		KID:     "test",
+		Priv: fakeSigner{pub: edKey.Public()},
+		KID:  "test",
 	}
 	_, err := encodePrivate(pk)
 	if !errors.Is(err, ErrUnsupportedKeyType) {
@@ -1316,7 +1320,7 @@ func TestCov_encodePrivate_Unsupported(t *testing.T) {
 func TestCov_encodePrivate_RSA_NoPrimes(t *testing.T) {
 	rsaKey := mustRSAKey(t)
 	rsaKey.Primes = nil // remove primes
-	pk := PrivateKey{privKey: rsaKey, KID: "test"}
+	pk := PrivateKey{Priv: rsaKey, KID: "test"}
 	rk, err := encodePrivate(pk)
 	if err != nil {
 		t.Fatal(err)
@@ -2690,7 +2694,7 @@ func TestCov_PublicKey_MarshalJSON(t *testing.T) {
 	}
 
 	// Error path: unsupported key
-	bad := PublicKey{Key: fakeKey{}}
+	bad := PublicKey{Pub: fakeKey{}}
 	_, err = json.Marshal(bad)
 	if err == nil {
 		t.Fatal("expected error for unsupported key")
@@ -2847,7 +2851,7 @@ func TestCov_decodeOne_RSA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pk.Key == nil {
+	if pk.Pub == nil {
 		t.Fatal("expected key")
 	}
 }
@@ -2869,7 +2873,7 @@ func TestCov_decodePrivate_RSA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if priv.privKey == nil {
+	if priv.Priv == nil {
 		t.Fatal("expected private key")
 	}
 }
@@ -2884,7 +2888,7 @@ func TestCov_decodePrivate_EC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if priv.privKey == nil {
+	if priv.Priv == nil {
 		t.Fatal("expected private key")
 	}
 }

@@ -252,7 +252,11 @@ func fullPrivateKey(signer crypto.Signer) (*jwt.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	kid, err := pk.Thumbprint()
+	pub, err := pk.PublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("derive public key: %w", err)
+	}
+	kid, err := pub.Thumbprint()
 	if err != nil {
 		return nil, fmt.Errorf("compute thumbprint: %w", err)
 	}
