@@ -108,8 +108,8 @@ func main() {
 		QueryParamNames:            nil, // []string{"access_token", "token"},
 	}
 
-	// Peek for --envfile early
-	envPath := peekOption(os.Args[1:], []string{"-envfile", "--envfile"}, ".env")
+	// Peek for --env-file early
+	envPath := peekOption(os.Args[1:], []string{"-env-file", "--env-file", "-envfile", "--envfile"}, ".env")
 	_ = godotenv.Load(envPath) // silent if missing
 
 	// Override defaults from env
@@ -608,7 +608,8 @@ func (cli *MainConfig) authenticate(r *http.Request) (auth.BasicPrinciple, error
 	return cred, err
 }
 
-// peekOption looks for a flag value without parsing the full set
+// peekOption looks for a flag value without parsing the full set.
+// Used to handle --env-file before flag.Parse so it doesn't conflict with other flags.
 func peekOption(args []string, names []string, def string) string {
 	for i := range len(args) {
 		for _, name := range names {

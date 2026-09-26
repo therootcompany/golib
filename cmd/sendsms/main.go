@@ -78,7 +78,8 @@ func main() {
 		maxDelay: 2 * time.Minute,
 	}
 
-	_ = godotenv.Load("./.env")
+	envPath := peekOption(os.Args[1:], []string{"-env-file", "--env-file", "-envfile", "--envfile"}, ".env")
+	_ = godotenv.Load(envPath)
 
 	// note: we could also use twilio, or whatever
 	var sender SMSSender = androidsmsgateway.New(
@@ -103,6 +104,9 @@ func main() {
 	// TODO add start time zone and end time zone for whole country (e.g. 9am ET to 8pm PT)
 	now := time.Now()
 	zoneName, offset := now.Zone()
+
+	// --env-file is loaded via peekOption above; flag registered here for help output.
+	_ = flag.String("env-file", ".env", "path to .env file (default: .env in current directory)")
 
 	flag.BoolVar(&cfg.confirmed, "y", false, "Confirm without prompting")
 	flag.BoolVar(&cfg.verbose, "verbose", false, "Show parse warnings and other debug info")
@@ -619,4 +623,19 @@ func parseClock(s string, ref time.Time) (t time.Time, err error) {
 
 	t = time.Date(ref.Year(), ref.Month(), ref.Day(), hour, min, 0, 0, ref.Location())
 	return t, nil
+}
+
+// peekOption looks for a flag value without parsing the full set.
+// Used to handle --env-file before flag.Parse so it doesn't conflict with other flags.
+func peekOption(args []string, names []string, def string) string {
+	for i := range len(args) {
+		for _, name := range names {
+			if args[i] == name {
+				if i+1 < len(args) {
+					return args[i+1]
+				}
+			}
+		}
+	}
+	return def
 }
