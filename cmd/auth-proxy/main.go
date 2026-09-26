@@ -108,8 +108,8 @@ func main() {
 		QueryParamNames:            nil, // []string{"access_token", "token"},
 	}
 
-	// Peek for --envfile early
-	envPath := peekOption(os.Args[1:], []string{"-envfile", "--envfile"}, ".env")
+	// Peek for --env-file early
+	envPath := peekOption(os.Args[1:], []string{"-env-file", "--env-file", "-envfile", "--envfile"}, ".env")
 	_ = godotenv.Load(envPath) // silent if missing
 
 	// Override defaults from env
@@ -131,6 +131,7 @@ func main() {
 
 	// Flags
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	_ = fs.String("env-file", "", "path to .env file (or set $AUTHPROXY_ENV_FILE)")
 	fs.BoolVar(&cli.ShowVersion, "version", false, "show version and exit")
 	fs.IntVar(&cli.Port, "port", cli.Port, "port to listen on")
 	fs.StringVar(&cli.Address, "address", cli.Address, "address to bind to (e.g. 127.0.0.1)")
