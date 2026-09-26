@@ -4,6 +4,7 @@
 // can be read from a sheet, written to a file, and scanned from a database.
 //
 // It also provides generic Parse/Serialize functions for CSV, TSV, JSON,
-// and JSONL, delimiter-specific string and integer slices, plus text
-// normalization helpers (NormalizeEmail, NormalizePhone).
+// and JSONL, delimiter-specific string and integer slices, and permissive
+// text/list value types, plus normalization helpers (NormalizeEmail,
+// NormalizePhone).
 package csvx
