@@ -986,8 +986,13 @@ func syncLog(runner *shmigrate.Migrator) {
 
 	fmt.Printf(shmigrate.ShHeader)
 	fmt.Println("")
+	fmt.Println("# SYNC: run initial migration (idempotent)")
+	initPath := filepath.Join(runner.MigrationsDir, M_MIGRATOR_UP_NAME)
+	initCmd := strings.Replace(runner.SqlCommand, "%s", filepathUnclean(initPath), 1)
+	fmt.Printf("%s || true\n", initCmd)
+	fmt.Println("")
 	fmt.Println("# SYNC: reload migrations log from DB")
-	fmt.Printf("%s > %s || true\n", syncCmd, logPath)
+	fmt.Printf("%s > %s\n", syncCmd, logPath)
 	fmt.Printf("cat %s\n", logPath)
 }
 
