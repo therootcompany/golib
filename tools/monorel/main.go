@@ -12,6 +12,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"go/parser"
@@ -20,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -43,7 +45,26 @@ var (
 
 // printVersion displays the version, commit, and build date.
 func printVersion(w io.Writer) {
-	_, _ = fmt.Fprintf(w, "%s v%s %s (%s)\n", name, version, commit[:7], date)
+	buildCommit, buildDate := commit, date
+	if buildCommit == "0000000" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, setting := range info.Settings {
+				switch setting.Key {
+				case "vcs.revision":
+					if len(setting.Value) >= 7 {
+						buildCommit = setting.Value[:7]
+					}
+				case "vcs.time":
+					buildDate = setting.Value
+				case "vcs.modified":
+					if setting.Value == "true" {
+						buildDate += "+dirty"
+					}
+				}
+			}
+		}
+	}
+	_, _ = fmt.Fprintf(w, "%s v%s %s (%s)\n", name, version, buildCommit, buildDate)
 	_, _ = fmt.Fprintf(w, "%s\n", desc)
 	_, _ = fmt.Fprintf(w, "Copyright (C) %s %s\n", licenseYear, licenseOwner)
 	_, _ = fmt.Fprintf(w, "Licensed under %s\n", licenseType)
@@ -166,6 +187,27 @@ func main() {
 	}
 }
 
+func parseSubcommandFlags(fs *flag.FlagSet, args []string) {
+	if len(args) > 0 {
+		switch args[0] {
+		case "-V", "-version", "--version", "version":
+			printVersion(os.Stdout)
+			os.Exit(0)
+		case "help", "-help", "--help":
+			printVersion(os.Stdout)
+			fmt.Fprintln(os.Stdout, "")
+			fs.Usage()
+			os.Exit(0)
+		}
+	}
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		os.Exit(2)
+	}
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintln(os.Stderr, "  monorel <subcommand> [options] <binary-path>...")
@@ -185,7 +227,7 @@ func usage() {
 // ── Subcommand: release ────────────────────────────────────────────────────
 
 func runRelease(args []string) {
-	fs := flag.NewFlagSet("monorel release", flag.ExitOnError)
+	fs := flag.NewFlagSet("monorel release", flag.ContinueOnError)
 	var showVersion bool
 	var recursive, all, dryRun, yes, force, draft, prerelease bool
 	var almostAll, ios, androidNDK bool
@@ -214,11 +256,7 @@ func runRelease(args []string) {
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
-	if len(args) > 0 && args[0] == "-V" {
-		printVersion(os.Stdout)
-		os.Exit(0)
-	}
-	_ = fs.Parse(args)
+	parseSubcommandFlags(fs, args)
 	if showVersion {
 		printVersion(os.Stdout)
 		os.Exit(0)
@@ -261,7 +299,7 @@ func runRelease(args []string) {
 // ── Subcommand: bump ───────────────────────────────────────────────────────
 
 func runBump(args []string) {
-	fs := flag.NewFlagSet("monorel bump", flag.ExitOnError)
+	fs := flag.NewFlagSet("monorel bump", flag.ContinueOnError)
 	var showVersion bool
 	var component string
 	var recursive, all, force, dryRun bool
@@ -287,11 +325,7 @@ func runBump(args []string) {
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
-	if len(args) > 0 && args[0] == "-V" {
-		printVersion(os.Stdout)
-		os.Exit(0)
-	}
-	_ = fs.Parse(args)
+	parseSubcommandFlags(fs, args)
 	if showVersion {
 		printVersion(os.Stdout)
 		os.Exit(0)
@@ -364,7 +398,7 @@ func runBump(args []string) {
 // ── Subcommand: init ───────────────────────────────────────────────────────
 
 func runInit(args []string) {
-	fs := flag.NewFlagSet("monorel init", flag.ExitOnError)
+	fs := flag.NewFlagSet("monorel init", flag.ContinueOnError)
 	var showVersion bool
 	var recursive, all, dryRun, cmd bool
 	var almostAll, ios, androidNDK bool
@@ -394,11 +428,7 @@ func runInit(args []string) {
 		fmt.Fprintln(os.Stderr, "")
 		fs.PrintDefaults()
 	}
-	if len(args) > 0 && args[0] == "-V" {
-		printVersion(os.Stdout)
-		os.Exit(0)
-	}
-	_ = fs.Parse(args)
+	parseSubcommandFlags(fs, args)
 	if showVersion {
 		printVersion(os.Stdout)
 		os.Exit(0)
