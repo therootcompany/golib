@@ -209,6 +209,7 @@ type MainConfig struct {
 	migrationsDir string
 	logPath       string
 	sqlCommand    string
+	sqlCommandArg string
 }
 
 func main() {
@@ -257,7 +258,7 @@ func main() {
 	case "init":
 		fsSub = flag.NewFlagSet("init", flag.ExitOnError)
 		fsSub.StringVar(&cfg.logPath, "migrations-log", "", fmt.Sprintf("migration log file (default: %s) relative to and saved in %s", defaultLogPath, M_MIGRATOR_NAME))
-		fsSub.StringVar(&cfg.sqlCommand, "sql-command", sqlCommandPSQL, "construct scripts with this to execute SQL files: 'psql', 'mysql', 'mariadb', 'sqlite', 'sqlcmd', or custom arguments")
+		fsSub.StringVar(&cfg.sqlCommandArg, "sql-command", sqlCommandPSQL, "construct scripts with this to execute SQL files: 'psql', 'mysql', 'mariadb', 'sqlite', 'sqlcmd', or custom arguments")
 	case "create", "sync", "up", "down", "status", "list":
 		fsSub = flag.NewFlagSet(subcmd, flag.ExitOnError)
 	default:
@@ -271,7 +272,8 @@ func main() {
 	}
 	leafArgs := fsSub.Args()
 
-	switch cfg.sqlCommand {
+	cfg.sqlCommand = cfg.sqlCommandArg
+	switch cfg.sqlCommandArg {
 	case "", "postgres", "postgresql", "pg", "psql", "plpgsql":
 		cfg.sqlCommand = sqlCommandPSQL
 	case "mariadb":
@@ -538,7 +540,7 @@ func mustInit(cfg *MainConfig) {
 	fmt.Fprintf(os.Stderr, "Initializing %q ...\n", cfg.migrationsDir)
 
 	var resolvedLogPath = cfg.logPath
-	if cfg.sqlCommand != "" && !strings.Contains(cfg.sqlCommand, "%s") {
+	if cfg.sqlCommandArg != "" && !strings.Contains(cfg.sqlCommand, "%s") {
 		fmt.Fprintf(os.Stderr, "Error: --sql-command must contain a literal '%%s' to accept the path to the SQL file\n")
 		os.Exit(1)
 	}
@@ -602,12 +604,15 @@ func mustInit(cfg *MainConfig) {
 		)
 		os.Exit(1)
 	}
-	if cfg.sqlCommand != "" && cfg.sqlCommand != state.SQLCommand {
-		fmt.Fprintf(os.Stderr,
-			"--sql-command %q does not match %q from %q\n(drop the --sql-command flag, or update the add migrations file)\n",
-			cfg.sqlCommand, state.SQLCommand, mMigratorUpPath,
-		)
-		os.Exit(1)
+	if cfg.sqlCommandArg != "" && cfg.sqlCommand != state.SQLCommand {
+		args := strings.Fields(cfg.sqlCommandArg)
+		if len(args) > 1 || strings.HasPrefix(state.SQLCommand, args[0]) {
+			fmt.Fprintf(os.Stderr,
+				"--sql-command %q does not match %q from %q\n(drop the --sql-command flag, or update the add migrations file)\n",
+				cfg.sqlCommand, state.SQLCommand, mMigratorUpPath,
+			)
+			os.Exit(1)
+		}
 	}
 
 	if slices.Contains(downs, M_MIGRATOR_NAME) {
