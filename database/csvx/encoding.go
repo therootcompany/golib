@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/jszwec/csvutil"
 )
@@ -34,7 +35,63 @@ func Parse[T any](r io.Reader, format string) ([]T, error) {
 // ParseCSV reads CSV/TSV from a csvutil Reader using csvutil streaming.
 // The reader must already have its delimiter configured.
 // Uses json struct tags and csvx marshalers for type handling.
+//
+// Blank records — rows where every cell is empty or whitespace-only —
+// are skipped everywhere, including before the header. Human-maintained
+// sources routinely carry stray blank lines (e.g. a Google Sheets export
+// with an empty row above the header); without skipping, the first blank
+// row would be taken as the header and every data row would decode to
+// zero values.
 func ParseCSV[T any](r csvutil.Reader) ([]T, error) {
+	records := make([][]string, 0, 16)
+	for {
+		rec, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if isBlankRecord(rec) {
+			continue
+		}
+		records = append(records, rec)
+	}
+	if len(records) == 0 {
+		return nil, nil
+	}
+	return parseDecoded[T](&recordReader{records: records})
+}
+
+// isBlankRecord reports whether every cell is empty or whitespace-only.
+func isBlankRecord(rec []string) bool {
+	for _, f := range rec {
+		if strings.TrimSpace(f) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// recordReader replays in-memory records through the csvutil.Reader
+// interface so the csvutil decoder sees a blank-free stream; the first
+// record is the header.
+type recordReader struct {
+	records [][]string
+	i       int
+}
+
+func (rr *recordReader) Read() ([]string, error) {
+	if rr.i >= len(rr.records) {
+		return nil, io.EOF
+	}
+	rec := rr.records[rr.i]
+	rr.i++
+	return rec, nil
+}
+
+// parseDecoded runs the csvutil decode loop over a csvutil.Reader.
+func parseDecoded[T any](r csvutil.Reader) ([]T, error) {
 	dec, err := csvutil.NewDecoder(r)
 	if err != nil {
 		return nil, err
