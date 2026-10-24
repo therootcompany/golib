@@ -223,6 +223,9 @@ func TestBoolishTimestamp(t *testing.T) {
 		if !v.Valid || v.Bool || v.Error == nil {
 			t.Fatalf("%q: expected valid+false+error, got %+v", word, v)
 		}
+		if v.Raw() != word {
+			t.Fatalf("%q: Raw() = %q, want the original word retained", word, v.Raw())
+		}
 	}
 
 	// Empty / null sentinels: `\N` exact; word forms any case. The full

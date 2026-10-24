@@ -9,13 +9,22 @@ import (
 // BoolishTimestamp accepts optional true/false-like values and dates or
 // timestamps from human-edited CSV/TSV data. Valid reports that a value was
 // supplied; Bool reports its true-like meaning. Error records an unrecognized
-// non-empty value without making the CSV decoder reject the row.
+// non-empty value without making the CSV decoder reject the row. Raw reports
+// the trimmed original value for unrecognized values so callers can apply
+// their own column-specific word policy (e.g. reading "disabled" as true in
+// a Disabled column).
 type BoolishTimestamp struct {
 	Valid     bool
 	Bool      bool
 	Timestamp time.Time
 	Error     error
+
+	raw string
 }
+
+// Raw returns the trimmed original value that was parsed, retained for
+// unrecognized values so callers can apply their own word policy.
+func (v BoolishTimestamp) Raw() string { return v.raw }
 
 // UnmarshalCSV parses a human value. Recognized true-like values and dates
 // set Bool; recognized false-like values leave it unset. Unrecognized
@@ -46,8 +55,10 @@ func (v *BoolishTimestamp) UnmarshalCSV(data []byte) error {
 		}
 	}
 	// Unrecognized: valid but false, error recorded (Bool must not default
-	// to true for values this type does not understand).
+	// to true for values this type does not understand). The original value
+	// is retained for caller-side word policy.
 	v.Bool = false
+	v.raw = raw
 	v.Error = fmt.Errorf("unrecognized boolish timestamp %q", raw)
 	return nil
 }
