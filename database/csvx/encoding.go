@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/jszwec/csvutil"
 )
@@ -34,8 +35,59 @@ func Parse[T any](r io.Reader, format string) ([]T, error) {
 // ParseCSV reads CSV/TSV from a csvutil Reader using csvutil streaming.
 // The reader must already have its delimiter configured.
 // Uses json struct tags and csvx marshalers for type handling.
+//
+// Blank records — rows where every cell is empty or whitespace-only —
+// are skipped everywhere, including before the header. Human-maintained
+// sources routinely carry stray blank lines (e.g. a Google Sheets export
+// with an empty row above the header); without skipping, the first blank
+// row would be taken as the header and every data row would decode to
+// zero values. Skipping happens in a streaming reader wrapper: records
+// are decoded one at a time and only one record is buffered at a time.
+//
+// A csv.Reader is a valid csvutil.Reader and can be passed directly.
 func ParseCSV[T any](r csvutil.Reader) ([]T, error) {
+	return parseDecoded[T](skipBlanks{in: r})
+}
+
+// skipBlanks is a streaming csvutil.Reader wrapper that drops blank
+// records. It implements the csvutil.Reader interface (a single Read
+// method) so *encoding/csv.Reader and other csvutil readers can be
+// wrapped without concrete types.
+type skipBlanks struct {
+	in csvutil.Reader
+}
+
+func (s skipBlanks) Read() ([]string, error) {
+	for {
+		rec, err := s.in.Read()
+		if err != nil {
+			// io.EOF and other errors propagate; only blank
+			// records (err == nil) are skipped.
+			return rec, err
+		}
+		if !isBlankRecord(rec) {
+			return rec, nil
+		}
+	}
+}
+
+// isBlankRecord reports whether every cell is empty or whitespace-only.
+func isBlankRecord(rec []string) bool {
+	for _, f := range rec {
+		if strings.TrimSpace(f) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// parseDecoded runs the csvutil decode loop over a csvutil.Reader.
+func parseDecoded[T any](r csvutil.Reader) ([]T, error) {
 	dec, err := csvutil.NewDecoder(r)
+	if err == io.EOF {
+		// Empty stream (e.g. all-blank input): no header, no rows.
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
