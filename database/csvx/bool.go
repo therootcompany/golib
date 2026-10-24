@@ -34,6 +34,11 @@ func (b *Bool) Scan(value any) error {
 		b.Bool = v
 		b.Valid = true
 	case string:
+		if isBoolNull(v) {
+			b.Valid = false
+			b.Bool = false
+			return nil
+		}
 		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
 		if err != nil {
 			b.Valid = false
@@ -61,7 +66,7 @@ func (b Bool) MarshalCSV() ([]byte, error) {
 
 func (b *Bool) UnmarshalCSV(data []byte) error {
 	s := strings.TrimSpace(string(data))
-	if s == "" {
+	if isBoolNull(s) {
 		b.Valid = false
 		b.Bool = false
 		return nil

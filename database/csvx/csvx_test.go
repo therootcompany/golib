@@ -204,11 +204,45 @@ func TestBoolishTimestamp(t *testing.T) {
 	}
 
 	// False-like
-	if err := v.UnmarshalCSV([]byte("no")); err != nil {
+	for _, falseish := range []string{"no", "0", "FALSE"} {
+		if err := v.UnmarshalCSV([]byte(falseish)); err != nil {
+			t.Fatalf("UnmarshalCSV(%q): %v", falseish, err)
+		}
+		if !v.Valid || v.Bool || v.Error != nil {
+			t.Fatalf("%q: expected valid+false, got %+v", falseish, v)
+		}
+	}
+
+	// An unrecognized word must not be treated as true: it is valid but
+	// false with an error recorded. The Bool-family null words are sentinels
+	// (covered by TestIsBoolNull), so use words outside that set.
+	for _, word := range []string{"random", "disabled"} {
+		if err := v.UnmarshalCSV([]byte(word)); err != nil {
+			t.Fatalf("UnmarshalCSV(%q): %v", word, err)
+		}
+		if !v.Valid || v.Bool || v.Error == nil {
+			t.Fatalf("%q: expected valid+false+error, got %+v", word, v)
+		}
+	}
+
+	// Empty / null sentinels: `\N` exact; word forms any case. The full
+	// set is covered by TestIsBoolNull.
+	for _, sent := range []string{"", "null", `\N`} {
+		if err := v.UnmarshalCSV([]byte(sent)); err != nil {
+			t.Fatalf("UnmarshalCSV(%q): %v", sent, err)
+		}
+		if v.Valid || v.Bool || v.Error != nil {
+			t.Fatalf("%q: expected absent, got %+v", sent, v)
+		}
+	}
+
+	// `\n` (lowercase) is NOT the PG sentinel: unrecognized, so valid +
+	// false + error.
+	if err := v.UnmarshalCSV([]byte(`\n`)); err != nil {
 		t.Fatalf("UnmarshalCSV: %v", err)
 	}
-	if !v.Valid || v.Bool {
-		t.Fatalf("expected valid+false, got %+v", v)
+	if !v.Valid || v.Bool || v.Error == nil {
+		t.Fatalf(`\n: expected valid+false+error, got %+v`, v)
 	}
 
 	// Empty

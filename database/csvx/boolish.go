@@ -17,19 +17,23 @@ type BoolishTimestamp struct {
 	Error     error
 }
 
-// UnmarshalCSV parses a human value. Unknown non-empty values are retained as
-// errors so the collection mapper can apply its own conservative policy.
+// UnmarshalCSV parses a human value. Recognized true-like values and dates
+// set Bool; recognized false-like values leave it unset. Unrecognized
+// non-empty values are conservatively false with the error retained so the
+// collection mapper can apply its own policy.
 func (v *BoolishTimestamp) UnmarshalCSV(data []byte) error {
 	*v = BoolishTimestamp{}
 	raw := strings.TrimSpace(string(data))
-	if raw == "" || strings.EqualFold(raw, "null") || raw == `\N` {
+	// Null sentinels (isBoolNull): absent means Valid=false. `\N` is the
+	// exact PG dump sentinel and case-sensitive; the word forms are not.
+	if isBoolNull(raw) {
 		return nil
 	}
 	v.Valid = true
 	switch strings.ToLower(raw) {
 	case "false", "f", "n", "no", "0":
 		return nil
-	case "true", "t", "y", "yes", "1", "disabled", "disable":
+	case "true", "t", "y", "yes", "1":
 		v.Bool = true
 		return nil
 	}
@@ -41,7 +45,9 @@ func (v *BoolishTimestamp) UnmarshalCSV(data []byte) error {
 			return nil
 		}
 	}
-	v.Bool = true
+	// Unrecognized: valid but false, error recorded (Bool must not default
+	// to true for values this type does not understand).
+	v.Bool = false
 	v.Error = fmt.Errorf("unrecognized boolish timestamp %q", raw)
 	return nil
 }
