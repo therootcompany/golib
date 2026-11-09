@@ -5,6 +5,8 @@
 package netrc
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -44,15 +46,45 @@ password too-late-in-file
 `
 
 func TestParseNetrc(t *testing.T) {
-	lines := parseNetrc(testNetrc)
-	want := []netrcLine{
-		{"api.github.com", "user", "pwd"},
-		{"test.host", "user2", "pwd2"},
-		{"oneline", "user3", "pwd3"},
-		{"hasmacro.too", "user4", "pwd4"},
+	lines := Parse(testNetrc)
+	want := []Entry{
+		{Machine: "api.github.com", Login: "user", Password: "pwd"},
+		{Machine: "test.host", Login: "user2", Password: "pwd2"},
+		{Machine: "oneline", Login: "user3", Password: "pwd3"},
+		{Machine: "hasmacro.too", Login: "user4", Password: "pwd4"},
 	}
 
 	if !reflect.DeepEqual(lines, want) {
-		t.Errorf("parseNetrc:\nhave %q\nwant %q", lines, want)
+		t.Errorf("Parse:\nhave %v\nwant %v", lines, want)
+	}
+}
+
+func TestRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".netrc")
+
+	// Missing file returns empty, not an error.
+	entries, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected empty, got %v", entries)
+	}
+
+	// Write a valid netrc and read it back.
+	os.WriteFile(path, []byte(testNetrc), 0600)
+	entries, err = Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Entry{
+		{Machine: "api.github.com", Login: "user", Password: "pwd"},
+		{Machine: "test.host", Login: "user2", Password: "pwd2"},
+		{Machine: "oneline", Login: "user3", Password: "pwd3"},
+		{Machine: "hasmacro.too", Login: "user4", Password: "pwd4"},
+	}
+	if !reflect.DeepEqual(entries, want) {
+		t.Errorf("Read:\nhave %v\nwant %v", entries, want)
 	}
 }

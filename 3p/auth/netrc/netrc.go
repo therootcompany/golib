@@ -9,23 +9,22 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 )
 
-// netrcLine holds a single machine entry from a .netrc file.
-type netrcLine struct {
-	machine  string
-	login    string
-	password string
+// Entry holds a single machine entry from a .netrc file.
+type Entry struct {
+	Machine  string
+	Login    string
+	Password string
 }
 
-// parseNetrc parses .netrc-format data and returns all complete entries
+// Parse parses .netrc-format data and returns all complete entries
 // (those with machine, login, and password).
-func parseNetrc(data string) []netrcLine {
+func Parse(data string) []Entry {
 	// See https://www.gnu.org/software/inetutils/manual/html_node/The-_002enetrc-file.html
 	// for documentation on the .netrc format.
-	var nrc []netrcLine
-	var l netrcLine
+	var nrc []Entry
+	var l Entry
 	inMacro := false
 	for line := range strings.SplitSeq(data, "\n") {
 		if inMacro {
@@ -45,22 +44,22 @@ func parseNetrc(data string) []netrcLine {
 			// machine or a default token is encountered."
 			switch f[i] {
 			case "machine":
-				l = netrcLine{machine: f[i+1]}
+				l = Entry{Machine: f[i+1]}
 			case "default":
 				break
 			case "login":
-				l.login = f[i+1]
+				l.Login = f[i+1]
 			case "password":
-				l.password = f[i+1]
+				l.Password = f[i+1]
 			case "macdef":
 				// "A macro is defined with the specified name; its contents begin with
 				// the next .netrc line and continue until a null line (consecutive
 				// new-line characters) is encountered."
 				inMacro = true
 			}
-			if l.machine != "" && l.login != "" && l.password != "" {
+			if l.Machine != "" && l.Login != "" && l.Password != "" {
 				nrc = append(nrc, l)
-				l = netrcLine{}
+				l = Entry{}
 			}
 		}
 
@@ -73,8 +72,10 @@ func parseNetrc(data string) []netrcLine {
 	return nrc
 }
 
-// netrcPath returns the path to the .netrc file for the current user.
-func netrcPath() (string, error) {
+// Path returns the path to the .netrc file for the current user.
+// It respects the NETRC environment variable, falls back to .netrc in
+// the user's home directory, and on Windows prefers _netrc if present.
+func Path() (string, error) {
 	if env := os.Getenv("NETRC"); env != "" {
 		return env, nil
 	}
@@ -99,12 +100,9 @@ func netrcPath() (string, error) {
 	return filepath.Join(dir, ".netrc"), nil
 }
 
-var readNetrc = sync.OnceValues(func() ([]netrcLine, error) {
-	path, err := netrcPath()
-	if err != nil {
-		return nil, err
-	}
-
+// Read reads and parses the .netrc file at the given path.
+// Missing files are treated as empty (no error).
+func Read(path string) ([]Entry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -113,5 +111,5 @@ var readNetrc = sync.OnceValues(func() ([]netrcLine, error) {
 		return nil, err
 	}
 
-	return parseNetrc(string(data)), nil
-})
+	return Parse(string(data)), nil
+}
