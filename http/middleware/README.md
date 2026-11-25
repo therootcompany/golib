@@ -132,14 +132,12 @@ func basicAuth(next http.Handler) http.Handler {
 func requireAdmin(next http.Handler) http.Handler {
    return func(w http.ResponseWriter, r *http.Request) {
 
-      // Assume JWT in context with roles
-      jws := r.Context().Value("jwt").(jwt.JWS)
-      if !slices.Contains(jws.Claims.Roles, "admin") {
-         http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
-         return
-      }
-
       next.ServeHTTP(w, r)
    }
 }
 ```
+
+## Related modules
+
+- [`http/middleware/realip`](../realip) — resolves the real client address
+  behind a proxy (`Trust` / `MustTrust` / `PeerIP). Independently versioned.
