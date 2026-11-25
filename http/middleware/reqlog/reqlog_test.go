@@ -211,6 +211,127 @@ func TestNoRedactionIsTheIdentity(t *testing.T) {
 	}
 }
 
+func TestWhitelistModeMasksEverythingButTheAllowList(t *testing.T) {
+	red := Redaction{
+		Mode:       RedactWhitelist,
+		QueryAllow: []string{"q", "limit"},
+	}
+	got := sanitizeQuery("q=hello&access_token=supersecret&id=abc123&page=2", red)
+	want := "q=hello&access_token=*******cret&id=**c123&page=*"
+	if got != want {
+		t.Errorf("sanitizeQuery = %q, want %q", got, want)
+	}
+
+	// An empty allow list masks every value - the point of the mode.
+	red = Redaction{Mode: RedactWhitelist}
+	got = sanitizeQuery("q=hello&id=abc123", red)
+	if got != "q=*ello&id=**c123" {
+		t.Errorf("empty allow list = %q, want everything masked", got)
+	}
+}
+
+func TestWhitelistModeKeepRuleOnABlacklistedName(t *testing.T) {
+	// The ULID is time-ordered, so its prefix is the half worth keeping.
+	red := Redaction{
+		Mode:       RedactWhitelist,
+		QueryAllow: []string{"q"},
+		QueryDeny:  []string{"request_id"},
+		Keep:       map[string]Keep{"request_id": {Prefix: 4}},
+	}
+	got := sanitizeQuery("q=hello&request_id=01HZYEXTRA0000", red)
+	want := "q=hello&request_id=01HZ**********"
+	if got != want {
+		t.Errorf("sanitizeQuery = %q, want %q", got, want)
+	}
+}
+
+func TestDenyWinsOverAllowInWhitelistMode(t *testing.T) {
+	red := Redaction{
+		Mode:       RedactWhitelist,
+		QueryAllow: []string{"token"},
+		QueryDeny:  []string{"token"},
+		Keep:       map[string]Keep{"token": {Suffix: 2}},
+	}
+	got := sanitizeQuery("token=abc12345", red)
+	if got != "token=******45" {
+		t.Errorf("sanitizeQuery = %q, want the deny rule to win", got)
+	}
+}
+
+func TestKeepRulesInBlacklistMode(t *testing.T) {
+	red := Redaction{
+		QueryDeny: []string{"access_token", "trace"},
+		Keep: map[string]Keep{
+			"access_token": {Prefix: 3}, // head of the token identifies it
+			"trace":        {Prefix: 2, Suffix: 3},
+		},
+	}
+	got := sanitizeQuery("access_token=supersecret&trace=supersecret&q=1", red)
+	want := "access_token=sup********&trace=su******ret&q=1"
+	if got != want {
+		t.Errorf("sanitizeQuery = %q, want %q", got, want)
+	}
+}
+
+func TestKeepRuleCoveringTheWholeValueMasksItEntirely(t *testing.T) {
+	red := Redaction{
+		QueryDeny: []string{"pin"},
+		Keep:      map[string]Keep{"pin": {Prefix: 3, Suffix: 3}},
+	}
+	if got := sanitizeQuery("pin=abcd", red); got != "pin=****" {
+		t.Errorf("sanitizeQuery = %q, want the whole value masked", got)
+	}
+
+	red.Keep["pin"] = Keep{Prefix: 99, Suffix: 99} // clamped to the value
+	if got := sanitizeQuery("pin=ab", red); got != "pin=**" {
+		t.Errorf("sanitizeQuery = %q, want the whole value masked", got)
+	}
+}
+
+func TestPathKeepRule(t *testing.T) {
+	red := Redaction{
+		PathSecrets: []string{"/rooms/*"},
+		Keep:        map[string]Keep{"/rooms/*": {Prefix: 2}},
+	}
+	if got := sanitizePath("/rooms/abc123", red); got != "/rooms/ab****" {
+		t.Errorf("sanitizePath = %q, want the prefix kept", got)
+	}
+
+	red = Redaction{
+		PathSecrets: []string{"/auth/{email}"},
+		Keep:        map[string]Keep{"/auth/{email}": {Suffix: 5}},
+	}
+	if got := sanitizePath("/auth/aj@example.com", red); got != "/auth/*********e.com" {
+		t.Errorf("sanitizePath = %q, want the suffix kept", got)
+	}
+}
+
+func TestLoggerWhitelistMode(t *testing.T) {
+	var out bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&out, nil))
+
+	red := Redaction{
+		Mode:       RedactWhitelist,
+		QueryAllow: []string{"q"},
+		Keep:       map[string]Keep{"user": {Prefix: 3}},
+	}
+	handler := Logger(logger, red)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/rooms/abc123?q=1&user=johannes&token=secret", nil))
+
+	var record map[string]any
+	if err := json.Unmarshal(out.Bytes(), &record); err != nil {
+		t.Fatalf("logger output is not one JSON record: %v", err)
+	}
+	if record["query"] != "q=1&user=joh*****&token=**cret" {
+		t.Errorf("query = %v, want only the allow-listed parameter in full", record["query"])
+	}
+	if record["path"] != "/rooms/abc123" {
+		t.Errorf("path = %v, want it unchanged - PathSecrets is the path policy", record["path"])
+	}
+}
+
 func TestLoggerCapturesPanicAs500(t *testing.T) {
 	var out bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&out, nil))

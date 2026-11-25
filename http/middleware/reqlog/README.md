@@ -31,7 +31,7 @@ mw := middleware.WithMux(mux,
 | `RequestID()` | middleware: reuse the router's `X-Request-Id` when sane, else mint a ULID; echo it in the response |
 | `RequestIDFromContext(r)` | the request ID, for handlers, error paths, and limiters |
 | `Logger(logger, red)` | middleware: exactly one slog record per completed request |
-| `Redaction` | logging policy as data: `QueryDeny`, `PathSecrets`, `Mask` |
+| `Redaction` | logging policy as data: `Mode`, `QueryAllow`, `QueryDeny`, `PathSecrets`, `Keep`, `Mask` |
 
 One record per request - not a request entry and a response entry. The
 record is written in a `defer`, so panics still produce a record (Recover
@@ -62,6 +62,42 @@ the last four characters survive so a support agent can correlate a ticket
 with a log line without the log holding the secret. Use `MaskDelete` where
 even a tail is too much. A wildcard segment (`*` or `{name}`) matches exactly
 one path segment; an empty `Redaction` logs the request as-is.
+
+### Blacklist and whitelist
+
+Two polarities, one policy struct.
+
+| mode | logged in full | masked | default |
+|---|---|---|---|
+| `RedactBlacklist` (default) | everything not in `QueryDeny` | `QueryDeny` | forgiving: name what to hide |
+| `RedactWhitelist` | `QueryAllow` only | everything else | paranoid: name what may be seen |
+
+Whitelist mode is the one that survives a new parameter being added next
+month - an unknown name is masked, not leaked. A name listed in `QueryDeny`
+is masked even when it is in `QueryAllow`; the deny rule wins.
+
+```go
+red := reqlog.Redaction{
+   Mode:       reqlog.RedactWhitelist,
+   QueryAllow: []string{"q", "limit", "request_id"},
+   QueryDeny:  []string{"access_token"},
+   Keep: map[string]reqlog.Keep{
+      "request_id":    {Prefix: 4}, // ULIDs are time-ordered: the head is the useful half
+      "access_token":  {Prefix: 3, Suffix: 2},
+   },
+}
+```
+
+`Keep` says how much of a masked value survives, per name: `Prefix` leading
+characters, `Suffix` trailing characters, keyed by the query parameter name
+or the path pattern as written (`"/rooms/*"`). Which end to keep is a data
+question - a ULID's head is its timestamp, a random token's tail is what
+distinguishes two events. Keeping nothing deletes the value (that is what
+`MaskDelete` means); a rule that covers the whole value masks the whole
+value.
+
+Path patterns are masked in both modes - the path has no named fields to
+allow-list. To widen the path policy, add patterns to `PathSecrets`.
 
 ## Status
 
